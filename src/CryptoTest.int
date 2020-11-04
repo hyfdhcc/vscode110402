@@ -1,0 +1,512 @@
+ROUTINE CryptoTest [Type=INT]
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ d MENU()
+ q
+MENU() PUBLIC { 
+ s $zt="ERROR"
+ s List(1)="NIST 800-38A AES-CBC tests"
+ s List(2)="FIPS 180-2 SHA tests"
+ s List(3)="RFC 2202/4231 HMAC-SHA tests"
+ s List(4)="RFC 6070 PBKDF2 tests"
+ s List(5)="RFC 3548 Base64 tests"
+ s List(6)="RFC 3394 AES Key Wrap tests"
+ f  {
+ 	s Value=""
+ 	s Status=##Class(%Library.Prompt).GetMenu("Select tests:",.Value,.List,,8+128+4)
+ 	i (Status=0)||(Status=2)||(Value="") q
+ 	i Value=1 d AESCBCtest() Continue
+ 	i Value=2 d SHAtest() Continue
+ 	i Value=3 d HMACSHAtest() Continue
+ 	i Value=4 d PBKDF2test() Continue
+ 	i Value=5 d Base64Test() Continue
+ 	i Value=6 d AESKeyWrapTest() Continue
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ze
+}
+AESCBCtest() PUBLIC {
+ w !,"NIST 200-38A AES-CBC tests"
+ s Keyi(1)="2b7e151628aed2a6abf7158809cf4f3c"
+ s Keyi(2)="8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b"
+ s Keyi(3)="603deb1015ca71be2b73aef0857d7781"
+ s Keyi(3)=Keyi(3)_"1f352c073b6108d72d9810a30914dff4"
+ s IVi="000102030405060708090a0b0c0d0e0f"
+ s IV=""
+ f i=2:2:$l(IVi) s IV=IV_$c($zh($e(IVi,i-1,i)))
+ s Plaintexti=""
+ s Plaintexti=Plaintexti_"6bc1bee22e409f96e93d7e117393172a"
+ s Plaintexti=Plaintexti_"ae2d8a571e03ac9c9eb76fac45af8e51"
+ s Plaintexti=Plaintexti_"30c81c46a35ce411e5fbc1191a0a52ef"
+ s Plaintexti=Plaintexti_"f69f2445df4f9b17ad2b417be66c3710"
+ s Plaintext=""
+ f i=2:2:$l(Plaintexti) s Plaintext=Plaintext_$c($zh($e(Plaintexti,i-1,i)))
+ s Ciphertexti(1)=""
+ s Ciphertexti(1)=Ciphertexti(1)_"7649abac8119b246cee98e9b12e9197d"
+ s Ciphertexti(1)=Ciphertexti(1)_"5086cb9b507219ee95db113a917678b2"
+ s Ciphertexti(1)=Ciphertexti(1)_"73bed6b8e3c1743b7116e69e22229516"
+ s Ciphertexti(1)=Ciphertexti(1)_"3ff1caa1681fac09120eca307586e1a7"
+ s Ciphertexti(2)=""
+ s Ciphertexti(2)=Ciphertexti(2)_"4f021db243bc633d7178183a9fa071e8"
+ s Ciphertexti(2)=Ciphertexti(2)_"b4d9ada9ad7dedf4e5e738763f69145a"
+ s Ciphertexti(2)=Ciphertexti(2)_"571b242012fb7ae07fa9baac3df102e0"
+ s Ciphertexti(2)=Ciphertexti(2)_"08b0e27988598881d920a9e64f5615cd"
+ s Ciphertexti(3)=""
+ s Ciphertexti(3)=Ciphertexti(3)_"f58c4c04d6e5f1ba779eabfb5f7bfbd6"
+ s Ciphertexti(3)=Ciphertexti(3)_"9cfc4e967edb808d679f777bc6702c7d"
+ s Ciphertexti(3)=Ciphertexti(3)_"39f23369a9d9bacfa530e26304231461"
+ s Ciphertexti(3)=Ciphertexti(3)_"b2eb05e2c39be9fcda6c19078c6a9d1b"
+ w !,"Original plaintext:"
+ zzdump Plaintext
+ w !,"IV:"
+ zzdump IV
+ for j=1:1:3 {
+ s Key=""
+ f i=2:2:$l(Keyi(j)) s Key=Key_$c($zh($e(Keyi(j),i-1,i)))
+ w !,!,$l(Key)," byte key:"
+ zzdump Key
+ s Ciphertext=""
+ f i=2:2:$l(Ciphertexti(j)) s Ciphertext=Ciphertext_$c($zh($e(Ciphertexti(j),i-1,i)))
+ s Ciphertext2=$SYSTEM.Encryption.AESCBCEncrypt(Plaintext,Key,IV)
+ if $e(Ciphertext2,1,$l(Ciphertext))=Ciphertext w !,"Encrypted ciphertext matches expected ciphertext."
+ else  w !,"Encryption error.",!,"Test failed!" q
+ s Plaintext2=$SYSTEM.Encryption.AESCBCDecrypt(Ciphertext2,Key,IV)
+ if Plaintext2=Plaintext w !,"Decrypted plaintext matches original plaintext."
+ else  w !,"Decryption error.",!,"Test failed!" q
+ w !,"Test passed."
+ }
+ q
+}
+AESKeyWrapTest() PUBLIC {
+ w !,"RFC 3394 AES Key Wrap tests"
+ s Keyi(1)="00112233445566778899AABBCCDDEEFF"
+ s Keyi(2)="00112233445566778899AABBCCDDEEFF"
+ s Keyi(3)="00112233445566778899AABBCCDDEEFF"
+ s Keyi(4)="00112233445566778899AABBCCDDEEFF0001020304050607"
+ s Keyi(5)="00112233445566778899AABBCCDDEEFF0001020304050607"
+ s Keyi(6)="00112233445566778899AABBCCDDEEFF000102030405060708090A0B0C0D0E0F"
+ s KEKi(1)="000102030405060708090A0B0C0D0E0F"
+ s KEKi(2)="000102030405060708090A0B0C0D0E0F1011121314151617"
+ s KEKi(3)="000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
+ s KEKi(4)="000102030405060708090A0B0C0D0E0F1011121314151617"
+ s KEKi(5)="000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
+ s KEKi(6)="000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
+ s Cipheri(1)="1FA68B0A8112B447AEF34BD8FB5A7B829D3E862371D2CFE5"
+ s Cipheri(2)="96778B25AE6CA435F92B5B97C050AED2468AB8A17AD84E5D"
+ s Cipheri(3)="64E8C3F9CE0F5BA263E9777905818A2A93C8191E7D6E8AE7"
+ s Cipheri(4)="031D33264E15D33268F24EC260743EDCE1C6C7DDEE725A936BA814915C6762D2"
+ s Cipheri(5)="A8F9BC1612C68B3FF6E6F4FBE30E71E4769C8B80A32CB8958CD5D17D6B254DA1"
+ s Cipheri(6)="28C9F404C4B810F4CBCCB35CFB87F8263F5786E2D80ED326CBC7F0E71A99F43BFB988B9B7A02DD21"
+ f j=1:1:6 {
+ s Key=""
+ f i=2:2:$l(Keyi(j)) s Key=Key_$c($zh($e(Keyi(j),i-1,i)))
+ s KEK=""
+ f i=2:2:$l(KEKi(j)) s KEK=KEK_$c($zh($e(KEKi(j),i-1,i)))
+ s Cipher=""
+ f i=2:2:$l(Cipheri(j)) s Cipher=Cipher_$c($zh($e(Cipheri(j),i-1,i)))
+ w !,!,$l(Key)," byte key, ",$l(KEK)," byte KEK"
+ s Cipher2=$SYSTEM.Encryption.AESKeyWrap(Key, KEK)
+ i Cipher2=Cipher w !,"Encrypted ciphertext matches expected ciphertext."
+ else  w !,"Encryption error.",!,"Test failed!" q
+ s Key2=$SYSTEM.Encryption.AESKeyUnwrap(Cipher2, KEK)
+ if Key2=Key w !,"Decrypted key matches original key."
+ else  w !,"Decryption error.",!,"Test failed!" q
+ w !,"Test passed."
+ }
+ q
+}
+Base64Test() {
+ w !,"RFC 3548 Base64 tests"
+ s Binaryi(1)="14fb9c03d97e"
+ s Binaryi(2)="14fb9c03d9"
+ s Binaryi(3)="14fb9c03"
+ s ASCII(1)="FPucA9l+"
+ s ASCII(2)="FPucA9k="
+ s ASCII(3)="FPucAw=="
+ for j=1:1:3 {
+	 s Binary=""
+	 f i=2:2:$l(Binaryi(j)) s Binary=Binary_$c($zh($e(Binaryi(j),i-1,i)))
+	 w !,!,"Original binary data:"
+	 zzdump Binary
+	 s ASCII2=$SYSTEM.Encryption.Base64Encode(Binary)
+	 if ASCII2=ASCII(j) w !,"ASCII encoding matches expected encoding.",!,"Test passed."
+	 else  w !,"Encoding error.",!,"Test failed!" q
+	 s Binary2=$SYSTEM.Encryption.Base64Decode(ASCII2)
+	 if Binary2=Binary w !,"Decoded binary data matches original binary data.",!,"Test passed."
+	 else  w !,"Decoding error.",!,"Test failed!" q
+ }
+ q
+}
+HMACMD5test() {
+ w !,"RFC 2104 HMAC-MD5 tests"
+ s Text(1)="Hi There"
+ s Text(2)="what do ya want for nothing?"
+ s Texti(3)="DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+ s Keyi(1)="0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
+ s Key(2)="Jefe"
+ s Keyi(3)="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+ s HMACi(1)="9294727a3638bb1c13f48ef8158bfc9d" 
+ s HMACi(2)="750c783e6ab0b503eaa86e310a5db738"
+ s HMACi(3)="56be34521d144c88dbb8c733f0e8b3f6"
+ for j=1:1:3 {
+ if j<3 s Text=Text(j)
+ else  s Text="" f i=2:2:$l(Texti(j)) s Text=Text_$c($zh($e(Texti(j),i-1,i)))
+ if j=2 s Key=Key(j)
+ else  s Key="" f i=2:2:$l(Keyi(j)) s Key=Key_$c($zh($e(Keyi(j),i-1,i)))
+ s HMAC=""
+ f i=2:2:$l(HMACi(j)) s HMAC=HMAC_$c($zh($e(HMACi(j),i-1,i)))
+ s HMAC2=$System.Encryption.HMACMD5(Text,Key)
+ w !,!,"Text:  "
+ if j<3 w Text
+ else  zzdump Text
+ w !,$l(Key)," byte key:  "
+ if j=2 w Key
+ else  zzdump Key
+ if HMAC2=HMAC w !,"Generated HMAC matches expected HMAC.",!,"Test passed."
+ else  w !,"HMAC error.",!,"Test failed!" q
+ }
+ q
+}
+HMACSHA1test() {
+ w !,"FIPS 198 HMAC-SHA-1 tests"
+ s Text(1)="Sample #1"
+ s Text(2)="Sample #2"
+ s Text(3)="Sample #3"
+ s Text(4)="Sample #4"
+ s Keyi(1)=""
+ s Keyi(1)=Keyi(1)_"000102030405060708090a0b0c0d0e0f"
+ s Keyi(1)=Keyi(1)_"101112131415161718191a1b1c1d1e1f"
+ s Keyi(1)=Keyi(1)_"202122232425262728292a2b2c2d2e2f"
+ s Keyi(1)=Keyi(1)_"303132333435363738393a3b3c3d3e3f"
+ s Keyi(2)=""
+ s Keyi(2)=Keyi(2)_"303132333435363738393a3b3c3d3e3f"
+ s Keyi(2)=Keyi(2)_"40414243"
+ s Keyi(3)=""
+ s Keyi(3)=Keyi(3)_"505152535455565758595a5b5c5d5e5f"
+ s Keyi(3)=Keyi(3)_"606162636465666768696a6b6c6d6e6f"
+ s Keyi(3)=Keyi(3)_"707172737475767778797a7b7c7d7e7f"
+ s Keyi(3)=Keyi(3)_"808182838485868788898a8b8c8d8e8f"
+ s Keyi(3)=Keyi(3)_"909192939495969798999a9b9c9d9e9f"
+ s Keyi(3)=Keyi(3)_"a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+ s Keyi(3)=Keyi(3)_"b0b1b2b3"
+ s Keyi(4)=""
+ s Keyi(4)=Keyi(4)_"707172737475767778797a7b7c7d7e7f"
+ s Keyi(4)=Keyi(4)_"808182838485868788898a8b8c8d8e8f"
+ s Keyi(4)=Keyi(4)_"909192939495969798999a9b9c9d9e9f"
+ s Keyi(4)=Keyi(4)_"a0"
+ s HMACi(1)="4f4ca3d5d68ba7cc0a1208c9c61e9c5da0403c0a" 
+ s HMACi(2)="0922d3405faa3d194f82a45830737d5cc6c75d24"
+ s HMACi(3)="bcf41eab8bb2d802f3d05caf7cb092ecf8d1a3aa"
+ s HMACi(4)="9ea886efe268dbecce420c7524df32e0751a2a26"
+ for j=1:1:4 {
+ s Key=""
+ f i=2:2:$l(Keyi(j)) s Key=Key_$c($zh($e(Keyi(j),i-1,i)))
+ s HMAC=""
+ f i=2:2:$l(HMACi(j)) s HMAC=HMAC_$c($zh($e(HMACi(j),i-1,i)))
+ s HMAC2=$System.Encryption.HMACSHA1(Text(j),Key)
+ w !,!,"Text:  ",Text(j)
+ w !,$l(Key)," byte key:"
+ zzdump Key
+ if HMAC2=HMAC w !,"Generated HMAC matches expected HMAC.",!,"Test passed."
+ else  w !,"HMAC error.",!,"Test failed!" q
+ }
+ q
+}
+HMACSHAtest() PUBLIC {
+ w !,"RFC 2202/4231 HMAC-SHA tests"
+ w !,"Available hash sizes (in bits):  160, 224, 256, 384, 512"
+ w !,"Enter size: "
+ r size
+ s Text(1)="Hi There"
+ s Text(2)="what do ya want for nothing?"
+ s Texti(3)="dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+ s Texti(4)="cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+ s Text(5)="Test With Truncation"
+ s Text(6)="Test Using Larger Than Block-Size Key - Hash Key First"
+ s Text(7)="This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm."
+ s Keyi(1)="0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
+ s Key(2)="Jefe"
+ s Keyi(3)="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ s Keyi(4)="0102030405060708090a0b0c0d0e0f10111213141516171819"
+ s Keyi(5)="0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+ s Keyi(6)=""
+ s Keyi(6)=Keyi(6)_"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ s Keyi(6)=Keyi(6)_"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ s Keyi(6)=Keyi(6)_"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ s Keyi(6)=Keyi(6)_"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ s Keyi(6)=Keyi(6)_"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ s Keyi(6)=Keyi(6)_"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ s Keyi(6)=Keyi(6)_"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ s Keyi(6)=Keyi(6)_"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ s Keyi(6)=Keyi(6)_"aaaaaa"
+ s Keyi(7)=Keyi(6)
+ if (size=160) {
+	s Text(7)="Test Using Larger Than Block-Size Key and Larger Than One Block-Size Data"
+	s Keyi(6)=$e(Keyi(6),1,160)
+	s Keyi(7)=$e(Keyi(7),1,160)
+	s HMACi(1)="b617318655057264e28bc0b6fb378c8ef146be00"
+	s HMACi(2)="effcdf6ae5eb2fa2d27416d5f184df9c259a7c79"
+	s HMACi(3)="125d7342b9ac11cd91a39af48aa17b4f63f175d3"
+	s HMACi(4)="4c9007f4026250c6bc8414f9bf50c86c2d7235da"
+	s HMACi(5)="4c1a03424b55e07fe7f27be1d58bb932"
+	s HMACi(6)="aa4ae5e15272d00e95705637ce8a3b55ed402112"
+	s HMACi(7)="e8e99d0f45237d786d6bbaa7965c7808bbff1a91"
+ } elseif (size=224) {
+	s HMACi(1)="896fb1128abbdf196832107cd49df33f47b4b1169912ba4f53684b22"
+	s HMACi(2)="a30e01098bc6dbbf45690f3a7e9e6d0f8bbea2a39e6148008fd05e44"
+	s HMACi(3)="7fb3cb3588c6c1f6ffa9694d7d6ad2649365b0c1f65d69d1ec8333ea"
+	s HMACi(4)="6c11506874013cac6a2abc1bb382627cec6a90d86efc012de7afec5a"
+	s HMACi(5)="0e2aea68a90c8d37c988bcdb9fca6fa8"
+	s HMACi(6)="95e9a0db962095adaebe9b2d6f0dbce2d499f112f2d2b7273fa6870e"
+	s HMACi(7)="3a854166ac5d9f023f54d517d0b39dbd946770db9c2b95c9f6f565d1"
+ } elseif (size=256) {
+	s HMACi(1)="b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+ 	s HMACi(2)="5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+	s HMACi(3)="773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe"
+	s HMACi(4)="82558a389a443c0ea4cc819899f2083a85f0faa3e578f8077a2e3ff46729665b"
+	s HMACi(5)="a3b6167473100ee06e0c796c2955552b"
+	s HMACi(6)="60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+	s HMACi(7)="9b09ffa71b942fcb27635fbcd5b0e944bfdc63644f0713938a7f51535c3a35e2"
+ } elseif (size=384) {
+	s HMACi(1)="afd03944d84895626b0825f4ab46907f15f9dadbe4101ec682aa034c7cebc59cfaea9ea9076ede7f4af152e8b2fa9cb6"
+ 	s HMACi(2)="af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649"
+	s HMACi(3)="88062608d3e6ad8a0aa2ace014c8a86f0aa635d947ac9febe83ef4e55966144b2a5ab39dc13814b94e3ab6e101a34f27"
+	s HMACi(4)="3e8a69b7783c25851933ab6290af6ca77a9981480850009cc5577c6e1f573b4e6801dd23c4a7d679ccf8a386c674cffb"
+	s HMACi(5)="3abf34c3503b2a23a46efc619baef897"
+	s HMACi(6)="4ece084485813e9088d2c63a041bc5b44f9ef1012a2b588f3cd11f05033ac4c60c2ef6ab4030fe8296248df163f44952"
+	s HMACi(7)="6617178e941f020d351e2f254e8fd32c602420feb0b8fb9adccebb82461e99c5a678cc31e799176d3860e6110c46523e"
+ } elseif (size=512) {
+ 	s HMACi(1)="87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854"
+	s HMACi(2)="164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737"
+	s HMACi(3)="fa73b0089d56a284efb0f0756c890be9b1b5dbdd8ee81a3655f83e33b2279d39bf3e848279a722c806b485a47e67c807b946a337bee8942674278859e13292fb"
+	s HMACi(4)="b0ba465637458c6990e5a8c5f61d4af7e576d97ff94b872de76f8050361ee3dba91ca5c11aa25eb4d679275cc5788063a5f19741120c4f2de2adebeb10a298dd"
+	s HMACi(5)="415fad6271580a531d4179bc891d87a6"
+	s HMACi(6)="80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f3526b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598"
+	s HMACi(7)="e37b6a775dc87dbaa4dfa9f96e5e3ffddebd71f8867289865df5a32d20cdc944b6022cac3c4982b10d5eeb55c3e4de15134676fb6de0446065c97440fa8c6a58"
+ } else {
+	w !,"Not supported."
+	q
+ }
+ for j=1:1:7 {
+ if ((j<3)||(j>4)) s Text=Text(j)
+ else  s Text="" f i=2:2:$l(Texti(j)) s Text=Text_$c($zh($e(Texti(j),i-1,i)))
+ if j=2 s Key=Key(j)
+ else  s Key="" f i=2:2:$l(Keyi(j)) s Key=Key_$c($zh($e(Keyi(j),i-1,i)))
+ s HMAC=""
+ f i=2:2:$l(HMACi(j)) s HMAC=HMAC_$c($zh($e(HMACi(j),i-1,i)))
+ s HMAC2=$System.Encryption.HMACSHA(size,Text,Key)
+ if j=5 s HMAC2=$e(HMAC2,1,16)
+ w !,!,"Text:  "
+ if ((j<3)||(j>4)) w Text
+ else  zzdump Text
+ w !,$l(Key)," byte key:  "
+ if j=2 w Key
+ else  zzdump Key
+ if HMAC2=HMAC w !,"Generated HMAC matches expected HMAC.",!,"Test passed."
+ else  w !,"HMAC error.",!,"Test failed!" q
+ }
+ q
+}
+MD5test() PUBLIC {
+ w !,"RFC 1321 MD5 tests"
+ s Text(1)=""
+ s Text(2)="a"
+ s Text(3)="abc"
+ s Text(4)="message digest"
+ s Text(5)="abcdefghijklmnopqrstuvwxyz"
+ s Text(6)="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+ s Text(7)="12345678901234567890123456789012345678901234567890123456789012345678901234567890"
+ s Hashi(1)="d41d8cd98f00b204e9800998ecf8427e"
+ s Hashi(2)="0cc175b9c0f1b6a831c399e269772661"
+ s Hashi(3)="900150983cd24fb0d6963f7d28e17f72"
+ s Hashi(4)="f96b697d7cb7938d525a2f31aaf161d0"
+ s Hashi(5)="c3fcd3d76192e4007dfb496cca67e13b"
+ s Hashi(6)="d174ab98d277d9f5a5611c2c9f419d9f"
+ s Hashi(7)="57edf4a22be3c955ac49da2e2107b67a"
+ for j=1:1:7 {
+ s Hash=""
+ f i=2:2:$l(Hashi(j)) s Hash=Hash_$c($zh($e(Hashi(j),i-1,i)))
+ s Hash2=$System.Encryption.MD5Hash(Text(j))
+ w !,!,"Text:  ",Text(j)
+ i Hash2=Hash w !,"Generated hash matches expected hash.",!,"Test passed."
+ else  w !,"Hashing error.",!,"Test failed!" q
+ }
+ k str
+ q
+}
+PBKDF2test() PUBLIC {
+ w !,"RFC 6070 PBKDF2-HMAC-SHA tests"
+ w !,"Available hash sizes (in bits):  160, 256, 512"
+ w !,"Enter size: "
+ r size
+ s Passphrase(1)="password"
+ s Passphrase(2)="password"
+ s Passphrase(3)="password"
+ s Passphrase(4)="password"
+ s Passphrase(5)="passwordPASSWORDpassword"
+ s Passphrase(6)="pass"_$c(0)_"word"
+ s Salt(1)="salt"
+ s Salt(2)="salt"
+ s Salt(3)="salt"
+ s Salt(4)="salt"
+ s Salt(5)="saltSALTsaltSALTsaltSALTsaltSALTsalt"
+ s Salt(6)="sa"_$c(0)_"lt"
+ s Iterations(1)=1
+ s Iterations(2)=2
+ s Iterations(3)=4096
+ s Iterations(4)=16777216
+ s Iterations(5)=4096
+ s Iterations(6)=4096
+ if (size=160) {
+	 s Keylen(1)=20
+	 s Keylen(2)=20
+	 s Keylen(3)=20
+	 s Keylen(4)=20
+	 s Keylen(5)=25
+	 s Keylen(6)=16
+	 s Keyi(1)="0c60c80f961f0e71f3a9b524af6012062fe037a6"
+	 s Keyi(2)="ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957"
+	 s Keyi(3)="4b007901b765489abead49d926f721d065a429c1"
+	 s Keyi(4)="eefe3d61cd4da4e4e9945b3d6ba2158c2634e984"
+	 s Keyi(5)="3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038"
+	 s Keyi(6)="56fa6aa75548099dcc37d7f03425e0c3"
+ } elseif (size=256) {
+	 s Keylen(1)=32
+	 s Keylen(2)=32
+	 s Keylen(3)=32
+	 s Keylen(4)=32
+	 s Keylen(5)=40
+	 s Keylen(6)=16
+	 s Keyi(1)="120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"
+	 s Keyi(2)="ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43"
+	 s Keyi(3)="c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a"
+	 s Keyi(4)="cf81c66fe8cfc04d1f31ecb65dab4089f7f179e89b3b0bcb17ad10e3ac6eba46"
+	 s Keyi(5)="348c89dbcbd32b2f32d814b8116e84cf2b17347ebc1800181c4e2a1fb8dd53e1c635518c7dac47e9"
+	 s Keyi(6)="89b69d0516f829893c696226650a8687"
+ } elseif (size=512) {
+	 s Keylen(1)=64
+	 s Keylen(2)=64
+	 s Keylen(3)=64
+	 s Keylen(4)=0
+	 s Keylen(5)=64
+	 s Keylen(6)=0
+	 s Keyi(1)="867f70cf1ade02cff3752599a3a53dc4af34c7a669815ae5d513554e1c8cf252c02d470a285a0501bad999bfe943c08f050235d7d68b1da55e63f73b60a57fce"
+	 s Keyi(2)="e1d9c16aa681708a45f5c7c4e215ceb66e011a2e9f0040713f18aefdb866d53cf76cab2868a39b9f7840edce4fef5a82be67335c77a6068e04112754f27ccf4e"
+	 s Keyi(3)="d197b1b33db0143e018b12f3d1d1479e6cdebdcc97c5c0f87f6902e072f457b5143f30602641b3d55cd335988cb36b84376060ecd532e039b742a239434af2d5"
+	 s Keyi(5)="8c0511f4c6e597c6ac6315d8f0362e225f3c501495ba23b868c005174dc4ee71115b59f9e60cd9532fa33e0f75aefe30225c583a186cd82bd4daea9724a3d3b8"
+ } else {
+ 	w !,"Not supported."
+ 	q
+ }
+ for j=1:1:6 {
+ i 'Keylen(j) continue
+ s Key=""
+ f i=2:2:$l(Keyi(j)) s Key=Key_$c($zh($e(Keyi(j),i-1,i)))
+ w !,!,"Passphrase:  ",Passphrase(j)
+ w !,"Iterations:  ",Iterations(j)
+ w !,"Salt:  ", Salt(j)
+ w !,"Key length:  ",Keylen(j)
+ s Key2=$System.Encryption.PBKDF2(Passphrase(j),Iterations(j),Salt(j),Keylen(j),size)
+ if Key2=Key w !,"Derived key matches expected key.",!,"Test passed."
+ else  w !,"Key derivation error.",!,"Test failed!" q
+ }
+ q
+}
+SHA1test() PUBLIC {
+ w !,"FIPS 180-2 SHA-1 tests"
+ s Text(1)="abc"
+ s Text(2)="abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+ s line=$tr($j("",10000)," ","a")
+ s str=##class(%Library.GlobalCharacterStream).%New()
+ f i=1:1:100 d str.Write(line)
+ s Hashi(1)="a9993e364706816aba3e25717850c26c9cd0d89d"
+ s Hashi(2)="84983e441c3bd26ebaae4aa1f95129e5e54670f1"
+ s Hashi(3)="34aa973cd4c4daa4f61eeb2bdbad27316534016f"
+ for j=1:1:3 {
+ s Hash=""
+ f i=2:2:$l(Hashi(j)) s Hash=Hash_$c($zh($e(Hashi(j),i-1,i)))
+ i j<3 s Hash2=$System.Encryption.SHA1Hash(Text(j))
+ else  s Hash2=$System.Encryption.SHA1HashStream(str)
+ i j<3 w !,!,"Text:  ",Text(j)
+ else  w !,!,"Text is a string consisting of 1,000,000 repetitions of the character ""a""."
+ i Hash2=Hash w !,"Generated hash matches expected hash.",!,"Test passed."
+ else  w !,"Hashing error.",!,"Test failed!" q
+ }
+ k str
+ q
+}
+SHAtest() PUBLIC {
+ w !,"FIPS 180-2 SHA tests"
+ w !,"Available hash sizes (in bits):  160, 224, 256, 384, 512"
+ w !,"Enter size: "
+ r size
+ s Text(1)="abc"
+ s line=$tr($j("",10000)," ","a")
+ s str=##class(%Library.GlobalCharacterStream).%New()
+ f i=1:1:100 d str.Write(line)
+ if (size=160) {
+	s Text(2)="abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+	s Hashi(1)="a9993e364706816aba3e25717850c26c9cd0d89d"
+	s Hashi(2)="84983e441c3bd26ebaae4aa1f95129e5e54670f1"
+	s Hashi(3)="34aa973cd4c4daa4f61eeb2bdbad27316534016f"
+ } elseif (size=224) {
+	s Text(2)="abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+	s Hashi(1)="23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7"
+	s Hashi(2)="75388b16512776cc5dba5da1fd890150b0c6455cb4f58b1952522525"
+	s Hashi(3)="20794655980c91d8bbb4c1ea97618a4bf03f42581948b2ee4ee7ad67"
+ } elseif (size=256) {
+	s Text(2)="abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+	s Hashi(1)="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+	s Hashi(2)="248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+	s Hashi(3)="cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
+ } elseif (size=384) {
+	s Text(2)="abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmn"
+	s Text(2)=Text(2)_"hijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"
+	s Hashi(1)="cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed"
+	s Hashi(1)=Hashi(1)_"8086072ba1e7cc2358baeca134c825a7"
+	s Hashi(2)="09330c33f71147e83d192fc782cd1b4753111b173b3b05d22fa08086e3b0f712"
+	s Hashi(2)=Hashi(2)_"fcc7c71a557e2db966c3e9fa91746039"
+	s Hashi(3)="9d0e1809716474cb086e834e310a4a1ced149e9c00f248527972cec5704c2a5b"
+	s Hashi(3)=Hashi(3)_"07b8b3dc38ecc4ebae97ddd87f3d8985"
+ } elseif (size=512) {
+	s Text(2)="abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmn"
+	s Text(2)=Text(2)_"hijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"
+	s Hashi(1)="ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a"
+	s Hashi(1)=Hashi(1)_"2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
+	s Hashi(2)="8e959b75dae313da8cf4f72814fc143f8f7779c6eb9f7fa17299aeadb6889018"
+	s Hashi(2)=Hashi(2)_"501d289e4900f7e4331b99dec4b5433ac7d329eeb6dd26545e96e55b874be909"
+	s Hashi(3)="e718483d0ce769644e2e42c7bc15b4638e1f98b13b2044285632a803afa973eb"
+	s Hashi(3)=Hashi(3)_"de0ff244877ea60a4cb0432ce577c31beb009c5c2c49aa2e4eadb217ad8cc09b"
+ } else {
+	w !,"Not supported."
+	q
+ }
+ for j=1:1:3 {
+ s Hash=""
+ f i=2:2:$l(Hashi(j)) s Hash=Hash_$c($zh($e(Hashi(j),i-1,i)))
+ i j<3 s Hash2=$System.Encryption.SHAHash(size,Text(j))
+ else  s Hash2=$System.Encryption.SHAHashStream(size,str)
+ i j<3 w !,!,"Text:  ",Text(j)
+ else  w !,!,"Text is a string consisting of 1,000,000 repetitions of the character ""a""."
+ i Hash2=Hash w !,"Generated hash matches expected hash.",!,"Test passed."
+ else  w !,"Hashing error.",!,"Test failed!" q
+ }
+ k str
+ q
+}

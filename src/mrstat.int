@@ -1,0 +1,28 @@
+ROUTINE mrstat [Type=INT]
+run(file, zero, wait, lines, pages) public {
+   try {
+	s:'$d(zero) zero=0
+	s:'$d(wait) wait=2
+	s:'$d(lines) lines=10
+	s:'$d(pages) pages=1
+	s hdr0=$zu(190,6,-4),hdr1=$zu(190,6,-5),hdr2=$zu(190,6,-6)
+	if $d(file) {
+	   o file:"NW":3 e  w !,"Failed to open ",file q
+	   use file
+	}
+	for i=1:1:pages {
+	    w "time,",hdr1,hdr2,"Rtn cache,Cls cache,",!
+	    for j=1:1:lines {
+		// zero out the rtn/cls counters after each fetch
+		do:zero $zu(190,6,7)
+		h wait
+	    	s time=$zd($h,8)_"-"_$tr($zt($p($h,",",2),2),":","")
+		w time,",",$zu(190,6,5),$zu(190,6,6),$tr($zu(96,29),",","^"),",",$tr($zu(96,36),",","^"),",",!
+	    }
+	}	
+   } catch {
+	if $d(file) {
+     	   c file
+     	}
+   }
+}

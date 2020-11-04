@@ -1,0 +1,43 @@
+ROUTINE REDEBUG [Type=INT]
+REDEBUG ; Change Network Debug flags
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ d SETUP,ISHOW,IWRITE
+ q
+SETUP d ^ST s flagadd=$zu(40,2,31)
+ q
+GET s %D=$V(flagadd,-2,4) d INT^%DX s flags=%X
+ q
+SHOW d SETUP
+ISHOW d GET w !!,"Old flag values = ",flags
+ q
+WRITE d SETUP
+IWRITE r !!,"New flag values (in Hex): ",nflags
+ i nflags="" w " No Change" q
+ d SETDEC
+ i nflags=-1 w " Invalid flags. No change" q
+ w !!,"Done",!
+ q
+SETDEC i $tr(nflags,"0123456789abcdefABCDEF")]""!($l(nflags)>8) s nflags=-1 q
+ s %X=nflags d INT^%XD s nflags=%D
+SET v flagadd:-2:4:nflags
+ d $zu(9,"","REDEBUG: new netdebugflags "_$ZH(+nflags),(0>0),0)
+ q
+INTGET() d SETUP,GET
+ q flags
+INTSET(nflags) q:nflags=""  d SETUP,SETDEC
+ q

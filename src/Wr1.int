@@ -1,0 +1,248 @@
+ROUTINE Wr1 [Type=INT]
+Wr1  ;Routine utilities (continued), LFT1327 11/18/04
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+maskincl(mask,item,ext) New e,i,include,m,m1,m2
+ Set include=0,ext=$ZCVT($g(ext,""),"U")
+ For i=1:1 Set m=$p(mask,";",i),e="" Quit:m=""  Do:m'["'"  Quit:include
+ . Set:m["." m=$$ParseRoutineName^%R(m,.e),e=$s(e="*":"",e="SRC":".INC.MAC.INT.BAS",e="":"",1:"."_e)
+ . If m["*" Do  Quit
+ . . Set m=$p(m,"*")
+ . . If m=$e(item,1,$l(m)),(e=""!(e[ext)) Set include=1 Quit
+ . If m[":" Do  Quit
+ . . Set m1=$p(m,":"),m2=$p(m,":",2)
+ . . If m1=$e(item,1,$l(m1))!(item]m1) Do
+ . . . If m2=$e(item,1,$l(m2))!(m2]item) Do
+ . . . . Set:e=""!(e[ext) include=1
+ . If m=item,(e=""!(e[ext)) Set include=1 Quit
+ If include,mask["'" For i=1:1 Set m=$p(mask,";",i),e="" Quit:m=""  Do:m["'"  Quit:'include
+ . Set m=$e(m,2,*)
+ . Set:m["." m=$$ParseRoutineName^%R(m,.e),e=$s(e="*":"",e="SRC":".INC.MAC.INT.BAS",e="":"",1:"."_e)
+ . If m["*" Do  Quit
+ . . Set m=$p(m,"*")
+ . . If m=$e(item,1,$l(m)),e=""!(e[ext) Set include=0
+ . If m[":" Do  Quit
+ . . Set m1=$p(m,":"),m2=$p(m,":",2)
+ . . If m1=$e(item,1,$l(m1))!(item]m1) Do
+ . . . If m2=$e(item,1,$l(m2))!(m2]item) Do
+ . . . . Set:e=""!(e[ext) include=0 ; SJ bug fix
+ . If m=item,(e=""!(e[ext)) Set include=0 Quit
+ Quit include
+ Quit
+getdescr(filespec,format) Set $ze="",$zt="getderr" New temp,y Set file=filespec
+ If '$$OpenDev^%Wprim(.file) Quit $$notopen^Wr
+ Use file Read x#510 
+ If filespec["k\UNI\" Set x=$e(x,2,*) ;strip off unicode sentinal character
+ Set format=$g(format),temp="" For i=1:1:3 Set temp(i)=""
+ If format="" Do  Set format=temp ; Try to find out file format
+ . If $e(x,1,8)=";Routine" Set temp="DTM" Quit
+ . Set y=$p($p(x,"on ",2),":")_":"_$p($p($p(x,"on ",2),":",2)," ")
+ . If y?0.1" "1.2N1"-"3A1"-"2.4N1." "1.2N1":"2N Set temp="DSM" Quit
+ . If $$ID^%RIMF($p(x,"~",2)) Set temp="Object" Quit
+ . If $e(x,1,4)="Cach"!($e(x,1,6)="Open M")!($e(x,1,5)="M/SQL")!($zcvt($e(x,1,5),"U")="OPENM") Set temp="Cache" Quit
+ . If $e(x,1,5)="<?xml" Set temp="XML" Quit
+ . Set temp="ANSI"
+ Read:format'="Object" y Read:format="ANSI"!(format="XML") z
+ Set:format="Cache"!(format="ISM") temp(1)=$p(x,"^")_"  Extension "_$p(x,"^",2),temp(2)="Written by "_y,temp(3)=$p(x,"^",3)
+ Set:format="DTM" temp(1)=$p($p(x,"(",2),")"),temp(2)=$p($p(y,";",2),":")_" "_$p($p(x,"("),"-",2),temp(3)=$p(y,":",2,999)
+ Set:format="DSM" temp(1)=x,temp(3)=y
+ If format="ANSI" Set:z["."&(x'["Self-loading") temp="MSM",format=temp Set temp(1)=x,temp(3)=y
+ If format="Object" Set temp(1)=$p($p(x,"~",3)," ")_" wrote this file on "_$e(x,257,274),temp(2)="",temp(3)=$p(x,"~")
+ If format="XML" Set temp(1)="XML "_$s(z["Routine":"routine ",1:"")_"file",temp(2)="",temp(3)="Written by "_$p($p(y,"=",2),"""",2)
+getderr Close file Quit:$ze'="" "" Quit temp(1)_$c(22,35,1)_temp(2)_$c(22,35,1)_temp(3)_$c(22,35,1)_temp
+getlist(param) New (%UI,param) Set $zt="errgetl",cancel=0 Kill ^CacheTempWr($j)
+ Set file=$p(param,$c(22,35,1)),format=$p(param,$c(22,35,1),2)
+ If '$$OpenDev^%Wprim(.file) Quit $$notopen^Wr
+ If '$$IsFile^%Wprim(file) Use file w *-5
+ If format="Object" Set x=$$getlisto(file) Quit:'x x
+ Else  If format="XML" Do
+ . Use file Read x,y
+ . For  Read rtn If $ZEOF,$ZUTIL(96,0,42) {} Set rtn=$p(rtn,$c(13)) If rtn["<Routine" Set type=$p($p(rtn,"type=",2),"""",2),rtn=$p($p(rtn,"name=",2),"""",2) Quit:rtn=""  Do  Quit:cancel
+ . . Read first
+ . . If $ZEOF,$ZUTIL(96,0,42)
+ . . Set:rtn'="" ^CacheTempWr($j,rtn)=type_$c(22,35,1)_first
+ . . Set cancel=$$callbckl^Wr(1,rtn,type,first)
+ . . For  Read x If $ZEOF,$ZUTIL(96,0,42) {} If x["</Routine>" Quit
+ Else  Do
+ . Use file Read x,y ; Read Header
+ . If $ZEOF,$ZUTIL(96,0,42)
+ . For  Read rtn If $ZEOF,$ZUTIL(96,0,42) {} Set rtn=$p(rtn,$c(13)) Quit:rtn=""  Do  Quit:cancel
+ . . Set rtn=$$ParseRoutineHeader^%R(rtn,.type) Set:type="" type="INT"
+ . . Read first 
+ . . If $ZEOF,$ZUTIL(96,0,42)
+ . . Set:rtn'="" ^CacheTempWr($j,rtn)=type_$c(22,35,1)_first
+ . . Set cancel=$$callbckl^Wr(1,rtn,type,first)
+ . . Do skip^Wr(file,format) ; skip routine
+ Set cancel=$$callbckl^Wr(11) 
+ Close file 
+ Set $zt="" 
+ Quit 1
+erreof Set $ZE="<ENDOFFILE>"  ;come here on EOF error
+errgetl Set $zt="",err=$ZE
+ If $ZE["ENDOF" Close file Set x=$$callbckl^Wr(11) Quit 1
+ Close file Quit "0"_$c(22,35,1)_err
+getlisto(file) Use file
+ Set head=$ZU(96,18,2,"RAW")
+ Set head=$$HEAD^Wr() Quit:'head head Set LEN="",rtn="",first="",type="OBJ"  
+ For  Quit:'$$GUIRDL^%RIMF(file,.rtn,.LEN)  Do  Quit:cancel
+ . Set ^CacheTempWr($j,rtn)=type_$c(22,35,1)_first
+ . Set cancel=$$callbckl^Wr(1,rtn,type,first)
+ . Do GUISKP^%RIMF(file,LEN) ; Skip routine
+ Quit 1    
+NSpaceM(ns) Quit $s(ns="":"",1:$ZU(5,ns))
+onedel(rtn,allvers) ;allvers parameter is now obsolete, as v4.0
+ n x s x=$$DEL^%R(rtn)
+ Quit
+rcomp(ns1,ns2,rtn1,rtn2) New (%UI,TYPE,rtn1,rtn2,ns1,ns2)
+ Set rtn(1)=rtn1,rtn(2)=rtn2,return=1,nline(1)=0,nline(2)=0
+ If (rtn1=rtn2),(ns1=ns2) Quit 1 ; 0 differences "Can not compare to itself"
+ Quit:rtn1=""!(rtn2="") "" Set ns(1)=ns1,ns(2)=ns2
+ s (more(1),more(2))=0
+rcmore For i=1,2 Do  Quit:return'=1
+ . Set src(i)="",rtn=$$ParseRoutineName^%R(rtn(i),.TYPE),start=1
+ . Set TYPE(i)=TYPE
+ . If '$$EXIST^%R(rtn(i),ns(i)) Set return="Routine '"_rtn_"' does not exist" Quit
+ . If TYPE="OBJ" Do
+ . . New obj If $$ROUTINE^%R(rtn(i),.obj,.e,"L","","",ns(i)) Set src(i)=obj(1) Set:$d(obj(2)) src(i,0)=obj(2)
+ . Else  Do
+ . . If more(i) Set start=more(i)+1,more(i)=0
+ . . Else  Set end(i)=$$LENGTH^%R(rtn(i),ns(i))
+ . . For j=start:1:end(i) Do  Quit:more(i)
+ . . . Set src(i)=src(i)_$$LINE^%R(rtn_"."_TYPE,j,ns(i))_$c(10)
+ . . . If $l(src(i))>32000 Set more(i)=j
+ . . Set:j=end(i) more(i)=0
+ If return'=1  Quit return
+ Quit:TYPE(1)'=TYPE(2) "Routines are of different types"
+ If TYPE="OBJ" {
+   If src(1)=src(2),$g(src(1,0))=$g(src(2,0)) Quit 2
+   Quit 1
+ }
+ Set return=$$compare(.src)
+ If more(1)!(more(2)) Goto rcmore
+ Quit return
+compare(src) Set return=$g(return)
+ For i=1,2 Set nline(i)=+$g(nline(i))
+ Set src(1)=src(1)_$s($e(src(1),$l(src(1)))'=$c(10):$c(10),1:"")_"--end--"
+ Set src(2)=src(2)_$s($e(src(2),$l(src(2)))'=$c(10):$c(10),1:"")_"--end--"
+compare1 Set a=$p(src(1),$c(10)),b=$p(src(2),$c(10)) Goto:a'=b compare2
+ If a="--end--",a=src(1) Set x=$$callback^Wr(0,0) Quit return ;+$g(counter)
+ Set ff=12 Do nextline Goto compare1
+compare2 Set a=$c(10)_$p(src(1),$c(10),1,2),b=$c(10)_$p(src(2),$c(10),1,2)
+ Set oa=$f(src(1),b)-$l(b),ob=$f(src(2),a)-$l(a)
+ Set o=$s(oa<0:ob,ob<0:oa,oa>ob:ob,1:oa)
+ If o<0 Do
+ .  Set ff=12,showline=$$callback^Wr($p(src(1),$c(10)),$p(src(2),$c(10))),ff=12 Do nextline
+ Else  Set ff=$s(o=oa:1,1:2) Do
+ . Set p=0 For k=1:1 Set p=$f($s(ff=2:src(2),1:src(1)),$c(10),p) Quit:'p  Quit:p>o
+ . For j=1:1:k  Set showline=$$callback^Wr($p(src(1),$c(10)),$p(src(2),$c(10))) Do nextline
+ Goto compare1
+nextline Set:ff[1 src(1)=$p(src(1),$c(10),2,9999),nline(1)=nline(1)+1
+ Set:ff[2 src(2)=$p(src(2),$c(10),2,9999),nline(2)=nline(2)+1
+ Quit
+rcseq(file,ctx) New (%UI,file,ctx)
+ Set $zt="rcsErr",$ze="",ctx=$g(ctx,0)
+ If ctx=0 Do  If ctx=0 Quit 0_"^"_$$notopen^Wr
+ . Set $zt="rcseq0"
+ . If '$$OpenDev^%Wprim(.file) Quit
+ . Set ctx=$I(^CacheTemp)
+ . Use file
+ . Read h1 If $ZEOF,$ZUTIL(96,0,42) {}
+ . Read h2 If $ZEOF,$ZUTIL(96,0,42) {}
+ . For  u file r a If $ZEOF,$ZUTIL(96,0,42) {} s rtn=$$ParseRoutineHeader^%R(a,.type)_"."_type d
+ . . For i=1:1 Use file Read a If $ZEOF,$ZUTIL(96,0,42) {} Quit:a=""  Set ^CacheTemp(ctx,rtn,i)=a
+rcseq0 . Close file 
+ . If $ze'["<ENDOFFILE>" Set ctx=0 Quit
+ Set nline(1)=0,nline(2)=0
+ Set ctx1=+ctx,rtn=$o(^CacheTemp(ctx1,$p(ctx,"^",2)))
+ Set end(1)=$o(^CacheTemp(ctx1,rtn,""),-1),end(2)=$$LENGTH^%R(rtn),ff=0 
+ If 'end(2) Do callback^Wr($p(rtn,$c(10)),"[no routine]"),callback^Wr(0,0) Goto rcseq2
+ Do callback^Wr(rtn,"")
+ Set (more(1),more(2),nline(1),nline(2))=0
+rcseq1 For i=1,2 Do
+ . Set src(i)="",start=1
+ . If more(i) Set start=more(i)+1,more(i)=0
+ . For j=start:1:end(i) Do  Quit:more(i)
+ . . If i=1 Set src(1)=src(1)_^CacheTemp(ctx1,rtn,j)_$c(10)
+ . . Else  Set src(2)=src(2)_$$LINE^%R(rtn,j)_$c(10)
+ . . If $l(src(i))>32000 Set more(i)=j
+ . Set:j=end(i) more(i)=0
+ Set return=$$compare(.src)
+ If more(1)!(more(2)) Goto rcseq1
+rcseq2 Set ctx=ctx1_"^"_rtn
+ Set return=($o(^CacheTemp(ctx1,rtn))'="")
+ Quit return
+rcsErr Quit 0_"^"_$ze
+rcopy(routine,nspace1,nspace2,compile,syntax,backup,action,copied) 
+ ;Quit $$rcopyOld(routine,nspace1,nspace2,compile,syntax,backup,action,copied)
+ New (%UI,routine,nspace1,nspace2,over,compile,syntax,backup,action,copied)
+ Set $zt="copyerr",replaced=0,compiled=0,showstat=0
+ Set NSPACE=$ZU(5),zs=$ZS,$ZS=16384
+ Set status=1,cancel=0,message=""
+ Set rtn=$$ParseRoutineName^%R(routine,.type)
+ ;Load MAC,INC,INT,BAS routine in ^CacheTempWr($j,%msub)
+ Do NSpaceM(nspace1)
+ If type="INT"!(type="MAC")!(type="INC")!(type="BAS") Do
+ . Do ROUTINE^%R(routine,.r,.err,"L")
+ . Set lang=$$LANG^%R(routine)
+ . If lang Set OLDLANG=$ZUTIL(55,lang) ; Save the old language
+ ; Copy in to nspace2
+ Do NSpaceM(nspace2)
+ If backup,"MAC,INC"[type Do ^%RSHUF("PUSH","","",rtn,type)
+ If compile Do
+ . Set compiled=$$ROUTINE^%R(routine,.r,.e,"SC")
+ Else  Do 
+ . Do ROUTINE^%R(routine,.r,.e,"S")
+ Set copied=copied+1
+ If action=2 Do NSpaceM(nspace1) s x=$$DEL^%R(routine)
+ Set message=routine
+ Set:action=1 message=message_" copied          "
+ Set:action=2 message=message_" moved           "
+ Set:replaced message=message_" Replaced old one"
+ Set:compiled message=message_" Recompiled      "
+ Set cancel=$$callVisM^%Wprim(1,$c(22,35,1)_message) Quit:cancel 0
+ Set NSPACE=$ZU(5,NSPACE)
+ Set $ZS=zs
+ Quit 1
+copyerr Set $ZS=zs
+ d debug^%Wprim("copyerr^Wr1: "_$ze)
+ Quit $$GenErr^Wr("Copy error")
+rloado(file,format,selection,over) Kill ^mtemp1("ROU") Do 1^%ROUN Use file
+ Set head=$ZU(96,18,2,"RAW")
+ Set head=$$HEAD^Wr() Quit:'head head Set LEN="",rtn=""
+ For iii=1:1 Quit:'$$GUIRDL^%RIMF(file,.rtn,.LEN)  Do  Quit:cancel
+ . Set cancel=$$callbckl^Wr($s(iii#5=1:limited,1:0),rtn),type="OBJ" ;output every 5th routine
+ . If '$$include^Wr(rtn,type,selection) Do  Quit  ; Do not restore this routine
+ . . Do GUISKP^%RIMF(file,LEN) ; Skip routine
+ . . Set cancel=$$callbckl^Wr(limited_1,rtn,rtn_"."_type_$c(19,94,1)_0_$c(19,94,1)_0_$c(19,94,1)_"not in selection"_$c(22,35,1))
+ . Set status=$$over^Wr(rtn,type,over) If 'status Do  Quit  ; Do not overvrite this routine
+ . . Do GUISKP^%RIMF(file,LEN) ; Skip routine
+ . . Set cancel=$$callbckl^Wr(limited_1,rtn,rtn_"."_type_$c(19,94,1)_0_$c(19,94,1)_0_$c(19,94,1)_"already exists"_$c(22,35,1))
+ . Set status=status-1
+ . Set rc=$$GUILDR^%RIMF(file,rtn,LEN)
+ . If rc Do  
+ . . s x=$$DEL^%R(rtn_".INT") Set status=status_"@" ;load!
+ . . Set message=rtn_"."_type_$c(19,94,1)_1_$c(19,94,1)_(status["@")_$c(19,94,1)
+ . . If status["1" Set message=message_"replaced old one"
+ . . Set cancel=$$callbckl^Wr(limited_1,rtn,message_$c(22,35,1))
+ . Else  Do  
+ . . Set message=rtn_"."_type_$c(19,94,1)_0_$c(19,94,1)_0_$c(19,94,1)_$c(19,94,1)_"old object"
+ . . Set cancel=$$callbckl^Wr(limited_1,rtn,message_$c(22,35,1))
+ . . Set cancel=1,rc="00"
+ . If cancel Quit  
+ Set cancel=$$callbckl^Wr(limited,rtn) ;flush final routine name
+ Set cancel=$$callbckl^Wr(limited_2) Kill ^CacheTempJ($j),^CacheTempWr($j) Close file
+ Quit rc

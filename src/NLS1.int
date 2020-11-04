@@ -1,0 +1,978 @@
+ROUTINE NLS1 [Type=INT]
+NLS1	; Manage NLS properties (Tables)
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ Quit
+Tables() [sTab] PUBLIC {
+ If $$SelectTable()'="NEXT" Quit
+ While (1) {
+	Set op=1
+	Set ty=$P(sTab,",",1),fr=$P(sTab,",",2),to=$P(sTab,",",3)
+	Set options(op)="Display table",op=op+1
+	If $E(fr)="y"||($E(to)="y")||($D(@($Name(^||SYS("NLS")))@("System"))) { 
+		Set options(op)="Edit table",op=op+1
+		Set options(op)="Delete table",op=op+1
+	}
+	Set options(op)="Export table",op=op+1
+	Set options(op)="Validate table",op=op+1
+	Set options(op)="Copy table",op=op+1
+	Set options(op)="Select another table"
+	Write !!,"Selected Table(",ty,",",fr Write:to'=fr ",",to Write ")"
+	Set op="",st=##Class(%Library.Prompt).GetMenu("Table option?",.op,.options,,128+4)
+	If (st=2)||(st=3) Quit
+	If options(op)["Display" { Do DisplayTable() }
+	ElseIf options(op)["Edit" { Do EditTable() }
+	ElseIf options(op)["Export" { Do ExportTable() }
+	ElseIf options(op)["Validate" { Do ValidateTable() }
+	ElseIf options(op)["Copy" { Do CopyTable() }
+	ElseIf options(op)["Delete" { Do DeleteTable() If '$D(sTab) Quit }
+	ElseIf options(op)["Select" { Do SelectTable() }
+	Else { Quit }
+ } 
+}
+DisplayTable() [nLines,sTab,oTab,sSub,oSub,sMod,oMod] {
+ If '$D(nLines) Do GetLines()
+ Set ty=$P(sTab,",",1),desc=oTab.Description
+ Write #,$$Justify(" Table("_sTab_") ",78,2,"-")
+ Write !,"       Description: ",desc
+ If $E(desc,1,8)="Built-in" Quit
+ If ty="XLT" {
+	Write !,"  Translation type: ",$Case(oTab.XLTType,0:"Non-modal to non-modal",1:"Non-modal to modal",2:"Modal to modal",:"Unknown")
+	Write !,"    Default action: ",$Case(oTab.XLTDefaultAction,0:"Generate error",1:"Replace with replacement string/value",2:"Ignore",:"Unknown")
+	Write !," Replacement value: ",oTab.XLTReplacementValue," (""",@("$C("_oTab.XLTReplacementValue_")"),""")"
+	If $D(sMod) {
+		Write !,"        Mode table: ",sMod
+		If '$D(oSub) Do DisplayModeSubTab()
+	}
+	If $D(oSub) {
+		Write !,"      Mapping type: ",$Case(oSub.Type,0:"Single to single",1:"Single to multi",2:"Multi to single",3:"Multi to multi",:"Unknown")
+		Do DisplayFromToTab()
+	}
+	Quit
+ }
+ If ty="COL" {
+	Set col=oTab.COLRules
+	For i=2,3 {
+		Write !!,$P(", Local,Global",",",i)," encoding rules:"
+		Set rul=$LI(col,i),nr=rul\32,sr=rul#32
+		Write !?5,"Numeric: ",nr," (",$P("New ANSI;Old ANSI;String;Cobra;DTM-Native;DTM-Compatible;Cobra2;DSM-Native",";",nr+1),")"
+		Write !?5," String: ",sr," (",$P("No conversion, quote initial < 32;Quote 0-3 and initial < 32;Disallow 0 or initial < 32;Quote 0-31;DTM-Native string;Unicode;DSM-Native;Table+Unicode",";",sr+1),")"
+	}
+	Write !!,"Internal collation #: ",$LI(col)
+	Do DisplayFromToTab(1) Quit
+ }
+ If ty["Case" { Do DisplayFromToTab() Quit }
+ If ty="Pattern" { Write !,"Pattern code table: ",sSub Do DisplayRangeTab() Quit }
+ If ty="Ident" { Do DisplayIdentTab() Quit }
+ If ty="XY" { Do DisplayRangeTab() Quit }
+ If ty="Mode" { Do DisplayModeTab() Quit }
+ If ty="Patcode" { Do DisplayPatcodeTab() Quit }
+}
+EditTable() [oTab,sTab] {
+ If $E(oTab.Description,1,8)="Built-in" { Write !!,"This is a built-in table." Quit }
+ If '$SYSTEM.Security.Check("%Admin_Manage","USE") {
+	Write !,"Sorry, you have no permission to edit tables."
+	Quit
+ }
+ If $E($P(sTab,",",2))'="y",$E($P(sTab,",",3))'="y" {
+	 Write !!,"You are about to edit a system table."
+	 Write !,"Any changes will be discarded during a system upgrade."
+	 If $$YN("Are you sure you want to continue?")'="y" Quit
+ }
+ Set options(1)="Properties"
+ Set options(2)="Table data"
+ While (1) {
+	Set op="",st=##Class(%Library.Prompt).GetMenu("Edit option?",.op,.options,,128+4)
+	If (st=2)||(st=3) Quit
+	If op=1 { Do EditTableProps() }
+	ElseIf op=2 { Do EditTableData() }
+	Else { Quit }
+ } 
+}
+ExportTable() [oTab,sTab] {
+ If $E(oTab.Description,1,8)="Built-in" { Write !!,"This is a built-in table." Quit }
+ Set ty=$P(sTab,",",1),fr=$P(sTab,",",2),to=$P(sTab,",",3)
+ Set file="tab_"_$TR(sTab,",","_")_".xml"
+ Write !,"Export to file: ",file," => " Read ans If ans="" Set ans=file
+ Set file=ans,Tables(ty,fr,to)=""
+ If ty="XLT"||(ty="COL"),##class(Config.NLS.Tables).Exists(ty,to,fr) {
+	Set Tables(ty,to,fr)=""
+ }
+ Set st=##class(Config.NLS.Tables).ExportList(file,.NumExported,.Tables)
+ If st'=1 { Write !!,"Error opening file ",file Do $System.OBJ.DisplayError(st) Quit }
+ Write !,"Successfully exported: "
+ For t="Tables","SubTables" {
+ 	Set n=NumExported(t)
+ 	Write ?24,$J(n,2)," ",$ZCVT($E(t,1,$L(t)-(n=1)),"L"),!
+ }
+}
+ValidateTable() [oTab,sTab] {
+ If $E(oTab.Description,1,8)="Built-in" { Write !!,"This is a built-in table." Quit }
+ Set ty=$P(sTab,",",1)
+ If ty="Mode"||(ty="Patcode") {
+	Write !!,"Not applicable to ",ty," tables."
+	Quit
+ }
+ Write !
+ Set inv=0
+ If ty="COL" Set inv=1
+ If ty="XLT",$$YN("Also validate inverse table?",1)="y" Set inv=1
+ Set ty=$P(sTab,",",1),fr=$P(sTab,",",2),to=$P(sTab,",",3)
+ Do ValidateOneTable(ty,fr,to)
+ If inv Do ValidateOneTable(ty,to,fr)
+}
+ValidateAndReloadTable() [sTab] {
+	Set ty=$P(sTab,",",1),fr=$P(sTab,",",2),to=$P(sTab,",",3)
+	Set oldoid=$O(^SYS("shm","Src",1,"%nls",ty,fr,to,""),-1)
+	Set oldoff=$S(oldoid="":0,1:$G(^SYS("shm","Off",0,oldoid)))
+	Write !!,"Validating Table(",sTab,")"
+	Do ValidateOneTable(ty,fr,to)
+	If '##class(Config.NLS.Tables).IsLoadable(ty,fr,to) {
+		Write !,"This table cannot be loaded"
+		Quit
+	}
+	If oldoff,$$IsTableInLocale(ty,fr,to,.sloc,.name) {
+		Write !!,"The old version of this table is currently loaded."
+		If $$YN("Would you like to load the new version?",1)="y" {
+			Set st=##class(Config.NLS.Tables).Load(sloc,ty,name)
+			If st { Write " <Reloaded>",!,"The new version will be visible to new processes." }
+			Else {
+				Write !,"Error reloading table"
+				Do $System.OBJ.DisplayError(st)
+			}
+		} Else { Write " <Not reloaded>" }
+	}
+}
+ValidateOneTable(ty,fr,to) {
+ Write !!
+ Set dbg=$G(^%nlsmisc("DEBUG")),^%nlsmisc("DEBUG")=1
+ Set stab=ty_","_fr_","_to
+ Set st=##class(Config.NLS.Tables).Compile(ty,fr,to)
+ If st'=1 {
+	Write !,"Error compiling Table(",stab,")"
+	Do $System.OBJ.DisplayError(st)
+ }
+ If 'dbg Kill ^%nlsmisc("DEBUG") 
+ If ##class(Config.NLS.Tables).IsLoadable(ty,fr,to,,.Errors) {
+	Write !,"Table(",stab,") successfully validated."
+ } Else {
+	Write !,"Error",$E("s",Errors>1)," validating Table(",stab,"):"
+	For i=1:1:Errors Write !?5,Errors(i)
+ }
+}
+IsTableInLocale(ty,fr,to,sloc,name) PUBLIC {
+	Set oloc=##class(Config.NLS.Locales).OpenCurrent()
+	If '$IsObject(oloc) Return 0
+	Do oloc.GetProperties(.props) Set ret=0,pair=""
+	If ty="XLT" {
+		Set pair=$O(props("XLTTables",""),1,tabs)
+		While pair'="" {
+			If $LI(tabs,1)=fr,$LI(tabs,2)=to Set ret=1 Quit
+			If $LI(tabs,3)=fr,$LI(tabs,4)=to Set ret=1 Quit
+			Set pair=$O(props("XLTTables",pair),1,tabs)
+		}
+	} Elseif ty["Case" {
+		If $D(props(ty_"Tables",to)) Set ret=1,pair=to
+	} Elseif ty="Ident" {
+		If $D(props("IdentifierTables",to)) Set ret=1,pair=to
+	}
+	If ret Set sloc=oloc.Name,name=pair
+	Return ret
+}
+CopyTable() [sTab,oTab] {
+ If $E(oTab.Description,1,8)="Built-in" { Write !!,"This is a built-in table." Quit }
+ Set ty=$P(sTab,",",1),fr=$P(sTab,",",2),to=$P(sTab,",",3),dfr="",dto=""
+ If ty="Mode"||(ty="Patcode") { Set dto=to }
+ ElseIf fr="Unicode" { Set dfr=fr }
+ ElseIf to="Unicode" { Set dto=to }
+ ElseIf fr?1"Unicode"1.E { Set dto=to }
+ ElseIf to?1"Unicode"1.E { Set dfr=fr }
+ ElseIf fr=to,fr?1"Latin"1E||(fr?1"CP"4N) { Set dfr=fr }
+ ElseIf fr=to,to?1"Latin"1E||(to?1"CP"4N) { Set dto=to }
+ Write !!,"Enter "
+ If ty="XLT" {
+	Write $S(dfr=""&&(dto'=""):"'from'",dfr'=""&&(dto=""):"'to'",dfr=""&&(dto=""):"'from' and 'to'")," encoding"
+	Set hlpf="Enter new 'from' encoding",hlpt="Enter new 'to' encoding"
+ } Else {
+	 Write "new name"
+	 Set (hlpf,hlpt)="Enter new table name"
+ }
+ Write " for copy of Table(",sTab,")"
+getfrom Write !,$S(ty="XLT":"From: ",ty="Mode":"Mode name: ",ty="Patcode":"Table name: ",1:"Character set: ")
+ If dfr="" {
+	If dto'="" Write "y"
+	Read ans If ans=""||(ans="^") Quit
+	If ans="?" Write !,hlpf Goto getfrom 
+	If ans'?1.AN Write " <Only alphanumerical characters>" Goto getfrom
+	Set zfr=$S(dto'="":"y"_ans,1:ans)
+ } Else { Write dfr Set zfr=dfr }
+ If ty="Mode"||(ty="Patcode") { Set zto=zfr Goto create }
+getto Write !,$S(ty="XLT":"To: ",ty="COL":"Collation: ",1:"Table name: ")
+ If dto="" {
+	If dfr'="" Write "y"
+	Read ans If ans=""||(ans="^" ) Goto getfrom:dfr="" Quit
+	If ans="?" Write !,hlpt Goto getto
+	If ans'?1.AN Write " <Only alphanumerical characters>" Goto getto
+	If dfr="",$E(zfr)'="y",$E(ans)'="y" Write " <Either source or target encoding must start with 'y'>",! Goto getfrom
+	Set zto=$S(dfr'="":"y"_ans,1:ans)
+ } Else { Write dto Set zto=dto }
+create Set sNew="Table("_ty_","_zfr_","_zto_")"
+ If ##class(Config.NLS.Tables).Exists(ty,zfr,zto) { Write " <",sNew," already exists>" Goto getfrom }
+ Set st=oTab.GetProperties(.NewProps)
+ If st'=1 { Write !,"Error accessing Table(",sTab,")" Do $System.OBJ.DisplayError(st) Quit }
+ Set NewProps("Description")="Copy of "_NewProps("Description")
+ Set st=##class(Config.NLS.Tables).Create(ty,zfr,zto,.NewProps)
+ If st'=1 { Write !,"Error creating ",sNew Do $System.OBJ.DisplayError(st) Quit }
+ Write !!,"New ",sNew," created with success"
+}
+DeleteTable() [sTab,oTab,sSub,oSub] {
+ If $E(oTab.Description,1,8)="Built-in" { Write !!,"This is a built-in table." Quit }
+ If '$SYSTEM.Security.Check("%Admin_Manage","USE") {
+	Write !,"Sorry, you have no permission to delete tables."
+	Quit
+ }
+ If $E($P(sTab,",",2))'="y",$E($P(sTab,",",3))'="y" {
+	 Write !!,"You are about to delete a system table."
+	 If $$YN("Are you sure you want to continue?")'="y" Quit
+ }
+ Set ty=$P(sTab,",",1),fr=$P(sTab,",",2),to=$P(sTab,",",3)
+ If $E(fr)'="y",$E(to)'="y" { Write !!,"Cannot delete System Table(",sTab,")" Quit }
+ Set ans=$$YN("Delete Table("_sTab_") ?")
+ If ans'="y" Write " <NOT deleted>" Quit
+ Kill sTab,oTab,oSub,sSub
+ Set st=##class(Config.NLS.Tables).Delete(ty,fr,to,1)
+ Write $S(st=1:" Deleted",1:" Error!")
+ Do SelectTable()
+}
+SelectTable() [sTab,oTab,sSub,oSub,sMod,oMod,TabProps,TabProps] {
+ Write !!,"Select a table"
+ Do GetOptions(.Types,"TableTypes")
+gettype	;
+ Set itype=""
+ Set st=##Class(%Library.Prompt).GetMenu(Types,.itype,.Types,,128+4)
+ If (st=2)||(itype="") Quit "PREV"
+ Set ty=Types(itype,1) Do GetTables(.From,ty) Set From=$G(From)
+ If 'From Write !,"No ",ty," table available" Goto gettype
+ Set From=$Case(ty,"XLT":"From:","Patcode":"Table name:","Mode":"Table name:",:"Character set:")
+getfrom	;
+ Set ifrom=""
+ Set st=##Class(%Library.Prompt).GetMenu(From,.ifrom,.From,,128+4)
+ If (st=2)||(ifrom="") Goto gettype
+ Set fr=From(ifrom) Do GetTables(.To,ty,fr) Set to=$G(to)
+ If 'To Write !,"No table available" Goto getfrom
+ If To=1 { Set ito=1 Goto selend }
+ Set To=$S(ty="XLT":"To:",1:"Table name:")
+getto	;
+ Set ito=""
+ Set st=##Class(%Library.Prompt).GetMenu(To,.ito,.To,,128+4)
+ If (st=2)||(ito="") Goto getfrom
+selend	;
+ Set to=To(ito) Kill obj,props,stn,sub,mtn,mod
+ If '##class(Config.NLS.Tables).Exists(ty,fr,to,.obj,.st) Write " <Not available>",! Goto gettype
+ If st'=1 { Write !,"Error opening table" Do $System.OBJ.Dump(st) Goto gettype } 
+ Set st=obj.GetProperties(.props)
+ If st'=1 { Write " <Error accessing table>" Do $System.OBJ.DisplayError(st) Goto gettype }
+ If obj.SubTableName'="" {
+	Set stn=obj.SubTableName
+	If ty="Pattern" { Set avl=##class(Config.NLS.Tables).Exists("Patcode",stn,stn,.sub,.st) }
+	Else { Set avl=##class(Config.NLS.SubTables).Exists(stn,.sub,.st) }
+	If 'avl { Write " <Sub-table ",stn," not available>",! Goto gettype }
+ 	If st'=1 { Write !,"Error opening sub-table" Do $System.OBJ.Dump(st) Goto gettype }
+ }
+ If obj.XLTModeTableName'="" {
+	Set mtn=obj.XLTModeTableName
+	If '##class(Config.NLS.Tables).Exists("Mode",mtn,mtn,.mod,.st) Write " <Mode table ",mtn," not available>" Goto gettype
+	If st'=1 { Write !,"Error opening table" Do $System.OBJ.Dump(st) Goto gettype }	
+ }
+ Kill TabProps Set TabProps=0 Merge TabProps=props
+ Set sTab=ty_","_fr_","_to,oTab=obj
+ If $D(sub) { Set sSub=stn,oSub=sub }
+ Else { Kill sSub,oSub }
+ If $D(mod) { Set sMod=mtn,oMod=mod }
+ Else { Kill sMod,oMod }
+ Quit "NEXT"
+}
+DisplayFromToTab(col) [nLines,oSub] {
+ Write !!,$$Justify(" Table data ",78-10,2,"-")
+ Set tab=10,st=1
+ Set w1=20,h1=$$Justify($S($D(col):" Char ",1:" From code "),w1,2,"-")
+ Set w2=20,h2=$$Justify($S($D(col):" Collate value ",1:" To code "),w2,2,"-")
+ Write !!?tab,h1,"  ",h2
+ Set array=oSub.FromTo
+ Set from="",to=array.GetNext(.from)
+ While (from'="") {
+	If nLines,$Y+3>nLines {
+		Set st=##class(%Library.Prompt).GetMore()
+		If st=3 ZTrap "QUIT"
+		If st=2 Quit
+		Write #?tab,h1,"  ",h2
+	}
+	Write !?tab,$J(from,w1),"  ",$J(to,w2)
+ 	Set to=array.GetNext(.from)
+ }
+ Quit st
+}
+DisplayRangeTab() [nLines,oTab] {
+ Set tab=3,ty=oTab.Type,st=1
+ If ty="XY" {
+	Set w1=20,h1=$$Justify(" $X/$Y Action ",w1,1,"-")
+	Set array=oTab.XYActions
+ } Else {
+	Set w1=16,h1=$$Justify(" Pattern code ",w1,2,"-")
+	Set array=oTab.PatternRanges
+ }
+ Set w2=20,h2=$$Justify(" From character ",w2,2,"-")
+ Set w3=20,h3=$$Justify(" To character ",w3,2,"-")
+ Write !!?tab,h1,"  ",h2,"  ",h3
+ Set idx="",ranges=array.GetNext(.idx)
+ While (idx'="") {
+	If ty="XY" { 
+		Set f1=" "_$P("Normal,Full width,Non-printing,Backspace,Line feed,Form feed,Carriage return,Escape sequence",",",idx+1)
+		Set f1=$$Justify(f1,w1,1)
+	} Else { Set f1=$$Justify(idx,w1,2) }
+	For i=1:1:$LL(ranges) {
+		Set range=$List(ranges,i)
+		Set f2=$P(range,":",1),f3=f2+$P(range,":",2)-1
+		If nLines,$Y+3>nLines {
+			Set st=##class(%Library.Prompt).GetMore()
+			If st=3 ZTrap "QUIT"
+			If st=2 Quit
+			Write #?tab,h1,"  ",h2,"  ",h3
+		}
+		Write !?tab,f1,"  ",$$Justify($J(f2,5),w2,2),"  ",$$Justify($J(f3,5),w3,2)
+	}
+	If st'=1 Quit
+ 	Set ranges=array.GetNext(.idx)
+ }
+}
+DisplayIdentTab() [nLines,oTab] {
+ Set tab=3
+ Set w1=20,h1=$$Justify(" From character ",w1,2,"-")
+ Set w2=20,h2=$$Justify(" To character ",w2,2,"-")
+ Write !!?tab,h1,"  ",h2
+ Set ranges=oTab.Identifiers
+ For i=1:1:$LL(ranges) {
+	Set range=$List(ranges,i)
+	Set f1=$P(range,":",1),f2=f1+$P(range,":",2)-1
+	If nLines,$Y+3>nLines {
+		Set st=##class(%Library.Prompt).GetMore()
+		If st=3 ZTrap "QUIT"
+		If st=2 Quit
+		Write #?tab,h1,"  ",h2
+	}
+	Write !?tab,$J(f1,w2),"  ",$J(f2,w2)
+ }
+}
+DisplayModeTab() [nLines,TabProps] {
+ If '$D(nLines) Do GetLines()
+ Set tab=2
+ Set w1=10,h1=$$Justify(" Mode # ",w1,2,"-")
+ Set w2=19,h2=$$Justify(" Mode name ",w2,2,"-")
+ Set w3=14,h3=$$Justify(" Bytes/char ",w3,2,"-")
+ Set w4=21,h4=$$Justify(" Escape sequence ",w4,2,"-")
+ Write !!?tab,h1,"  ",h2,"  ",h3,"  ",h4
+ For m=0:1:$O(TabProps("Modes",""),-1) {
+	Set mod=TabProps("Modes",m)
+	Set f1=m,f2=$P(mod,":",1),f3=$P(mod,":",2),f4=$P(mod,":",3)
+	If nLines,$Y+3>nLines {
+		Set st=##class(%Library.Prompt).GetMore()
+		If st=3 ZTrap "QUIT"
+		If st=2 Quit
+		Write #?tab,h1,"  ",h2,"  ",h3,"  ",h4
+	}
+	Write !?tab,$$Justify(f1,w1,2),"  ",$$Justify(f2,w2,1)
+	Write "  ",$$Justify(f3,w3,2),"  ",$$Justify(f4,w4,3)
+ }
+}
+DisplayModeSubTab() [sMod,oMod,oSub] {
+ Set modes=oMod.Modes,tab=3
+ For m=0:1:modes.Count()-1 {
+	Set prp=modes.GetAt(m),mod=$P(prp,":",1)
+	Set h1=$$Justify(" Mode "_m_" ",78,2,"-")
+	If ##class(Config.NLS.SubTables).Exists(mod,.oSub) {
+		Write !!,h1
+		Write !?tab,"      Mode name: ",mod
+		Write !?tab,"     Bytes/char: ",$P(prp,":",2)
+		Write !?tab,"Escape sequence: ",$P(prp,":",3)
+		If $$DisplayFromToTab()'=1 Quit
+	}
+ }
+ Kill sSub,oSub
+}
+DisplayPatcodeTab() [nLines,TabProps] {
+ If '$D(nLines) Do GetLines()
+ Set tab=3,st=1
+ Set w1=20,h1=$$Justify(" Pattern code ",w1,2,"-")
+ Set w2=20,h2=$$Justify(" Value ",w2,2,"-")
+ Write !!?tab,h1,"  ",h2
+ Set list=TabProps("PatCodes")
+ For i=1:1:$LL(list) {
+	Set x=$LI(list,i),f1=$P(x,":",1),f2=$P(x,":",2)
+	If nLines,$Y+3>nLines {
+		Set st=##class(%Library.Prompt).GetMore()
+		If st=3 ZTrap "QUIT"
+		If st=2 Quit
+		Write #?tab,h1,"  ",h2
+	}
+	Write !?tab,$$Justify(f1,w1,2),"  ",$$Justify($J(f2,10),w2,2)
+ }
+ If st'=1 Quit
+ Set list=TabProps("PatAliases") If list="" Quit
+ Set w2=20,h2=$$Justify(" Alias ",w2,2,"-")
+ If nLines,$Y+4>nLines {
+	Set st=##class(%Library.Prompt).GetMore()
+	If st=3 ZTrap "QUIT"
+	If st=2 Quit
+ }
+ Write !!?tab,h1,"  ",h2
+ For i=1:1:$LL(list) {
+	Set x=$LI(list,i),f1=$P(x,":",1),f2=$TR($P(x,":",2),";",",")
+	If nLines,$Y+3>nLines {
+		Set st=##class(%Library.Prompt).GetMore()
+		If st=3 ZTrap "QUIT"
+		If st=2 Quit
+		Write #?tab,h1,"  ",h2
+	}
+	Write !?tab,$$Justify(f1,w1,2),"  ",$$Justify($J(f2,10),w2,2)
+ }
+}
+EditTableProps() [sMod,oMod,sSub,oSub,sTab,oTab,TabProps] {
+ Set ty=$P(sTab,",",1),fr=$P(sTab,",",2),to=$P(sTab,",",3),TabProps=0
+desc Set ans=TabProps("Description") Write !
+ Set st=##Class(%Library.Prompt).GetString("Description: ",.ans,,,,128+4)
+ If st=3 ZTrap "QUIT"
+ If st=2 Quit
+ If ans'=TabProps("Description") { Set TabProps("Description")=ans,TabProps=TabProps+1 }
+ If ty="XLT" {
+	Set action(1)="Generate error",action(2)="Replace with replacement string/value"
+	Set action(3)="Ignore (replace with original value)"
+	Set ans=TabProps("XLTDefaultAction")+1
+	Set st=##Class(%Library.Prompt).GetMenu("Default action: ",.ans,.action,,128+4)
+	If st=3 ZTrap "QUIT"
+	If st=2 Goto desc
+    Set ans=ans-1
+    If ans'=TabProps("XLTDefaultAction") { Set TabProps("XLTDefaultAction")=ans,TabProps=TabProps+1 }
+	If ans=1 {
+		Set x=TabProps("XLTReplacementValue"),rep=""
+		If TabProps("XLTType") Set mode=$P(x,",",1),x=$P(x,",",2,999)
+		For i=1:1:$L(x,",") Set rep=rep_$C($P(x,",",i))
+		Write !!,"Replacement value: ",rep," => " Read ans If ans="" Set ans=rep
+		If ans'=rep {
+			If TabProps("XLTType") { Set rep=mode_"," }
+			Else { Set rep="" }
+			For i=1:1:$L(ans) Set rep=rep_$A(ans,i)_","
+			Set TabProps("XLTReplacementValue")=$E(rep,1,$L(rep)-1),TabProps=TabProps+1
+		}
+	}
+	If $D(sMod) {
+		Do GetTables(.tables,"Mode")
+		Set ans="" For i=1:1:$O(tables(""),-1) If tables(i)=sMod { Set ans=i Quit }
+		Set st=##Class(%Library.Prompt).GetMenu("Mode table: ",.ans,.tables,,128+4)
+		If st=3 ZTrap "QUIT"
+		If st=2 Goto desc
+		Set ans=tables(ans)
+		If ans'=sMod { Set TabProps("XLTModeTableName")=ans,TabProps=TabProps+1 }
+	}
+ } ElseIf ty="Pattern" {
+	Do GetTables(.tables,"Patcode")
+	Set ans="" For i=1:1:$O(tables(""),-1) If tables(i)=sSub { Set ans=i Quit }
+	Set st=##Class(%Library.Prompt).GetMenu("Pattern Code table: ",.ans,.tables,,128+4)
+	If st=3 ZTrap "QUIT"
+	If st=2 Goto desc
+	Set ans=tables(ans)
+	If ans'=sSub { Set TabProps("SubTableName")=ans,TabProps=TabProps+1 }
+ } ElseIf ty="COL" {
+	Set col=TabProps("COLRules"),num=$LI(col,1)
+	Set st=##class(%Library.Prompt).GetNumber("Internal number: ",.num,10,255)
+	If st=3 ZTrap "QUIT"
+	If st=2 Goto desc
+	If $LI(col,1)'=num { Set $LI(col,1)=num,TabProps("COLRules")=col,TabProps=TabProps+1 }
+	Do EditCOLRules()
+ }
+ If TabProps {
+	Do SaveTabChanges()
+	If $D(sSub),oTab.SubTableName'=sSub {
+		Set stn=oTab.SubTableName
+		If ty="Pattern" { Set avl=##class(Config.NLS.Tables).Exists("Patcode",stn,stn,.sub,.st) }
+		Else { Set avl=##class(Config.NLS.SubTables).Exists(stn,.sub,.st) }
+		If 'avl { Write " <Sub-table ",stn," not available>",! ZTrap "TAB1" }
+ 		If st'=1 { Write !,"Error opening sub-table" Do $System.OBJ.Dump(st) Ztrap "TAB2" }
+ 		Set sSub=stn,oSub=sub
+ 	}
+	If $D(sMod),oTab.XLTModeTableName'=sMod {
+		Set mtn=oTab.XLTModeTableName
+		If '##class(Config.NLS.Tables).Exists("Mode",mtn,mtn,.mod,.st) Write " <Mode table ",mtn," not available>" ZTrap "TAB3"
+		If st'=1 { Write !,"Error opening table" Do $System.OBJ.Dump(st) ZTrap "TAB4" }	
+		Set sMod=mtn,oMod=mod
+	}
+ } Else { Write !!,"No changes!" }
+}
+EditTableData() [sTab,sMod] {
+ Set ty=$P(sTab,",",1)
+ If ty="XLT",$D(sMod) {
+	Write !!,"This I/O table uses Mode table ",sMod
+	If $E(sMod)'="y" { Write !,"Try Edit Properties to change it",! }
+	Else { Write !,"You can either 1) Edit Properties to change its Mode table or"
+	Write !,"               2) Select Mode table ",sMod," and Edit its Data",!  }
+ }
+ ElseIf ty="XLT"||(ty="COL")||(ty["Case") { Do EditSubTable() }
+ ElseIf ty="Pattern"||(ty="XY")||(ty="Ident") { Do EditRangeTable(ty) }
+ ElseIf ty="Mode" { Do EditModeTable() }
+ ElseIf ty="Patcode" { Do EditPatcodeTable() }
+}
+EditCOLRules() [TabProps] {
+	Set rul=TabProps("COLRules")
+	Do GetOptions(.numeric,"NumericRules"),GetOptions(.string,"StringRules")
+	For i=2,3 {
+		Set enc=$LI(rul,i),num=enc\32,str=enc#32
+		Write !!,$$Justify($P(", Local, Global",",",i)_" Encoding Rules ",78,2,"-")
+		Set ans=num+1,st=##Class(%Library.Prompt).GetMenu(numeric,.ans,.numeric,,128+4+2)
+		If st=3 ZTrap "QUIT"
+		Set ans=ans-1 If ans'=num { Set num=ans,TabProps=TabProps+1 }
+		Set ans=str+1,st=##Class(%Library.Prompt).GetMenu(string,.ans,.string,,128+4+2)
+		If st=3 ZTrap "QUIT"
+		Set ans=ans-1 If ans'=str { Set str=ans,TabProps=TabProps+1 }
+		Set $LI(rul,i)=num*32+str
+	}
+	If TabProps("COLRules")'=rul { Set TabProps("COLRules")=rul }
+}
+EditSubTable() [sSub,oSub,SubProps] {
+ If $$HowManyUseSubTable(sSub)>1 Do CopySubTable()
+ Write !!,"Loading data for SubTable(",sSub,")" Kill SubProps
+ Set st=oSub.GetProperties(.SubProps),SubProps=0
+ If st'=1 { Write !,"Error accessing SubTable(",sSub,")" Do $System.OBJ.DisplayError(st) Quit }
+ If $P(sSub,"-",1)="XLT" {
+	Do GetOptions(.subtypes,"SubTypes") Set isub=SubProps("Type")+1
+	Set st=##Class(%Library.Prompt).GetMenu(subtypes,.isub,.subtypes,,128+4)
+	If st=2 Quit
+	If st=3 ZTrap "QUIT"
+	Set isub=isub-1
+	If isub'=SubProps("Type") { Set SubProps("Type")=isub,SubProps=SubProps+1 }
+ }
+ Write !
+ For {
+	Read !,"From code(s): ",fr Quit:fr=""
+	If '$$IsValidCode(fr) Continue
+	If '$D(SubProps("FromTo",fr),df) Set df=""
+	Write ?32,"To code(s): " Write:df'="" df," ==> " Read to Set:to="" to=df
+	If to="D"||(to="d") {
+		If df="" Write " no data to delete" Continue
+		Write "elete?"
+		If $$YN(" ")="y" { Kill SubProps("FromTo",fr) Write " Deleted" Set SubProps=SubProps+1 }
+		Else { Write " <NOT deleted>" }
+		Continue
+	}
+	If '$$IsValidCode(to,1) Continue
+	If to=df Continue
+	Set SubProps("FromTo",fr)=to,SubProps=SubProps+1
+ }
+ If SubProps { Do SaveSubChanges() }
+ Else { Write !!,"No changes!" }
+}
+SaveSubChanges() [sSub,oSub,SubProps] {
+ Write ! Set ans=$$YN(SubProps_" changed point"_$S(SubProps=1:"",1:"s")_". Save?",1)
+ If ans="y" {
+	Set st1=oSub.SetProperties(.SubProps)
+	Set st2=oSub.%Save()
+	If st1'=1||(st2'=1) { Write " <Error saving SubTable(",sSub,")>",!! Do $System.OBJ.DisplayError(st) }
+	Else { Write " <Saved>" Do ValidateAndReloadTable() }
+ } Else { Write " <Discarded>" }
+ Kill SubProps
+}
+EditRangeTable(ty) [sTab,oTab,Ranges] {
+ If ty="Pattern" { Set array=oTab.PatternRanges Do GetPatcodes(.options) }
+ ElseIf ty="XY" { Set array=oTab.XYActions Do GetOptions(.options,"XYActions") }
+ Else { Set ranges=oTab.Identifiers,idx=ty,tag=" Identifiers " Goto getrange }
+getclass ;
+ Set ans=""
+ Set st=##Class(%Library.Prompt).GetMenu(options,.ans,.options,,128+4)
+ If st=3 ZTrap "QUIT"
+ If st=2||(ans="") Quit
+ If ty="Pattern" {
+	Set idx=options(ans),ranges=oTab.PatternRanges.GetAt(idx)
+	Set tag=" Pattern code '"_idx_"' "
+ } Else {
+	Set idx=ans-1,ranges=oTab.XYActions.GetAt(idx)
+	Set tag=" "_options(ans)_" "
+ }
+getrange ;
+ Kill Ranges
+ For i=1:1:$LL(ranges) {
+	Set range=$List(ranges,i),fr=$P(range,":",1),to=fr+$P(range,":",2)-1
+	Set Ranges(fr)=to
+ }
+ Do EditRange(tag)
+ If Ranges { Do SaveRanges(ty,idx) }
+ Else { Write !!,"No changes!" }
+ If ty'="Ident" Goto getclass
+}
+EditRange(tag) [Ranges] {
+ Write !!,$$Justify(tag,40,2,"-") Set Ranges=0
+getrange Write !,"Range: " Read ans If ans="" Quit
+ If ans="?" {
+	Set fr=$O(Ranges(""),1,to) Write !!,"-- Current ranges --"
+	While (fr'="") { Write !?4,$J(fr,5),":",to Set fr=$O(Ranges(fr),1,to) }
+	Write !!,"Enter a new range as <initial char>:<end char>"
+	Write !?5,"or"
+	Write !,"An existing range in order to delete it.",!
+	Goto getrange
+ }
+ If ans'?1N.N1":"1N.N { Write " Format:  <initial char>:<end char>" Goto getrange }
+ Set fr=$P(ans,":",1),to=$P(ans,":",2)
+ If $L(fr)>7||(fr>1114111) { Write " <Initial character is too big>" Goto getrange }
+ If $L(to)>7||(to>1114111) { Write " <End character is too big>" Goto getrange }
+ If $D(Ranges(fr),to2),to=to2 {
+	If $$YN("  Delete?")="y" { Kill Ranges(fr) Set Ranges=Ranges+1 Write " <Deleted>" }
+	Else { Write " <NOT deleted>" }
+	Goto getrange
+ }
+ Set nxt=$O(Ranges(fr),1,to2)
+ If nxt'="",to'<nxt { Write " <Overlaps with range ",nxt,":",to2,">" Goto getrange }
+ Write $S($D(Ranges(fr)):" <Modified>",1:" <Added>") Set Ranges(fr)=to,Ranges=Ranges+1
+ Goto getrange
+}
+SaveRanges(ty,idx) [oTab,Ranges] {
+ Write ! Set ans=$$YN(Ranges_" changed range"_$S(Ranges=1:"",1:"s")_". Save?",1)
+ If ans="y" {
+	Set ranges="",fr=$O(Ranges(""),1,to)
+	For i=1:1 { Quit:fr=""  Set $LI(ranges,i)=fr_":"_(to-fr+1),fr=$O(Ranges(fr),1,to) }
+	If ty="Pattern" {
+		If ranges'="" { Set st=oTab.PatternRanges.SetAt(ranges,idx) }
+		Else { Do oTab.PatternRanges.RemoveAt(idx) Set st=1 }
+	} ElseIf ty="XY" {
+		If ranges'="" { Set st=oTab.XYActions.SetAt(ranges,idx) }
+		Else { Do oTab.XYActions.RemoveAt(idx) Set st=1 }
+	} Else { Set oTab.Identifiers=ranges,st=1 }
+	If st'=1 { Write " <Error updating table>",!! Do $System.OBJ.DisplayError(st) }
+	Set st=oTab.%Save()
+	If st'=1 { Write " <Error saving table>",!! Do $System.OBJ.DisplayError(st) }
+	Else { Write " <Saved>" }
+ } Else { Write " <Discarded>" }
+ Kill Ranges
+}
+EditModeTable() [sSub,oSub,TabProps] {
+ Set maxm=$O(TabProps("Modes",""),-1),TabProps=0
+getmode ;
+ Read !!,"Mode #",ans If ans=""||(ans="^") Quit
+ If ans'?1N.N||(ans<0)||(ans>(maxm+1)) {
+	 Do DisplayModeTab()
+	 Write !!?2,"Enter a mode # between 0 and ",maxm," to edit it."
+	 Write !?2,"Or ",maxm+1," to create a new mode."
+	 Goto getmode
+ }
+ Set num=+ans
+ If num-1=maxm {
+	Write " <New mode>"
+	Set mod="Mode-New:1:27",maxm=num,new=1
+ } Else { Set mod=TabProps("Modes",num),new=0 }
+getname Set def=$P(mod,":",1)
+ Write !,"Mode name: ",def," => " Read ans If ans="" Set ans=def
+ If ans="^" Goto getmode
+ If ans=def Goto getsub
+ If ans'?1"Mode-"1E.E {
+	 Write !?5,"Enter a new mode name as 'Mode-xxxxx'"
+	 Write !?5,"Or 'D' to delete this mode."
+	 Goto getname
+ }
+ If ans="D"||(ans="d") {
+	Write "elete?"
+	If num'=maxm { Write " <Only last mode can be deleted>" Goto getmode }
+	If num=0 { Write " <Table must have at least one mode>" Goto getname }
+	If $$YN(" ")="y" {
+		Kill TabProps("Modes",num) Set maxm=maxm-1,num=maxm,TabProps=TabProps+1
+		Write " <Deleted>"
+	} Else { Write " <NOT deleted>" }
+	goto getmode
+ }
+ Set $P(mod,":",1)=ans
+getsub Kill oSub,sSub
+ If ##class(Config.NLS.SubTables).Exists(ans,.obj) {
+	Set sSub=ans,oSub=obj Kill obj
+ } Else {
+	Kill SubProps Set SubProps("Description")=$P(ans,"-",2,99)_" mode subtable"
+	Set SubProps("FromTo",0)=0,SubProps("Type")=0
+	Set st=##class(Config.NLS.SubTables).Create(ans,.SubProps)
+	If st=1,##class(Config.NLS.SubTables).Exists(ans,.obj) {
+		Set sSub=ans,oSub=obj Kill obj
+	}
+ }
+getbytes Set def=$P(mod,":",2)
+ Write !,"Bytes/character: ",def," => " Read ans If ans="" Set ans=def
+ If ans="^" Goto getname
+ If ans=def Goto getseq
+ If ans'?1N||(ans=0) { Write " <Enter a number between 1 and 9>" Goto getbytes } 
+ Set $P(mod,":",2)=ans
+getseq Set def=$P(mod,":",3)
+ Write !,"Escape sequence: ",def," => " Read ans If ans="" Set ans=def
+ If ans="^" Goto getbytes
+ Set val=1 For i=1:1:$L(ans,",") { Set by=$P(ans,",",i) If by'?1N.N||(by>255) Set val=0 Quit }
+ If 'val { Write !?5,"Enter a sequence of byte codes separated by commas" Goto getseq }
+ If ans'=def Set $P(mod,":",3)=ans
+ If new||(TabProps("Modes",num)'=mod) { Set TabProps("Modes",num)=mod,TabProps=TabProps+1 }
+ If TabProps { Do SaveTabChanges() }
+ Else { Write !!,"No changes!" }
+ Write !
+ If $D(oSub),$D(sSub),$$YN("Edit SubTable data for this mode?")="y" {
+	Set st=oSub.GetProperties(.SubProps)
+	If st'=1 { Write !,"Error accessing SubTable(",sSub,")" Do $System.OBJ.DisplayError(st) Goto getmode }
+	Write !!,$$Justify(" Mode "_num_" ("_$P($P(mod,":",1),"-",2,99)_") ",75,2,"-"),!
+	Do EditSubTable()
+ } 
+ Goto getmode
+}
+EditPatcodeTable() [TabProps] {
+ Set x=TabProps("PatCodes")   For i=1:1:$LL(x) Set y=$LI(x,i),Values($P(y,":",1))=$P(y,":",2)
+ Set x=TabProps("PatAliases") For i=1:1:$LL(x) Set y=$LI(x,i),Aliases($P(y,":",1))=$P(y,":",2)
+ Set TabProps=0
+getpatcode ;
+ Read !!,"Pattern code: ",ans If ans=""||(ans="^") Goto save
+ If ans="?" {
+	Do DisplayPatcodeTab()
+	Write !!?3,"Enter an existing pattern code to edit it."
+	Write !?3,"Or a new code to be added to the table."
+	Goto getpatcode
+ }
+ If ans'?1A.A,ans'?1N.N { Write " <Alphabetical or numerical characters only>" Goto getpatcode }
+ Set code=ans,isalias=0,isvalue=0,def="",new=0
+ If $D(Values(code),def) { Set isvalue=1,prompt="Value: " }
+ ElseIf $D(Aliases(code),def) { Set isalias=1,prompt="Alias: " }
+ ElseIf code?1N.N { Set isalias=1,prompt="Alias: " }
+ Else { Set prompt="Value/alias: " }
+ If def="" Write " <New>"
+getvalue ;
+ Write !,prompt Write:def'="" def," => " Read ans If ans="" Set ans=def
+ If 'new,ans="D"||(ans="d") {
+	Write "elete?"
+	If $$YN(" ")="y" {
+		If isvalue { Kill Values(code) Set TabProps=TabProps+1 }
+		ElseIf isalias { Kill Aliases(code) Set TabProps=TabProps+1 }
+		Write " <Deleted>"
+	} Else { Write " <NOT deleted>" }
+	Goto makelists
+ }
+ If ans="?" {
+	Write !?3,"Enter a new value/alias"
+	Write !?3,"Or D to delete the current pattern code."
+	Goto getvalue
+ }
+ If isvalue {
+	If ans'?1N.N { Write " <Numerical values>" Goto getvalue }
+	Set Values(code)=ans
+ } ElseIf isalias {
+	Set ok=1 For i=1:1:$L(ans,",") { Set x=$P(ans,",",i) If x'?1A.A Set ok=0 Quit }
+	If 'ok { Write " <Comma-separated list of pattern codes>" Goto getvalue }
+	Set Aliases(code)=ans
+ } ElseIf ans?1N.N { Set Values(code)= ans }
+ Else { Set Aliases(code)=ans }
+ Set TabProps=TabProps+1
+makelists ;
+ Set lst="",cod=$O(Values(""),1,val)
+ For i=1:1 { Quit:cod=""  Set $LI(lst,i)=cod_":"_val,cod=$O(Values(cod),1,val) }
+ Set TabProps("PatCodes")=lst
+ Set lst="",cod=$O(Aliases(""),1,val)
+ For i=1:1 { Quit:cod=""  Set $LI(lst,i)=cod_":"_val,cod=$O(Aliases(cod),1,val) }
+ Set TabProps("PatAliases")=lst
+ Goto getpatcode
+save ;
+ If TabProps { Do SaveTabChanges() }
+ Else { Write !!,"No changes!" }
+}
+SaveTabChanges() [oTab,TabProps] {
+ Write ! Set ans=$$YN(TabProps_" changed propert"_$S(TabProps=1:"y",1:"ies")_". Save?",1)
+ If ans="y" {
+	Set st1=oTab.SetProperties(.TabProps)
+	Set st2=oTab.%Save()
+	If st1'=1||(st2'=1) { Write " <Error saving table>",!! Do $System.OBJ.DisplayError(st) }
+	Else { Write " <Saved>" }
+ } Else {
+	Write " <Discarded>" Kill TabProps
+	Set st=oTab.GetProperties(.TabProps)
+	If st'=1 { Write " <Error accessing table>" Do $System.OBJ.DisplayError(st) }
+ }
+ Set TabProps=0
+}
+CopySubTable() [sSub,oSub,oTab] {
+ Write !,"Copying SubTable data"
+ Set sNew=sSub,bas=$P(sNew,".",1)
+ Do {
+	Set num=$P(sNew,".",2)+1,sNew=bas_$E(".0000",1,5-$L(num))_num
+ } While (##class(Config.NLS.SubTables).Exists(sNew,.sub))
+ Set st=oSub.GetProperties(.SubProps)
+ If st'=1 { Write !,"Error accessing SubTable(",sSub,")" Do $System.OBJ.DisplayError(st) ZTrap "SUB1" }
+ Set SubProps("Description")="Copy of "_SubProps("Description")
+ Set st=##class(Config.NLS.SubTables).Create(sNew,.SubProps) Kill SubProps
+ If st'=1 { Write !,"Error creating ",sNew Do $System.OBJ.DisplayError(st) ZTrap "SUB2" }
+ Set oTab.SubTableName=sNew,sSub=sNew Do oTab.%Save()
+ Set sub=##class(Config.NLS.SubTables).%OpenId(sNew,,.st)
+ If st'=1 { Write !,"Error accessing SubTable(",sNew,")" Do $System.OBJ.DisplayError(st) ZTrap "SUB3" }
+ Set sSub=sNew,oSub=sub
+}
+IsValidCode(str,del) {
+ Set val=1,dis=$P(str,";",2),cod=$P(str,";",1)
+ For i=1:1:$L(cod,",") { If $P(cod,",",i)'?1N.N Set val=0 Quit }
+ If 'val {
+	Write !!,"Enter one or more character codes separated by commas."
+	Write:$G(del) !,"Or 'D' to delete the current node"
+	Write !,"Examples:",?12,"168",!?12,"27,94,65",!
+ } ElseIf dis'="" {
+	If $L(str,";")>2 {
+		Write !!,"For collations, use ';' to separate the codes from the disambiguator."
+		Write !,"Example:",?12,"158,159;4",!
+		Set val=0
+	} ElseIf dis>255 {
+		Write !!,"Disambiguator must be 0 <= dis <= 255",!
+		Set val=0
+	}
+ }
+ Quit val
+}
+HowManyUseSubTable(sub) {
+ Set rset=##class(%Library.ResultSet).%New("Config.NLS.Tables:List")
+ If '$IsObject(rset) Quit 0
+ Set rset.RuntimeMode=1,n=0
+ Do rset.Execute("XLT,COL,Mode,LowerCase,UpperCase,TitleCase","*","*")
+ While rset.Next() {
+	If $$UsesSubTable(rset.Data("Type"),rset.Data("NameFrom"),rset.Data("NameTo"),sub) Set n=n+1
+ }
+ Quit n
+}
+UsesSubTable(ty,fr,to,sub) {
+ If '##class(Config.NLS.Tables).Exists(ty,fr,to,.tab) Quit 0
+ If ty="XLT"||(ty="COL")||(ty["Case") Quit tab.SubTableName=sub
+ Set uses=0
+ If ty="Mode" {
+	Set Modes=tab.Modes
+	For i=0:1:Modes.Count()-1 {
+		If $P(Modes.GetAt(i),":",1)=sub { Set uses=1 Quit }
+	}
+ }
+ Quit uses
+}
+GetPatcodes(array) [oSub] {
+ Kill array Set list=oSub.PatCodes
+ For i=1:1:$LL(list) Set array(i)=$P($LI(list,i),":",1)
+ Set array="Pattern code?"
+}
+GetTables(Tables,Type,From) PUBLIC {
+	Kill Tables Set Tables=0,From=$G(From,"*")
+	Set rset=##class(%Library.ResultSet).%New("Config.NLS.Tables:List")
+	If '$IsObject(rset) Quit
+	Set rset.RuntimeMode=1
+	Do rset.Execute(Type,From,"*")
+	If From="*" {
+		While rset.Next() {
+			Set nam=rset.Data("NameFrom")
+			If Type'="COL" { Set tab(nam)="" }
+			Elseif (nam="Unicode")||(nam?1"Latin"1E)||(nam?1"CP"4N) { Set tab(nam)="" }
+		}
+		Set t=$O(tab(""))
+		While t'="" {
+			Set Tables=Tables+1,Tables(Tables)=t
+			Set t=$O(tab(t))
+		}
+	} Else {
+		While rset.Next() { Set Tables=Tables+1,Tables(Tables)=rset.Data("NameTo") }
+	}
+}
+Justify(Str,Wid,Whr=1,Chr=" ") {
+ Set len=$L(Str)
+ If len=Wid Quit Str
+ If len>Wid Quit $E(Str,1,Wid)
+ Set $P(blnks,Chr,Wid+1)=""
+ If Whr=1 {
+	Set Str=Str_$E(blnks,len+1,Wid)
+ } ElseIf Whr=2 {
+	Set n=Wid-len\2,Str=$E(blnks,1,n)_Str_$E(blnks,1,n)
+	If $L(Str)<Wid Set Str=Chr_Str
+ } Else {
+	Set Str=$E(blnks,len+1,Wid)_Str
+ }
+ Quit Str
+}
+Confirm() {
+ Quit $$YN("Confirm?")
+}
+YN(prompt,def) {
+ Set ans=$G(def,0)	
+ Set st=##Class(%Library.Prompt).GetYesNo(prompt,.ans,,128)
+ If (st=2) Quit "n"
+ If ans=1 Quit "y"
+ Quit "n"
+}
+GetLines() [nLines] {
+ Set nLines=24
+ Set st=##class(%Library.Prompt).GetNumber("Number of lines for paging (0=don't page): ",.nLines,0,200)
+ Write #
+}
+GetOptions(options,class) {
+ Kill options
+ Set opt=1,end=class_"End",t=$T(@class),prompt=$P(t,";;",2,99)
+ For i=1:1 {
+	Set t=$T(@(class_"+"_i)) Quit:t=""
+	Set t1=$P(t," ",1) Quit:t1=end
+	If t1'="" Set options(opt)=$P(t,";;",2,99),options(opt,1)=t1,opt=opt+1
+ }
+ Set options=prompt
+}
+TableTypes	;;Table type?
+XLT	;;I/O
+LowerCase	;;Lower case
+UpperCase	;;Upper case
+TitleCase	;;Title case
+Pattern	;;Pattern match
+Ident	;;Identifier
+COL	;;Collation
+XY	;;$X/$Y action
+Mode	;;Mode
+Patcode	;;Pattern code
+TableTypesEnd	;;
+StringRules	;;String encoding rule?
+sr0	;;No conversion, quote initial < 32
+sr1	;;Quote 0-3 and initial < 32
+sr2	;;Disallow 0 or initial < 32
+sr3	;;Quote 0-31
+sr4	;;DTM-Native
+sr5	;;Unicode
+sr6	;;DSM-Native
+sr7	;;Table+Unicode
+StringRulesEnd	;;
+NumericRules	;;Numeric encoding rule?
+nr0	;;New ANSI
+nr1	;;Old ANSI
+nr2	;;String
+nr3	;;Cobra
+nr4	;;DTM-Native
+nr5	;;DTM-Compatible
+nr6	;;Cobra2
+nr7	;;DSM-Native
+NumericRulesEnd	;;
+XYActions	;;Character class?
+xy0	;;Normal printing character
+xy1	;;Full width character
+xy2	;;Non-printing character
+xy3	;;Backspace character
+xy4	;;Line feed character
+xy5	;;Form feed character
+xy6	;;Carriage return character
+xy7	;;Escape sequence character
+XYActionsEnd	;;
+SubTypes	;;Mapping?
+sb0	;;Single to single
+sb1	;;Single to multi
+sb2	;;Multi to single
+sb3	;;Multi to multi
+SubTypesEnd	;;

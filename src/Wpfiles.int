@@ -1,0 +1,196 @@
+ROUTINE Wpfiles [Type=INT]
+Wpfiles ;File selector functions; JLC886, 07/14/06
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+maskincl(mask,item,ext) New e,i,include,m,m1,m2
+ Set include=0,ext=$ZCVT($g(ext,""),"U")
+ For i=1:1 Set m=$p(mask,";",i),e="" Quit:m=""  Do:m'["'"  Quit:include
+ . Set:m["." m=$$ParseRoutineName^%R(m,.e),e=$s(e="*":"",e="SRC":".INC.MAC.INT.BAS",e="":"",1:"."_e)
+ . If m["*" Do  Quit
+ . . Set m=$p(m,"*")
+ . . If m=$e(item,1,$l(m)),(e=""!(e[ext)) Set include=1 Quit
+ . If m[":" Do  Quit
+ . . Set m1=$p(m,":"),m2=$p(m,":",2)
+ . . If m1=$e(item,1,$l(m1))!(item]m1) Do
+ . . . If m2=$e(item,1,$l(m2))!(m2]item) Do
+ . . . . Set:e=""!(e[ext) include=1
+ . If m=item,(e=""!(e[ext)) Set include=1 Quit
+ If include,mask["'" For i=1:1 Set m=$p(mask,";",i),e="" Quit:m=""  Do:m["'"  Quit:'include
+ . Set m=$e(m,2,*)
+ . Set:m["." m=$$ParseRoutineName^%R(m,.e),e=$s(e="*":"",e="SRC":".INC.MAC.INT.BAS",e="":"",1:"."_e)
+ . If m["*" Do  Quit
+ . . Set m=$p(m,"*")
+ . . If m=$e(item,1,$l(m)),e=""!(e[ext) Set include=0
+ . If m[":" Do  Quit
+ . . Set m1=$p(m,":"),m2=$p(m,":",2)
+ . . If m1=$e(item,1,$l(m1))!(item]m1) Do
+ . . . If m2=$e(item,1,$l(m2))!(m2]item) Do
+ . . . . Set:e=""!(e[ext) include=0 ; SJ bug fix
+ . If m=item,(e=""!(e[ext)) Set include=0 Quit
+ Quit include
+ Quit
+GUIdir(dir,mask,dirstr,files,curdir,drive) New (%UI,dir,mask,dirstr,files,curdir,drive)
+ Set $zt="GUIdirErr",$ze=""
+ Set guiDirSep=$s(($zversion(1)=2):"\",($zversion(1)=3):"/",($zversion(1)=1):".")
+ If ($zversion(1)=3) Do
+ . Set drive="",dirstr=0_$c(19,94,1)_guiDirSep,dirs=$p(dir,guiDirSep,2,9999)
+ Else  If ($zversion(1)=1) Do
+ . Set drive=$p(dir,":") Set:drive["\" drive="SYS$DISK"
+ . Set dirstr=0_$c(19,94,1)_drive_":",dirs=$p($p(dir,":[",2),"]")
+ Else  Do  ; $$$guiWIN
+ . Set drive=$p(dir,":"),dirstr=0_$c(19,94,1)_drive_":"_guiDirSep,dirs=$p(dir,":\",2)
+ Set:dirs="" dirs=$c(22,35,1)_guiDirSep ; Special case for root
+ For i=1:1 Set x=$p(dirs,guiDirSep,i) Quit:x=""  Do
+ . Set:x=$c(22,35,1) x="" Set:x'="" dirstr=dirstr_$c(22,35,1)_i_$c(19,94,1)_x
+ . If $p(dirs,guiDirSep,i+1)="" Do
+ . . Set xx=$p(dir,guiDirSep,1,i+1)
+ . . If ($zversion(1)=2)!(($zversion(1)=3)) Do
+ . . . If x'="",xx'=guiDirSep Set xx=xx_guiDirSep
+ . . Set y=$$dir(xx,"",$g(mask)),files=$p(y,$c(19,94,1),3),y=$p(y,$c(19,94,1),2) ; list of sub_directories
+ . . If files'="" Set files=$$GUIfile("",$g(mask),files) ; List of files
+ . . Set level=$s(x="":i,1:i+1)
+ . . For j=1:1 Set z=$p(y,$c(22,35,1),j) Quit:z=""  Do
+ . . . Set dirstr=dirstr_$c(22,35,1)_level_$c(19,94,1)_z ; Individual directory 
+ Set curdir=dir
+ If '($zversion(1)=3) Set drive=drive_":"
+ Quit 1
+GUIdirErr Quit 0_$c(22,35,1)_"Unable to fetch directory information for "_$g(dir)_". "_$s($ZE'="":$c(13,10,10)_"$ze="_$ZE,1:"")
+GUIfile(dir,mask,files) New (%UI,dir,mask,files)
+ Set return="" Set mask=$ZCVT(mask,"U") Quit:mask="" ""
+ If mask="*"!(mask="*.*") Set msk=".E"
+ Else  Do
+ . Set mask1=$p(mask,"."),mask2=$p($p(mask,".",2),";")
+ . Set mask1=$s(mask1="*":".E",mask1="":"",mask1["*":"1"""_($p(mask1,"*")_""".E"),1:"1"""_mask1_"""")
+ . Set mask2=$s(mask2="*":".E",mask2="":".E",mask2["*":"1"""_($p(mask2,"*")_""".E"),1:"1"""_mask2_"""")
+ . Set msk=mask1_"1""."""_mask2
+ . If ($zversion(1)=1) Do
+ . . Set mask3=$p($p(mask,".",2),";",2)
+ . . If mask3'="",mask3'="*" Set msk=msk_"1"";"_mask3_""""
+ . . Else  Set msk=msk_"1"";"".N"
+ Set:$g(files)="" files=$p($$dir(dir,"",mask),$c(19,94,1),3)
+ For i=1:1 Set x=$p(files,$c(22,35,1),i) Quit:x=""  Set:$ZCVT(x,"U")?@msk return=return_x_$c(22,35,1)
+ Quit return
+files(dir,masks,dirs,files,detail) New (%UI,dir,masks,dirs,files,detail)
+ Set $zt="filesErr",$ze=""
+ Set (dirs,files)="",detail=$g(detail,0)
+ For imask=1:1 Set mask=$p(masks,";",imask) Quit:mask=""  Do
+ . Set mask=$ZCVT(mask,"U") Quit:mask="" ""
+ . If mask="*"!(mask="*.*") Set msk=".E"
+ . Else  Do
+ . . Set mask1=$p(mask,"."),mask2=$p($p(mask,".",2),";")
+ . . Set mask1=$s(mask1="*":".E",mask1="":"",mask1["*":"1"""_($p(mask1,"*")_""".E"),1:"1"""_mask1_"""")
+ . . Set mask2=$s(mask2="*":".E",mask2="":".E",mask2["*":"1"""_($p(mask2,"*")_""".E"),1:"1"""_mask2_"""")
+ . . Set msk=mask1_"1""."""_mask2
+ . . If ($zversion(1)=1) Do
+ . . . Set mask3=$p($p(mask,".",2),";",2)
+ . . . If mask3'="",mask3'="*" Set msk=msk_"1"";"_mask3_""""
+ . . . Else  Set msk=msk_"1"";"".N"
+ . Set list=$$dir(dir,"",mask),dlist=$p(list,$c(19,94,1),2),flist=$p(list,$c(19,94,1),3)
+ . ;concatenate subdirecties info into 'dirs' string
+ . If imask=1 Do
+ . . For i=1:1 Set x=$p(dlist,$c(22,35,1),i) Quit:x=""  Do
+ . . . If detail Do
+ . . . . Set d=dir_x,modzh=$zu(140,2,d)
+ . . . . Set mod=$zdate($p(modzh,",",1),3)_" "_$ztime($p(modzh,",",2),1)
+ . . . . Set rec=x_$c(19,94,1)_$c(19,94,1)_mod_$c(19,94,1)_$zu(140,7,d)
+ . . . . Set dirs=dirs_rec_$c(22,35,1)
+ . . . Else  Set dirs=dirs_x_$c(22,35,1)
+ . ;get files into array
+ . For i=1:1 Set x=$p(flist,$c(22,35,1),i) Quit:x=""  Do:$ZCVT(x,"U")?@msk 
+ . . If detail Do
+ . . . Set f=dir_x,modzh=$zu(140,2,f)
+ . . . Set mod=$zdate($p(modzh,",",1),3)_" "_$ztime($p(modzh,",",2),1)
+ . . . Set rec=x_$c(19,94,1)_$zu(140,1,f)_$c(19,94,1)_mod_$c(19,94,1)_$zu(140,7,f)
+ . . . Set f(rec)=""
+ . . Else  Set f(x)=""
+ ;concatenate files info into 'files' string
+ Set x="" For  Set x=$o(f(x)) Quit:x=""  Set files=files_x_$c(22,35,1)
+ Quit 1
+filesErr Quit 0_$c(22,35,1)_"Unable to fetch directory information for "_$g(dir)_". "_$s($ZE'="":$c(13,10,10)_"$ze="_$ZE,1:"")
+dir(dir,system,mask) New (%UI,dir,system,mask)
+ Set subdir="",files="",mask=$g(mask)
+ If ($zversion(1)=2) Do  Quit return
+ . Set UpFlag=0,d=dir_"*.*",%="",dl=$l(dir)+1
+ . For i=1:1 Set z=$zse(d) Quit:z=""  Do
+ . . Set d="",z=$e(z,dl,*) Quit:z=""
+ . . If z="." Set UpFlag=1,z=$zse("") Quit  ; Skip root ancestors
+ . . Set x=$zu(12,dir_z,2) ; Canonize name to see if its a subdirectory
+ . . If $e(x,$l(x))="\" Set subdir($ZCVT(z,"U"))=z ;subdirectory name
+ . . Else  Set files($ZCVT(z,"U"))=z ;filename
+ . For  Set %=$o(subdir(%)) Quit:%=""  Set subdir=$s(subdir="":"",1:subdir_$c(22,35,1))_subdir(%) Quit:$l(subdir)>32000
+ . For  Set %=$o(files(%)) Quit:%=""  Set files=$s(files="":"",1:files_$c(22,35,1))_files(%) Quit:$l(files)>32000
+ . Set return=UpFlag_$c(19,94,1)_subdir_$c(19,94,1)_files
+ If ($zversion(1)=1) Do  Quit return
+ . Set:$p(dir,":",2)="" dir=$p(dir,":")_":"_"[000000]"
+ . Set %="",d=dir_"*.*;"_$p(mask,";",2)
+ . For  Set x=$zse(d),d="" Do  Quit:x=""
+ . . Set z=$p(x,"]",$l(x,"]")) Quit:z=""  ;filename
+ . . If z[".DIR" Set:z'["000000.DIR;" z=$p(z,"."),subdir($ZCVT(z,"U"))=z ;subdirectory name
+ . . Else  Set files($ZCVT(z,"U"))=z ;filename
+ . For  Set %=$o(subdir(%)) Quit:%=""  Set subdir=$s(subdir="":"",1:subdir_$c(22,35,1))_subdir(%) Quit:$l(subdir)>32000
+ . For  Set %=$o(files(%)) Quit:%=""  Set files=$s(files="":"",1:files_$c(22,35,1))_files(%) Quit:$l(files)>32000
+ . Set return=$c(19,94,1)_subdir_$c(19,94,1)_files
+ If ($zversion(1)=3) Do  Quit return
+ . Set UpFlag=0,d=dir_"*",%=""
+ . For i=1:1 Set z=$zse(d) Quit:z=""  Do
+ . . Set d="",z=$p(z,dir,2) Quit:z=""
+ . . Set x=$zu(12,dir_z,2) ; Canonize name to see if its a subdirectory
+ . . If $e(x,$l(x))="/" Set subdir($ZCVT(z,"U"))=z ;subdirectory name
+ . . Else  Set files($ZCVT(z,"U"))=z ;filename
+ . For  Set %=$o(subdir(%)) Quit:%=""  Set subdir=$s(subdir="":"",1:subdir_$c(22,35,1))_subdir(%) Quit:$l(subdir)>32000
+ . For  Set %=$o(files(%)) Quit:%=""  Set files=$s(files="":"",1:files_$c(22,35,1))_files(%) Quit:$l(files)>32000
+ . Set return=UpFlag_$c(19,94,1)_subdir_$c(19,94,1)_files
+ Quit 0
+drives(d) New (d) Set $zt="driveErr",d=""
+ If ($zversion(1)=1) Do
+ . Set i=$ZU(108,"DISK",0,0)
+ . For  Quit:i=""  Do
+ . . Set dev=$p(i,"^"),mnt=+$p($ZU(108,"INFO",dev,100,"l"),"^",2)
+ . . If mnt Do
+ . . . If (d[($c(22,35,1)_dev_$c(22,35,1)))!($p(d,$c(22,35,1),1)=dev) Quit
+ . . . Set d=d_dev_$c(22,35,1)
+ . . Set i=$ZU(108,"DISK",$p(i,"^",2),$p(i,"^",3))
+ Else  Do
+ . Set drv=$zu(108),j=1
+ . For i=97:1:122 Set:i'=97 j=j*2 Quit:j>drv  Set:drv\j#2 d=d_$c(i)_":"_$c(22,35,1)
+ Quit 1
+driveErr Quit 0_$c(22,35,1)_"Unable to fetch drives."_$s($ZE'="":$c(13,10,10)_"$ze="_$ZE,1:"")
+check(mode,dir,file) Set $zt="checkerr",return=0
+ Set filename=$s((file["\")!(file["/"):file,1:dir_file)
+ Set check='$zu(140,4,filename)
+ Quit:mode $S(check:"2",1:"1")_$c(22,35,1)_filename ; write new=2, over=1
+ Quit:check "1"_$c(22,35,1)_filename ; Read
+ Quit "0"_$c(22,35,1)_filename_$c(13)_"File not found."_$c(13)_"Please verify the correct file name was given"
+checkerr Set $zt=""
+ Quit:$ze["<NOTOPEN>" "0"_$c(22,35,1)_filename_$c(13)_" Path not found."_$c(13)_"Please verify the correct path given"
+ Close filename Quit "0"_$c(22,35,1)_$ze
+CopyFile(src,dst) 
+ n line,read
+ o src:"R":10 e  q 0_$c(22,35,1)_"Can't open input file"
+ o dst:"WNS":10 e  c src q 0_$c(22,35,1)_"Can't open output file"
+ s $zt="CFErr"
+ f  u src s read=1 r line q:$ZEOF  s read=0 u dst w line,!
+CopyFileDone ; come here via the error trap or because $ZEOF is set
+ c src,dst
+ q 1
+CFErr ;CopyFile error handler
+ s $zt=""
+ i $ZE["<ENDOFFILE>",read=1 g CopyFileDone
+ c src,dst
+ q 0_$c(22,35,1)_$ZE
+system() New
+ Quit $s(($zversion(1)=2):"WIN",($zversion(1)=3):"UNIX",($zversion(1)=1):"VMS")

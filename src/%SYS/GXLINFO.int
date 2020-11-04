@@ -1,0 +1,392 @@
+ROUTINE %SYS.GXLINFO [Type=INT]
+%SYSGXLINFO   ; Convenience subroutines for global translation ; STC1916 03/07/11
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ; GXLATE.INC DPB125 06/04/93
+BEG n IO,POP
+ N IOMS s IOMS=$System.Device.GetRightMargin()
+ d OUT^%IS
+ Q:POP
+ u IO
+ g SHOW
+ ;=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+NOSYS(sysnam) ; 1 if sysnam doesn't exist/isn't valid or 0 if it is good
+ n n
+ s n=$ZU(63,0,sysnam)
+ i n=255!(n=-1) q 1
+ q 0
+ISIMP(G,D)  S $ZT="NOIMP" Q ($S($ZU(90,1,$G(D),G)>0:$ZU(90,2,3,$ZU(90,1,$G(D),G)),$ZU(90,1,$G(D),G)<0:$ZU(90,2,6,-$ZU(90,1,$G(D),G)),1:0)'=0)
+ISREP(G,D)  S $ZT="NOREP" Q ($S($ZU(90,1,$G(D),G)>0:$ZU(90,2,2,$ZU(90,1,$G(D),G)),$ZU(90,1,$G(D),G)<0:$ZU(90,2,5,-$ZU(90,1,$G(D),G)),1:0)'=0)
+ISLCK(G,D)  S $ZT="NOLCK" Q ($S($ZU(90,1,$G(D),G)>0:$ZU(90,2,4,$ZU(90,1,$G(D),G)),$ZU(90,1,$G(D),G)<0:$ZU(90,2,7,-$ZU(90,1,$G(D),G)),1:0)'=0)
+ISTRAN(G,D) S $ZT="NOTRAN" Q $ZU(90,1,D,G)'=0
+NOIMP S $ZT="",$ZE="" Q 0
+NOREP S $ZT="",$ZE="" Q 0
+NOLCK S $ZT="",$ZE="" Q 0
+NOTRAN S $ZT="",$ZE="" Q 0
+IMP(G,D) n entry,intdir
+ s entry=$ZU(90,1,D,G)
+ q:'entry ""
+ s intdir=$s(entry>0:$ZU(90,2,3,entry),entry<0:$ZU(90,2,6,-entry))
+ q $$ENV(intdir)
+REPNO(G,D) ;
+ n entry
+ s entry=$ZU(90,1,D,G)
+ q $s('entry:0,entry>0:$ZU(90,2,2,entry),1:$ZU(90,2,5,-entry)) 
+REPSET(G,D,NODE) D repset($$REPNO(G,$G(D)),NODE) Q
+REP(G,D) N I,R,TEMP S I=0,R="" D REPSET(G,$G(D),"TEMP")
+ S T="" F  S T=$O(TEMP(T)) Q:T=""  D  ;
+ . S I=I+1,$P(R," ",I)=T
+ Q R
+LCK(G,D) n entry,intdir
+ s entry=$ZU(90,1,D,G)
+ q:'entry ""
+ s intdir=$s(entry>0:$ZU(90,2,4,entry),entry<0:$ZU(90,2,7,-entry))
+ q $$ENV(intdir)
+ ; Returns path information from system
+ENVN() Q $ZU(90,5)
+ENV(ENT) ; Get environment for entry #ENT from ^SYS("GREDIR","GINDTAB",ENT)
+ N info,SYSNAME,DIRNAME
+ Q:$G(ENT)="" ""  Q:ENT<1 ""  Q:$$ENVN<ENT ""
+ n mgrnsp s mgrnsp="^^"_$zu(12)
+ s info=$G(^|mgrnsp|SYS("GREDIR","GINDTAB",ENT))
+ q:info="" ""  ; This should not really happen
+ s SYSNAME=$P(info,"^",2)
+ s DIRNAME=$E(info,$l($P(info,"^",1,2))+2,$L(info))
+ Q $$ENVJOIN(SYSNAME,DIRNAME)
+repsetb(i) ;repsetb(i)=i-th replication set returned as bits
+ N %32Bits,addr
+ S %32Bits=4294967296
+ s addr=i*8+$V($ZU(40,2,11)+($ZU(40,0,4)*5),-2,"S")
+ q $V(addr,-3,4)+($v(addr+4,-3,4)*%32Bits)
+REPSETA() ; $$REPSETN = next available replication set number, 0 if table full
+ N I,N S N=0 F I=1:1:15 Q:$$repsetb(I)=0  S N=I
+ s N=N+1
+ i N>15 s N=0
+ Q N
+REPN() ;Number of replication sets in table.  
+ n r s r=$$REPSETA q:r=0 15  q r-1
+repset(I,NODE) ; D repset(I,"X") sets X(path) for all replication paths
+ N BITNO,BITVAL,S,SET
+ K @NODE
+ Q:I>$$REPN  Q:I<1  ;Silently return nothing for bad I values
+ S SET=$$repsetb(I),S=SET
+ S $ZT="repset0"
+ F BITNO=0:1 Q:S=0  S:S#2 @NODE@($$ENV(BITNO))="" S S=S\2 
+ Q
+repset0 d $zu(9,"","Error in "_$ZN_": "_$ZE_": BITNO="_BITNO_" S="_$ZH(S)_" ENV="_$$ENV(BITNO),(1>0),1)
+ Q
+defnode(n) s:$g(n)="" n=$name(^CacheTempUtil("%GXLINFO")) q
+TRANS(node) ;
+ ; for each directory, create arrays with nodes
+ ; based on ranges or individual globals, whatever
+ ; is appropriate
+ ; effectively, we convert internal representation
+ ; of "this - fromnowon" into real ranges
+ n nsversion,nsplist,nspinfo,lastp,startidx,array,ns,i
+ d defnode(.node) k @node
+ s nsversion=$zu(90,20,1)
+ s nsplist=$zu(90,28,1,0,nsversion)
+ s lastp=$p(nsplist,",",$l(nsplist,","))
+ s startidx=$s(nsplist]"":$s(lastp?1N.N:+lastp,1:0),1:0)
+ while (nsplist=-1 || startidx) {
+	 if nsplist=-1 {
+		 s startidx=0,nsversion=$zu(90,20,1)
+		 k array
+	 } else {
+		 f i=1:1:$l(nsplist,",") s nspinfo=$p(nsplist,",",i),array($p(nspinfo,"|",1))=nspinfo
+	 }
+	 s nsplist=$zu(90,28,0,startidx,nsversion)
+	 s lastp=$p(nsplist,",",$l(nsplist,","))
+	 s startidx=$s(nsplist]"":$s(lastp?1N.N:+lastp,1:0),1:0)
+ }
+ i nsplist]"" f i=1:1:$l(nsplist,",") s nspinfo=$p(nsplist,",",i),array($p(nspinfo,"|",1))=nspinfo
+ s ns=$o(array(""))
+ while (ns'="") {
+	 do onedir(array(ns),node)
+	 s ns=$o(array(ns))
+ }
+ q   ; from TRANS
+TRANSNSP(node,dirname) 
+ n nspinfo
+ d defnode(.node) k @node
+ s nspinfo=$zu(90,28,2,dirname)
+ if nspinfo="" q
+ d onedir(nspinfo,node)
+ q
+onedir(nspinfo,node) ;
+ n dirname,dirdef,sysdef,num,gxlatarray,previncl,endidx
+ s dirname=$p(nspinfo,"|",1)
+ k @node@(dirname)
+ do getgxlatarray(.nspinfo,"",.gxlatarray,0)
+ if $d(gxlatarray) {
+	 s dirdef=$p(nspinfo,"|",2)
+	 s sysdef=$p(nspinfo,"|",3)
+	 s @node@(dirname,"defdir")=$$ENVDIR($$ENV(dirdef))
+	 s @node@(dirname,"defsys")=$$ENVDSET($$ENV(dirdef))
+	 s @node@(dirname,"sysdir")=$$ENVDIR($$ENV(sysdef))
+	 s @node@(dirname,"syssys")=$$ENVDSET($$ENV(sysdef))
+	 s num=$o(gxlatarray("")),endidx=$o(gxlatarray(""),-1)
+	 while (num'="") {
+		 d analgbl(node,dirname,gxlatarray(num),$s(num<endidx:gxlatarray(num+1),1:""),.previncl)
+		 s num=$o(gxlatarray(num))
+	 }
+ }
+ q   ; from onedir 
+analgbl(node,dirname,nspinfo,nextnspinfo,previncl)
+ n namerng,samespec,samenext,thisname,nextname,locnum,slm,info,nextinfo
+ s previncl=+$g(previncl)
+ s (samespec,samenext)=0
+ s thisname=$list(nspinfo,1)
+ s slm=$list(nspinfo,3)
+ if (nextnspinfo'="") {
+	 s nextname=$list(nextnspinfo,1)
+	 s nextinfo=$list(nextnspinfo,2)
+ } else {
+	 s nextname=""
+ }
+ s info=$list(nspinfo,2)
+ i $p(info,"|",2)=$p(info,"|",5),$p(info,"|",3)=$p(info,"|",6),$p(info,"|",4)=$p(info,"|",7) s samespec=1
+ i nextnspinfo'="",$p(info,"|",5)=$p(nextinfo,"|",2),$p(info,"|",6)=$p(nextinfo,"|",3),$p(info,"|",7)=$p(nextinfo,"|",4) s samenext=1
+ i thisname="%" s thisname="",previncl=1
+ i nextname="{" s nextname=""
+ i 'previncl,'samespec {
+	 s namerng="["_thisname_"]"
+	 d entry(node,info,dirname,namerng,1)
+	 s locnum=$g(@node@(dirname,"#"))+1
+	 s @node@(dirname,"#")=locnum 
+	 s @node@(dirname,"#",locnum)=namerng
+	 d:slm'="" slm(node,dirname,locnum,slm)
+	 s previncl=samenext   ; let the next entry know whether we have inclusive right margin here
+ }
+ s namerng=$s(('previncl)&samespec:"[",1:"(")_thisname_":"_nextname_$s(samenext:"]",1:")")
+ d entry(node,info,dirname,namerng,2)
+ s locnum=$g(@node@(dirname,"#"))+1
+ s @node@(dirname,"#")=locnum
+ s @node@(dirname,"#",locnum)=namerng
+ d:slm'="" slm(node,dirname,locnum,slm)
+ s previncl=samenext   ; let the next entry know whether we have inclusive right margin here
+ q   ; from analgbl
+slm(node,dirname,locnum,data)       ;
+ n nent,lent,sub2,k,replid,implid
+ quit:data=""
+ s nent=+$list(data,1)-1
+ f k=0:1:nent {
+	 s lent=k*2+2
+	 s sub2=$list(data,lent)
+	 s replid=$p($list(data,lent+1),"|",2)
+	 s implid=$p($list(data,lent+1),"|",1)
+	 s @node@(dirname,"#",locnum,"slm",0,k,"subscript")=sub2
+	 s @node@(dirname,"#",locnum,"slm",0,k,"replid")=replid
+	 s @node@(dirname,"#",locnum,"slm",0,k,"implid")=implid
+ }
+ q
+entry(node,info,dirname,namerng,match) ; Put translation entry #i into node
+ ; info - index|exactname.repindex|exactname.impdest|exactname.lckdest|fromnow.repindex|fromnow.impdest|fromnow.lckdest
+ ; node - has a subscript of global name or range
+ ; match 1 or 2 - indicates whether to take "this" or "after"
+ n imp,lck
+ k @node@(dirname,namerng)
+ i match=1 d
+ . s imp=$$ENV($p(info,"|",3))
+ . s lck=$$ENV($p(info,"|",4))
+ . i imp'="" s @node@(dirname,namerng,"I")=imp
+ . i lck'="" s @node@(dirname,namerng,"L")=lck
+ . d repset($p(info,"|",2),$name(@node@(dirname,namerng,"R")))
+ i match=2 d
+ . s imp=$$ENV($p(info,"|",6))
+ . s lck=$$ENV($p(info,"|",7))
+ . i imp'="" s @node@(dirname,namerng,"I")=imp
+ . i lck'="" s @node@(dirname,namerng,"L")=lck
+ . d repset($p(info,"|",5),$name(@node@(dirname,namerng,"R")))
+ q
+getgxlatarray(nspinfo,global,gxlatarray,Flags) PUBLIC {
+ do {
+	 s dirname=$p(nspinfo,"|",1)
+	 s startidx=$p(nspinfo,"|",4)
+	 s endidx=startidx+$p(nspinfo,"|",5)-1
+	 s nsgennum=$p(nspinfo,"|",6)
+	 s curindex=startidx-1
+	 s startslm=0
+	 do {
+		 if (startslm) {
+		 	s gxlatinfo=$zu(90,29,dirname,global,curindex+1,endidx,nsgennum,Flags,startslm)
+		 } else {
+		 	s gxlatinfo=$zu(90,29,dirname,global,curindex+1,endidx,nsgennum,Flags)
+		 }
+		 if (gxlatinfo=-1) {
+			 s nspinfo=$zu(90,28,2,dirname)
+			 k gxlatarray
+			 if nspinfo="" s gxlatinfo=""
+			 quit
+		 }
+		 if (gxlatinfo=-2) s nspinfo="" k gxlatarray quit
+		 if (gxlatinfo="") k gxlatarray quit
+		 if global'="" s gxlatarray=gxlatinfo quit
+		 if startslm {
+			 if $listlength(gxlatinfo)'=3 {
+				 d $zu(9,"","getgxlatarray: bad return for getting partial SLM entries, return list length = "_$listlength(gxlatinfo),1 /* broadcast and log message*/,2  /* Severe error */)
+				 k gxlatarray quit
+			 }
+			 s slm=$list(gxlatinfo,3)
+			 s accslm=accslm_$list(slm,2,$listlength(slm))
+			 s curindex=+$list(gxlatinfo,2)
+			 if +$list(slm)'=($listlength(accslm)-1/2) {
+				 s curindex=curindex-1  ; get back to the same gxlate entry.
+				 s startslm = $listlength(accslm)-1/2
+			 } else {
+				 s startslm = 0
+				 s gxlatarray(curindex)=$list(gxlatinfo,1,2)_$LB(accslm)
+			 }
+			 continue
+		 }
+		 for num=1:3:$listlength(gxlatinfo) {
+			 s curindex=+$list(gxlatinfo,num+1)
+			 s slm=$list(gxlatinfo,num+2)
+			 if slm'="",+$list(slm)'=($listlength(slm)-1/2) {
+				 s curindex=curindex-1  ; get back to the same gxlate entry.
+				 s startslm = $listlength(slm)-1/2
+				 s accslm=slm
+				 quit
+			 }
+			 s gxlatarray(curindex)=$list(gxlatinfo,num,num+2)
+		 }
+	 } while(curindex<endidx)
+ } while (gxlatinfo=-1)
+}
+ONFILE n mgrnsp s mgrnsp="^^"_$zu(12)
+ d LIST($name(^|mgrnsp|SYS("GREDIR","STU"))) q
+LIST(tran,DIR) ;for use by GREDIR, list specs in tran for DIR
+ n repstat
+ d:'$d(DIR) show d:$d(DIR) showdir(DIR) d footer^%SYS.GXLINF1 q
+SHOW  
+ S $ZT="etSHOW"
+ N tran,repstat s tran=$name(^mtemp($$%msub())) D TRANS(tran)
+ D show,footer^%SYS.GXLINF1 K @tran u:IO=$P&&$D(IOMS) IO:/MAR=IOMS c:IO'=$P IO u 0 
+ q
+etSHOW ;
+ S $ZT=""
+ K @($G(tran))
+ Q
+SHOWNSP(D) ; show translations for namespace D
+ S $ZT="etSHOW"
+ N tran,repstat s tran=$name(^mtemp($$%msub())) D TRANS(tran)
+ I $D(@tran@(D)) D showdir(D),footer^%SYS.GXLINF1 K @tran  Q
+ K @tran
+ W !,"No translations defined for namespace ",D
+ u 0
+ Q
+ ; Internal routines, use @tran@ and repstat (via REPORT)
+showpat(D,P) ;show information for pattern P in directory D
+ N PP,R,RNODE S PP=P  ;PP is "first-time" flag
+ D showpat0("->",$G(@tran@(D,P,"I")))
+ S RNODE=$NAME(@tran@(D,P,"R")) S R="" F  S R=$O(@RNODE@(R)) Q:R=""  D  ;
+ . D showpat0("+>",R)
+ D showpat0("*>",$G(@tran@(D,P,"L")))
+ Q
+showrou(d,i)    ;
+ s type=$tr($p(@tran@(d,"#",i),":",1),"[]()")
+ d showslm^%SYS.GXLINF1(d,i,$s(type="rOBJ":"OBJ",type["rMAC":"MAC",type["rINC":"INC",type="ROUTINE":"INT"))
+ q
+showpat0(symbol,val) 
+ Q:val=""
+ I $$ENVDSET(val)'="" S repstat("DSET")=""
+ i PP="" s PP="   "_PP
+ e  d  ; Figure out whether the repl/implicit destinations are ok
+ . n impdest,repdest,tmp
+ . s impdest=$P($G(@tran@(D,P,"I")),"^",2)
+ . i impdest'="",$$NOSYS(impdest) s PP="*U "_PP,repstat("P")=""
+ . ; If the implicit is ok, then check for replication problems
+ . i $E(PP,1)'="*" s repdest=$O(@tran@(D,P,"R","")) f  q:repdest=""  d
+ . . s tmp=$P(repdest,"^",2) 
+ . . i tmp'="",$$NOSYS(tmp) d  q  ; repdest is now null 
+ . . . s PP="*R "_PP,repstat("R")="",repdest=""
+ . . s repdest=$O(@tran@(D,P,"R",repdest))
+ . i $E(PP,1)'="*" s PP="   "_PP
+ w:$x>19 ! w PP,?23,symbol,?26,$$ENVDSET(val),?36,$$ENVDIR(val)
+ S repstat(symbol)=""
+ S PP="" ;Suppress pattern and entry number on subsequent
+ Q
+showdir(D) ;show information for all patterns in namespace D
+ i ($e(D)="@") q
+ w !,$$DC("*",79)
+ w !,"Namespace: "_D
+ w !,"Default globals location:  directory "_@tran@(D,"defdir")_$s(@tran@(D,"defsys")="":" (local) ",1:" on system "_@tran@(D,"defsys"))
+ w !,"Default % routines location: directory "_@tran@(D,"sysdir")_$s(@tran@(D,"syssys")="":" (local) ",1:" on system "_@tran@(D,"syssys"))
+ w !,$$DC("*",79)
+ d header
+ N I,P,ROU S ROU="" F I=1:1:$G(@tran@(D,"#")) D
+ . S P=@tran@(D,"#",I) 
+ . D showpat(D,P) 
+ . S PP=0 F X="rMACSAVE","rINCSAVE","ROUTINE","rOBJ","rMAC","rINC" I $TR($P(P,":",1),"()[]:")[X S PP=1 Q:(X="rMAC")!(X="rINC")  S ROU=ROU_I_","
+ . Q:PP
+ . D showslm^%SYS.GXLINF1(D,I)
+ I $L(ROU) d rouhdr F I=1:1:$L(ROU,",")-1 d showrou(D,$P(ROU,",",I))
+ Q
+show ; show information for all patterns in all directories
+ N D S D="" F  S D=$O(@tran@(D)) Q:D=""  D  ;
+ . D showdir(D)
+ q
+header w !,"Global name/Range",?26,"Dirset",?36,"Target directory"
+ w !,$$DC("-",79)
+ Q
+rouhdr ;
+ w !,"Routine name/Range",?26,"Type",?36,"Dirset",?56,"Target directory"
+ w !,$$DC("-",79)
+ q
+ENVNORM(S,BRACKET) ;Accepts "", directory, or environment in either format
+ N DIR,DSET S DIR=$G(S),DSET=""
+ I $$isbar(S)!$$isbrack(S) S DIR=$$ENVDIR(S),DSET=$$ENVDSET(S)
+ S DIR=$$DIRFULL(DIR)
+ Q $$ENVJOIN(DSET,DIR,.BRACKET)
+ENVJOIN(DSET,DIR,BRACKET) ;Environment spec from directory set and directory
+ I '$D(BRACKET) S BRACKET=$G(%BRACKET)  ;Backward compatibility
+ I 'BRACKET Q "|""^"_DSET_"^"_DIR_"""|"
+ n NSP s NSP="^^"_DIR
+ I DSET="" Q "["""_NSP_"""]" ;If no DSET, don't put it in spec
+ Q "["""_DIR_""","""_DSET_"""]"         
+ENVDIR(P) ;Extract directory from an extended global reference
+ Q $$envpiece(3,P)
+ENVDSET(P) ;Extract directory set from an extended global reference
+ Q $$envpiece(2,P)
+ISLOCAL(REF)  Q ENVDSET(REF)=""
+ISREMOTE(REF) Q ENVDSET(REF)'=""
+isbrack(s) 
+ i ($zversion(1)=1) q $l(s,"[")>2 ;Return true if s is bracket-style reference
+ q s["[" ;Return true if s is bracket-style reference
+isbar(s)    q s["|" ;Return true if s is bar-style reference
+envpiece(p,ref) ;Internal, p=2 returns dir set, p=3 returns dir
+ i $$isbar(ref) q $$barpiece(p,ref)
+ i $$isbrack(ref) q $$brkpiece(4-p,ref)
+ q ""
+brkpiece(p,ref) ;Implements envpiece for bracket-style environment specs
+ n dirsys,item,val
+ s dirsys=$p($p(ref,"]"),"[",2)
+ s item=$p(dirsys,",",p) i item="" q ""
+ q $$EVAL(item)
+barpiece(p,ref) ;Implements envpiece for bar-style environment specs
+ n dirsys s dirsys=$p(ref,"|",2) q $p($$EVAL(dirsys),"^",p)
+EVAL(expr) n s,v s s="v="_expr,$zt="eval0",@s q v
+eval0 q ""
+SLMDUMP ;
+ ; This entry point dumps the SLM keys for one global in raw
+ ; form as opposed to ^%SYS.GXLINFO which formats the data. This is
+ ; not a supported entry point as it may not work in the future.
+ ;
+ D SLMDUMP^%SYS.GXLINF1 
+DC(c,n) Q $TR($J("",n)," ",$E(c_" "))
+DIRFULL(dir) Q $ZU(12,dir)
+%msub() New x Set x=$I(^mtemp) Kill ^mtemp(x) Quit x

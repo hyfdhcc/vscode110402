@@ -1,0 +1,115 @@
+ROUTINE COLLATE [Type=INT]
+COLLATE ; Useful subroutines for Foreign Collation ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/user/collate.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+List ;
+LIST ;
+ Do ListCols()
+ Quit
+ListCols() PUBLIC {
+ Set oldc=$ZU(23,1,5)
+ Do MakeArray(.array)
+ Set tab1=0,tab2=13,tab3=22,tab4=31
+ Write !,?tab1,"Status",?tab2,"Number",?tab3,"Abbrev",?tab4,"Name"
+ Write !,?tab1,"----------",?tab2,"------",?tab3,"------",?tab4,"----------------------",!
+ Set num=$O(array(""))
+ While (num'="") {
+ 	Set sta=+array(num),nam=$P(array(num),";",3),abr=$$ABBREV(num,nam)
+ 	Write ?tab1,$S(sta=0:"Not loaded",sta=1:"Built-in",1:"Available")
+ 	Write ?tab2,$J(num,4),?tab3,abr,?tab4,nam,!
+ 	Set num=$O(array(num))
+ }
+ Set oldc=$zu(23,1,oldc)
+}
+GetName(num) PUBLIC {
+ Quit $$NAME(num)
+}
+NAME(num) PUBLIC {
+ Do MakeArray(.array) Quit $P($G(array(num)),";",3)
+}
+GetNum(nam) PUBLIC {
+ Do MakeArray(.array)
+ Set i="",num=-1
+ For  Set i=$O(array(i)) Quit:i=""  If $P(array(i),";",3)=nam Set num=i Quit
+ Quit num
+}
+GetList() PUBLIC {
+ Do MakeArray(.cols)
+ Quit $$MakeList(.cols)
+}
+MakeArray(array) PUBLIC {
+ if $ZBITGET($ZVERSION(0),46) {
+    Do GetNLSCollations^%SYS.Access(.array,0,1,0)
+ } else {
+    Do ##class(%Library.Collate).MakeArray(.array,0,1,0)
+ }
+}
+MakeList(array) PUBLIC {
+ Set list="",i=""
+ For  Set i=$O(array(i)) Quit:i=""  Set list=list_"^"_array(i)
+ Quit $E(list,2,*)
+}
+ABBREV(num,nam) PUBLIC {
+ If num<0!(num>255) Quit ""
+ If num<10 Quit $P("OANS,ANSI,COBR,DTMC,CBR2,UNIC",",",num+1)
+ If num#128<10 Quit $P("OSTR,NSTR,,,,USTR",",",num#128+1)
+ If num>128 Quit $$ABBREV(num-128)_"S"
+ If '$D(nam) Set nam=$$NAME(num)
+ Quit $ZCVT($E(nam,1,3)_$E(nam,$l(nam)),"U")
+}
+INDEX(abbrev,default) PUBLIC {
+ Do MakeArray(.array)
+ Set i="" For  Set i=$O(array(i)) Quit:i=""!($$ABBREV(i)=abbrev)
+ Quit $S(i="":$G(default),1:i)
+}
+GetStdList(del3) PUBLIC {
+ Do ##class(%Library.Collate).MakeArray(.array,0,1,0)
+ Set num=##class(%Library.Collate).GetSystemDefaultNumber()
+ Set del1=$$del1^%Wprim,del2=$$del2^%Wprim,ls1="",lst2="",lst3=""
+ If num'=5,$D(array(num),col) {
+  	Set load=$P($ZU(23,2,num),"^",1,2)'="255^255"*2
+ 	Set lst1=load_del1_num_del1_$P(col,";",3),def=num
+ }
+ Set:lst1'="" lst1=lst1_del2
+ Set lst1=lst1_1_del1_5_del1_"Cache standard"_del2_1_del1_133_del1_"Cache standard string"
+ Set lst2=1_del1_0_del1_"ISM Pre-6.2"_del2_1_del1_1_del1_"ISM 6.2->6.4"
+ Set lst2=lst2_del2_1_del1_128_del1_"ISM Pre-6.2 string"_del2_1_del1_129_del1_"ISM 6.2->6.4 string"
+ Set lst2=lst2_del2_1_del1_2_del1_"Ipsum/Cobra"_del2_1_del1_4_del1_"Ipsum/Cobra-2"
+ Set lst2=lst2_del2_1_del1_3_del1_"DTM-compatible"  ; DAS294
+ Set num=$O(array(9))
+ While (num'="") {
+	If num'=def,num#128>9 {
+ 		Set:lst3'="" lst3=lst3_del2
+ 		Set col=array(num)
+ 		Set lst3=lst3_$P(col,";",1)_del1_$P(col,";",2)_del1_$P(col,";",3)
+	}
+ 	Set num=$O(array(num))
+ }
+ Quit lst1_del3_lst2_del3_lst3
+}
+StdList() PUBLIC {
+ Set del1=$$del1^%Wprim,del2=$$del2^%Wprim,lst=$$GetStdList(del2)
+ Set tab1=0,tab2=8,tab3=20
+ Write !,?tab1,"Number",?tab2,"Status",?tab3,"Name"
+ Write !,?tab1,"------",?tab2,"----------",?tab3,"------------------------",!
+ For i=1:1 {
+	Set col=$P(lst,del2,i) Quit:col=""
+ 	Set sta=+col,num=$P(col,del1,2),nam=$P(col,del1,3)
+ 	Write ?tab1,$J(num,4),?tab2,$S(sta=0:"Not loaded",sta=1:"Built-in",1:"Available"),?tab3,nam,!
+ }
+}

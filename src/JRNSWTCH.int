@@ -1,0 +1,319 @@
+ROUTINE JRNSWTCH [Type=INT]
+JRNSWTCH ;Switch journaling ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/jrnswtch.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syMirror.inc#1 $ ($Change: 4521965 $) */
+        /* Initializing is the state a member has at startup until it
+           gets to wait^MIRRORMGR for the 1st time. At that point it has 
+           either become the backup or primary or we set the role to null
+           to indicate that it is up and running as opposed to still getting
+           started */
+				    /* Arbiter failover rules are in effect */
+				    /* Agent contact is required */
+					/* IsOtherNodeDown^ZMIRROR */
+				/* The client supports the arbiter */
+			 	/* This system is connected to the arbiter */
+		  		/* The other failover member is connected to the arbiter */
+		  		/* Either the QOSTimeout changed or the arbiter address changed.
+		  		   we should look up the current values and use them */
+				/* Arbiter job shoud close the connection and exit. The
+				   retry routine can restart the arbiter if conditions
+				   warrent. Generally used with clearing ArbiterSupported
+				   when the backup is removed or demoted. Cleared when
+				   the arbiter exits (eg. its a one time flag). */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+ ; Roll to next journal file, without any journal property change (to activate)
+ n err
+ i '$$INT0(1,.err,0) w !,$g(err) q
+ i $g(err) w !,err  ;possibly an error occurred after a successful switch
+ q
+INT0(reason,err,io) ;
+ s $zt="etINT"
+ n switched,newfile,glo
+ if $ZBITGET($ZVERSION(0),46) {
+	s err=""
+	i '$p($zu(78,22),"^") {
+		s err="Jrnswitch failed, journaling is not enabled"
+		quit 0
+	}
+	i $p($zu(78,22),"^",2) {
+		s err="Jrnswitch failed, another journal switch in progress"
+		quit 0
+	}
+	s switched=$zu(78,72,$g(reason,0))
+ 	i switched <= 0 {
+ 		s err="Journaling failed to roll to a new file, rc = "_switched
+	 	quit 0
+ 	}
+	s newfile=$p(switched,",",2)
+ } else {
+    s switched=##class(%SYS.Journal.System).RollToNextFile($g(reason,0),.newfile)
+    i ('switched) s err=$System.Status.GetErrorText(switched) q 0
+ }
+ i $g(io)="" k io ;cannot open if io=""
+ e  i $e(io)="^" s glo=io k io
+ d loginfo("Switched to "_newfile)
+ q 1
+ ;  chkshdw: what action to take if curdir or altdir is the same as a shadow 
+ ;           journal directory:
+ ;           -1: no warning. Caller consciously uses the shadow directory
+ ;               because the files cannot conflict (due to prefixes, etc.)
+ ;            0: warning only, not aborting the operation (<- default)
+ ;            1: warning and aborting the operation
+INT(curdir,altdir,err,io,maxsiz,jrnall,chkshdw,reason) ;
+ s $zt="etINT"
+ i $g(curdir)="",$g(altdir)="",$g(maxsiz)="" q $$INT0($g(reason,0),.err,$g(io))
+ n switched,oldfile,newfile,glo s switched=0,oldfile=$$curfile()
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") s err="Operation requires %Admin_Operate:Use privilege" q 0
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") k curdir,altdir,maxsiz,jrnall
+ i oldfile="" s err=(-3_",Not journaling") q 0
+ i $d(io),$e(io)="^" s glo=io k io ;ideally I should try a SET on glo
+ i $g(curdir)="" s curdir=$$basename(oldfile) 
+ i $g(altdir)="" s altdir=$s($g(^%SYS("JOURNAL","ALTDIR"))="":curdir,1:^%SYS("JOURNAL","ALTDIR"))
+ d FIXDIR(.curdir),FIXDIR(.altdir)
+ if '$ZBITGET($ZVERSION(0),46) {             ;JO2403
+    n rc,prefix
+    s prefix=$ZU(78,93)  ;journal prefix from memory
+    s rc=##Class(Config.Journal).IsJrnDirValid(curdir,prefix)
+    i 'rc s err=(-4_","_$System.Status.GetErrorText(rc)) q 0
+    s rc=##Class(Config.Journal).IsJrnDirValid(altdir,prefix)
+    i 'rc s err=(-4_","_$System.Status.GetErrorText(rc)) q 0
+ }                              ;JO2403
+ i $g(chkshdw)'<0,$$AbortOnShadowConflict($g(chkshdw),curdir,altdir,.err) q 0
+ s $zt="etINT1"
+ L +^%SYS("JOURNAL","startswitch"):1  e  s err=(-2_",unable to lock "_$s(""="":"^%SYS(""JOURNAL"")",1:"")) q 0
+ i '$zu(78,22) s err=(-3_",Not journaling") L -^%SYS("JOURNAL","startswitch") q 0
+ S:'($p($zu(78,22),"^",5)!$p($zu(78,22),"^",2)) ^%SYS("JOURNAL","PROCESS","JRNSWTCH")=$j
+ s switched=$zu(78,1,curdir,altdir,$g(maxsiz),$g(jrnall),$g(reason,0))
+ i 'switched {
+   s err=$p(switched,",",2,$l(switched))
+   i err="" s err="misc error (check ^SYSLOG and cconsole.log)"
+ }
+ i switched s newfile=$zu(78,3) d log d  
+ . d loginfo("Switching from: "_oldfile)
+ . d loginfo("To:             "_newfile)
+ n prop,SYSOBJ,Status
+ i $g(reason)'=7 {
+   s Status=##class(Config.Journal).Get(.prop)
+   i ('Status) {
+     d $zu(9,"","Error getting journal properties: "_$System.Status.GetErrorText(Status),(0>0),0)
+   } elseif $zu(12,prop("CurrentDirectory"))=$zu(12,curdir),$zu(12,prop("AlternateDirectory"))=$zu(12,altdir),prop("FileSizeLimit")=$P($ZU(78,22,$zu(78,3),3),",",2) {
+   } else {
+     i $zu(12,prop("CurrentDirectory"))'=$zu(12,curdir) s prop("CurrentDirectory")=curdir
+     i $zu(12,prop("AlternateDirectory"))'=$zu(12,altdir) s prop("AlternateDirectory")=altdir
+     i prop("FileSizeLimit")'=$P($ZU(78,22,$zu(78,3),3),",",2)\1048576 s prop("FileSizeLimit")=$P($ZU(78,22,$zu(78,3),3),",",2)\1048576
+     s Status=##class(Config.Journal).Modify(.prop)
+     i ('Status) d $zu(9,"","Error modifying journal properties: "_$System.Status.GetErrorText(Status),(0>0),0)
+   }
+ }
+ k:'($p($zu(78,22),"^",5)!$p($zu(78,22),"^",2)) ^%SYS("JOURNAL","PROCESS","JRNSWTCH")
+ L -^%SYS("JOURNAL","startswitch")
+ q switched
+etINT1 ;
+ s $zt=""
+ k:'($p($zu(78,22),"^",5)!$p($zu(78,22),"^",2)) ^%SYS("JOURNAL","PROCESS","JRNSWTCH")
+ L -^%SYS("JOURNAL","startswitch")  ;fall through etINT
+etINT
+ s $zt=""
+ s err=(-1_","_$ze)
+ q switched
+log
+ d HISTORY^JRNUTIL("SWITCH",newfile,curdir,altdir)
+ i $d(^%SYS("JOURNAL","a"))  ;to get naked indicator right
+ s ^("CURRENT")="1^"_newfile
+ s ^("MAXSIZE")=$P($ZU(78,22,newfile,3),",",2)
+ s ^("LAST")=^("CURRENT")
+ S curdir=$$basename(newfile) ;HYY062 -- curdir could be altdir
+ S:^("CURDIR")'=curdir ^("CURDIR")=curdir
+ S:^("ALTDIR")'=altdir ^("ALTDIR")=altdir
+ s ^%SYS("JOURNAL")=0    ;log complete
+ i $zu(78,29)
+ q
+AbortOnShadowConflict(chkshdw,curdir,altdir,err) ;
+ n shdwid,msg
+ s shdwid=$$SameAsShadow(curdir) 
+ i shdwid]"" s msg="Primary journal directory "_curdir
+ e  s shdwid=$$SameAsShadow(altdir) i shdwid="" q 0 ;no conflict; don't abort
+ e  s msg="Alternate journal directory "_altdir
+ s msg=msg_" is also the shadow journal directory of shadow <"_shdwid_">, creating potential conflict of files"
+ d $zu(9,"","WARNING: "_msg,(0>0),0)
+ i chkshdw>0 s err=-7_","_msg q 1  ;abort
+ q 0 ;don't abort, despite the conflict
+ ;return:
+ ;  shdwid if jrndir is also the shadow journal directory of <shdwid>
+ ;  "" if jrndir is NOT identical to any shadow journal directory
+SameAsShadow(jrndir) ;whether jrndir is identical to a shadow journal directory
+ s shdwid="" f  s shdwid=$o(^SYS("shdwcli",shdwid)) q:shdwid=""  q:jrndir=$g(^SYS("shdwcli",shdwid,"locdir"))
+ q shdwid
+Update(CurrentDirectory,AlternateDirectory,JournalFilePrefix,FileSizeLimit,FreezeOnError,DaysBeforePurge,BackupsBeforePurge) Public {
+ s $zt="Error"
+ i $p($zu(78,22),"^") {
+	if $L(CurrentDirectory)+$L(JournalFilePrefix)+19>$ZU(40,0,78) q $$Error^%apiOBJ(1147,CurrentDirectory,JournalFilePrefix)
+	if $L(AlternateDirectory)+$L(JournalFilePrefix)+19>$ZU(40,0,78) q $$Error^%apiOBJ(1147,AlternateDirectory,JournalFilePrefix)
+	i '$$AreSamePath(CurrentDirectory,##class(%Library.File).GetDirectory($zu(78,3),1)) s switch=1
+	i '$$AreSamePath(CurrentDirectory,$g(^%SYS("JOURNAL","CURDIR"))) s switch=1
+	i '$$AreSamePath(AlternateDirectory,$g(^%SYS("JOURNAL","ALTDIR"))) s switch=1
+	i JournalFilePrefix'=$g(^%SYS("JOURNAL","PREFIX")) {
+		do $ZU(78,93,JournalFilePrefix)  ;update prefix stored in memory
+		s ^%SYS("JOURNAL","PREFIX")=JournalFilePrefix 
+		s switch=1
+	}
+	i FileSizeLimit'=($g(^%SYS("JOURNAL","MAXSIZE"))\1048576) s switch=1
+	i $g(switch) {
+		s rc=$$INT^JRNSWTCH(CurrentDirectory,AlternateDirectory,.err,,FileSizeLimit*1048576,0,,7)
+		i rc'>0 q $$Error^%apiOBJ(1142,$g(err))
+	}
+ } 
+ i (DaysBeforePurge_","_BackupsBeforePurge)'=$g(^%SYS("JOURNAL","LIFESPAN","FILE")) s ^%SYS("JOURNAL","LIFESPAN","FILE")=DaysBeforePurge_","_BackupsBeforePurge
+ if '($SYSTEM.Mirror.GetInfo()["PRIMARY") {
+	; FreezeOnError is set on the primary mirror member and we'll
+	; get a <FUNCTION> error if we try to clear it. This setting only
+	; applies when a system is not a primary mirror member.
+    i $zu(69,10,FreezeOnError)
+ }
+ q 1
+Error s $zt=""
+ Quit $$Error^%apiOBJ(5002,$ze)
+AreSamePath(PathA,PathB)
+ q $zu(12,PathA)=$zu(12,PathB)
+}
+curfile() S $zt="etcurfile" Q $p($zu(78,4)_","_$zu(78,3),",",2)
+etcurfile Q ""
+loginfo(msg) ;must be called from within INT (JRNSTART, JRNSWTCH)
+ i $d(glo) s @glo=$g(@glo)+1,@glo@(@glo)=msg
+ i $d(io) u io w !,msg
+ q
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R
+ ; BITWISE.INC, DPB139 07/09/93
+FIXDIR(dir) ;procedure, dir is passed by reference
+ Q:dir=""
+ i ($zversion(1)=1) d
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ i '($zversion(1)=1) Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))
+ i '($zversion(1)=1) s dir=dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+ Q
+fixdir(dir) ;function
+ Q:dir="" ""
+ i ($zversion(1)=1) d  q dir
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")) dir
+ Q dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+basename(f) ;similar to basename on UNIX
+ Q $P(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),1,$L(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))-1)_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+appdir(d1,d2) ;use $zu(12,d2) to append d2 to canonic dir
+ i ($zversion(1)=1) S $E(d1,$L(d1))="."_d2_"]"
+ i '($zversion(1)=1) S d1=d1_d2
+ Q d1
+VALIDIR(dir) ;validate directory dir and create it if dir doesn't exist
+ new flag
+ s flag=1
+ g vdir2
+validir(dir,flag) ;validate directory dir and optionally create it if it
+vdir2 ; VALIDIR(dir) comes here with flag set to 1
+ quit:$$ChkDirOrSpecEXISTS(dir)'="" 1   ; dir is valid and exists
+ quit:$$ChkDirVALID(dir)="" 0    ; dir is not valid
+ i flag'=1 q 0  ; flag says don't create, return failure
+ new x
+ set x=$$mkdir(dir)  ; returns 0 for success, 1 for failure
+ q:x=1 0  ; failed to create
+ quit:$$ChkDirOrSpecEXISTS(dir)="" 0   ; it doesn't we failed
+ q 1  ; success
+mkdir(dir) ;create a new directory
+ i ($zversion(1)=1) q:$$ChkDirVALID(dir)="" 1  ; dir is invalid, return failure
+ q '##class(%Library.File).CreateDirectoryChain(dir)
+jrnshort(jf,short) ;get/set short form of a journal file name FIXME HYY1999
+         N (jf,short)
+         S len=$L($P(jf,";"))
+         Q:$G(short)="" $E(jf,len-11,len) ;"GET" form
+         S $E(jf,len-11,len)=short ;"SET" form
+         Q jf
+GJrnPrefix(jf) ;extract prefix from the journal file name jf
+         N (jf)
+         S fname=$P(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),$L(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")))       
+         Q $e(fname,1,$l($p(fname,"."))-8)
+GetJrnFileName(path) { 
+	i $f(path,"/") q $p(path,"/",$l(path,"/")) ;presumably a Unix path
+	if $f(path,"\") q $p(path,"\",$l(path,"\")) ;presumably a Windows path
+	s vmsfile=$p(path,"]",2) i vmsfile="" q path ;a name only, not a path
+	q $p(vmsfile,";") ;return name from a VMS path without trailing ";"
+}
+dirinvalidmsg(dir1,dir2) 
+ n valid1,valid2,cnt,msg
+ s valid1=$$VALIDIR(dir1),valid2=$$VALIDIR(dir2)
+ s cnt=valid1+valid2 ; cnt = 0 if both invalid, 1 if one is valid
+ s msg="The following journaling "
+ s:cnt msg=msg_"directory is" 
+ s:'cnt msg=msg_"directories are"
+ s msg=msg_" not valid"_$C(13,10)
+ s:'valid1 msg=msg_"     "_dir1_$C(13,10)
+ s:'valid2 msg=msg_"     "_dir2_$C(13,10)
+ q msg
+ChkDirVALID(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,1)
+ChkDirEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkDirOrSpecEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,3)
+ChkDir(R) N N S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkBad S $ZT="" W !,"<"_$P($P($ZE,"<",2),">")_"> error -- invalid directory"
+ Q ""
+ASKSET(prompt,val,backup,help,pattern) ;procedure
+ N x,done,def,enahelp,helpavail,backupavail
+ s done=0
+ s def=$G(val)
+ s backup=$G(backup,0) 
+ s enabackup=$S(backup=-1:0,1:1)
+ s backupavail=$S(backup=1:1,1:0)
+ s help=$G(help)
+ s enahelp=$S(help="*":0,1:1) ;there might not be any help though
+ s helpavail=$s(enahelp&($L(help)!($D(help)>1)):1,1:0)
+ if 'enabackup n POP
+ s POP=0
+ f  d  q:done!POP
+ . W !,$G(prompt)
+ . w:($X+$L(def))>65 !,?5
+ . w:$L(def) " <",def,">"
+ . if helpavail!backupavail do
+ . . w " [" w:helpavail "?" w:backupavail "^" w "]"
+ . w:(($X+$L(def))>75) !,?5
+ . W " => " 
+ . R x,!
+ . if x="^" d  q
+ . . if 'enabackup s done=1 q
+ . . if backupavail s POP=1 q
+ . . w "...backup not available here"
+ . if enabackup,x="""^""" s x="^",done=1 q
+ . ;
+ . if x="?" d  q
+ . . if 'enahelp s done=1 q
+ . . if 'helpavail w "...help not available here" q
+ . . if $D(help)=1 w !?5,help q
+ . . s x="" f  s x=$O(help(x)) q:x=""  w !,?5,help(x)
+ . . w !
+ . if enahelp,x="""?""" s x="?",done=1 q
+ . i x]"",$g(pattern)]"",x'?@pattern w !?5,$s(helpavail:help,1:"[bad format]") q
+ . s:'$L(x) x=val 
+ . s done=1
+ s:'POP val=x
+ q

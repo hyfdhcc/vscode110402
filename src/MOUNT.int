@@ -1,0 +1,53 @@
+ROUTINE MOUNT [Type=INT]
+MOUNT ; Make a database accessible ; LFT1320 10/28/04
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ Write !,"This utility is deprecated in favor of ^DATABASE"
+ Do MOUNT^DATABASE() q  
+ONE(%U,CLUSFLAG) ; one directory at a time
+ n db,Status
+ s db=##class(SYS.Database).%OpenId(%U,,.Status)
+ i ('Status) {
+    w !,%U," not mounted because ",!,?10 d $SYSTEM.Status.DisplayError(Status) w !
+    q
+ }
+ if db.Mounted {
+    s Status=1
+ } else {
+    Set Status=db.Mount(0,$g(CLUSFLAG,0))
+ }
+ i ('Status) {
+    W !,"Errors encountered while mounting directory - ("_%U_") error code=" d $SYSTEM.Status.DisplayError(Status) w !
+ } else {
+    W:$X ! W ?4,$$LJ(%U,20)_"  ... (Mounted)",! D SYS ;show & mark it
+ }
+ Q
+SYS I '$G(^SYS("UCI",%U)) S $ZT="SYSERR^"_$ZN,$ZE="" DO
+ . N NVOLS,%UN,%UU,%SU,SEQN,I,err S ^SYS("UCI",%U)=""
+ . S NVOLS=$ZU(37,%U,0,$ZU(40,10,1),$ZU(40,9,1))
+ . i NVOLS<0 s err=NVOLS g SYSERR
+ Q
+errdir S ERR=$G(ERR)+1 ;add to list of errors
+ i +$ZU(49,%U)=-1 s ^NET("ERR",ERR)="Directory is dismounting - Try again later"
+ e  S ^NET("ERR",ERR)="Not a valid directory on this computer!"
+ q
+SYSERR ;
+ w !,"Error while handling volume extensions"
+ i $ZE'="" W ": "_$ZE,! Q
+ w " because ",$$Error^%apiOBJ(-X),!
+ q
+LJ(x,n) Q ($E(x_$J("",n),1,n)_$E(x,n+1,$L(x))) ;left justify text to n chars

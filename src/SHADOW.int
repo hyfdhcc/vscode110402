@@ -1,0 +1,519 @@
+ROUTINE SHADOW [Type=INT]
+SHADOW ;CHUI utility for managing shadow configurations ;$Change: 4521965 $
+       ;Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/shadow.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ d MENU()
+ q
+EMSClient()	PRIVATE {
+	Q ##class(EMS.Instance).IsManaged("Config.Shadows")
+}
+EMSEditText()	PRIVATE {
+	i ##class(EMS.Instance).IsManaged("Config.Shadows") q " (restricted)"
+	q ""
+}
+MENU() PUBLIC { 
+ s $zt="ERROR"
+ s List(1)="Create a shadow"_$$EMSEditText
+ s List(2)="Edit a shadow"_$$EMSEditText
+ s List(3)="List shadows with properties"
+ s List(4)="List shadows with running stats"
+ s List(5)="Start a shadow"
+ s List(6)="Stop a shadow"
+ s List(7)="Suspend a shadow"
+ s List(8)="Resume a shadow"
+ s List(9)="Restart a shadow"
+ s List(10)="Delete a shadow"_$$EMSEditText
+ s List(11)="Show detail of a shadow"
+ f  {
+ 	s Value=""
+	s Status=##Class(%Library.Prompt).GetMenu("Option?",.Value,.List,,8+128)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+ 	i Value=1,'$$EMSClient d CREATE() Continue
+ 	i Value=2,'$$EMSClient d EDIT() Continue
+ 	i Value=3 d LIST() Continue
+	i Value=4 d STAT() Continue
+	i Value=5 d START() Continue
+	i Value=6 d STOP() Continue
+	i Value=7 d SUSPEND() Continue
+	i Value=8 d RESUME() Continue
+	i Value=9 d RESTART() Continue
+ 	i Value=10,'$$EMSClient d DELETE() Continue
+ 	i Value=11 d DETAIL() Continue
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ze
+}
+DatabaseMapping(shdwobj) PUBLIC {
+ s Menu(1)="Add an entry"
+ s Menu(2)="Delete an entry"
+ s Menu(3)="List all entries"
+ f  {
+ 	s Value=""
+ 	s Status=##Class(%Library.Prompt).GetMenu("Option?",.Value,.Menu,,8+128)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+ 	i Value=1 d AddDatabaseMapping(shdwobj) continue
+	i Value=2 d DeleteDatabaseMapping(shdwobj) continue
+	i Value=3 d ShowDatabaseMapping(shdwobj) continue
+ }
+ q 1
+}
+AddDatabaseMapping(shdwobj) PUBLIC {
+ s rs=##class(%Library.ResultSet).%New("SYS.Shadowing.Shadow:SourceDatabases")
+ s rc=rs.Execute(,shdwobj.SourceName,shdwobj.SourcePort)
+ i ('rc) {
+ 	w !,"Error accessing source: " d $System.Status.DisplayError(rc)
+ 	w !,"Unable to add new database mapping",!
+	q rc
+ }
+ f  q:'rs.Next()  s SourceDatabase($i(SourceDatabase))=rs.Data("Directory")
+ s rs=##class(%Library.ResultSet).%New("SYS.Database:List")
+ s rc=rs.Execute()
+ i ('rc) {
+ 	w !,"Error getting local databases: " d $System.Status.DisplayError(rc)
+ 	w !,"Unable to add new database mapping",!
+	q rc
+ }
+ f  q:'rs.Next()  i +$zu(49,rs.Data("Directory")) s ShadowDatabase($i(ShadowDatabase))=rs.Data("Directory")
+ f  {
+ 	s srcdb=""
+ 	s Status=##Class(%Library.Prompt).GetArray("Source database: ",.srcdb,.SourceDatabase,,,,8+64+512)
+ 	i (+Status=0)||(Status=2)||(srcdb="") q
+ 	s locdb=""
+ 	s Status=##Class(%Library.Prompt).GetArray("Shadow database: ",.locdb,.ShadowDatabase,,,,8+64+512)
+ 	i (+Status=0)||(Status=2)||(locdb="") q
+ 	d shdwobj.SetDatabaseToShadow(srcdb,locdb)
+	w !,"Added the database mapping entry",!,?4,srcdb," -> ",locdb,!
+ }
+ q 1
+}
+DeleteDatabaseMapping(shdwobj) PUBLIC {
+ s srcdb="",Map=0 f  s srcdb=$o(shdwobj.DatabaseRedirection(srcdb),1,locdb) q:srcdb=""  s Map($i(Map))=srcdb_" -> "_locdb
+ f  {
+	s Value=""
+ 	s Status=##Class(%Library.Prompt).GetArray("Delete: ",.Value,.Map,,,,8+64+512)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+ 	d shdwobj.SetDatabaseNotToShadow($p(Value," -> "))
+ }
+}
+ShowDatabaseMapping(shdwobj) PUBLIC {
+ w !!
+ i $d(shdwobj.DatabaseRedirection)<10 w "[no database mapping defined]",! q
+ w ?4,"Source Database -> Shadow Database",!
+ s srcdb="" f cnt=1:1 s srcdb=$o(shdwobj.DatabaseRedirection(srcdb),1,locdb) q:srcdb=""  w ?4,srcdb," -> ",locdb,!
+}
+CREATE() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q 1
+ s shdwobj=##class(SYS.Shadowing.Shadow).%New()
+ s Flag=8+512
+ s Value=shdwobj.Name
+ s Help(1)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3051279147"),"Enter an identifying name for the new shadow destination.") ;RJW1321
+ s Status=##Class(%Library.Prompt).GetString("Shadow Name: ",.Value,,,.Help,,Flag)
+ i (+Status=0)||(Status=2)||(Value="") q Status
+ s shdwobj.Name=Value
+ i '$$EditSourceName(shdwobj) q 0
+ i '$$EditSourcePort(shdwobj) q 0
+ i '$$EditSSLConfig(shdwobj) q 0
+ s Value=1
+ s Status=##Class(%Library.Prompt).GetYesNo("Set up database mapping?",.Value,,8)
+ i (Status=2)||(+Status=0) q Status
+ i Value=1 d DatabaseMapping(shdwobj)
+ s Value=0
+ s Status=##Class(%Library.Prompt).GetYesNo("Set up advanced properties?",.Value,,8)
+ i (Status=2)||(+Status=0)||(Value="") q Status
+ i Value=1 {
+ 	i $$EditJournalStore(shdwobj) d EditKeepOld(shdwobj),EditFilter(shdwobj),EditDisJrn(shdwobj)
+ }
+ s Value=0
+ s Status=##Class(%Library.Prompt).GetYesNo("Save?",.Value,,8)
+ i Value=1 s rc=shdwobj.%Save() i ('rc) d $System.Status.DisplayError(rc)
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+EditSourceName(shdwobj) PUBLIC {
+ s Flag=8+512
+ s Value=shdwobj.SourceName
+ s Help(1)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"406888316"),"Enter the host IP address or DNS name of the Shadow Source.") ;RJW1321
+ s Status=##Class(%Library.Prompt).GetString("Source IP or DNS: ",.Value,,,.Help,,Flag)
+ i (+Status=0)||(Status=2)||(Value="") q 0
+ s shdwobj.SourceName=Value
+ q 1
+}
+EditSourcePort(shdwobj) PUBLIC {
+ s Flag=8+512
+ s Value=shdwobj.SourcePort
+ s Help(1)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3486730739"),"Enter the TCP/IP port # of the Shadow Source.") ;RJW1321
+ s Status=##Class(%Library.Prompt).GetNumber("Source Port #: ",.Value,1,,.Help,,Flag)
+ i (+Status=0)||(Status=2)||(Value="") q 0
+ s shdwobj.SourcePort=Value
+ q 1
+}
+EditSSLConfig(shdwobj) PUBLIC {
+ Set ConfigList(1) = "Not using SSL",ListCount=1
+ Set Rset = ##class(%Library.ResultSet).%New("Security.SSLConfigs:ListNames")
+ i '(''Rset) d $SYSTEM.Status.DisplayError(%objlasterror) q
+ d Rset.Execute()
+ Set props=""
+ While Rset.Next() {
+	Do ##class("Security.SSLConfigs").Get(Rset.Data("Name"),.props)
+    Set:props("Type")=0 ConfigList($I(ListCount))=Rset.Data("Name")
+ }
+ s Flag=8+512
+ s Value=1
+ s Help(1)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3739887091"),"Select a predefined SSL Config if the Shadow Source requires SSL.") 
+ s Status=##Class(%Library.Prompt).GetMenu("SSL Config: ",.Value,.ConfigList,,8+128)
+ i (+Status=0)||(Status=2)||(Value="") q 0
+ i Value=1 {
+     s shdwobj.SSLConfig=""
+ } else {
+     s shdwobj.SSLConfig=ConfigList(Value)
+ }
+ q 1
+}
+PromptStartPoint(shdwobj,StartPoint) PUBLIC {
+ s $zt="PromptStartPointErr"
+ s rs=##class(%Library.ResultSet).%New("SYS.Shadowing.Shadow:SourceEvents")
+ s rc=rs.Execute(shdwobj.Name)
+ i ('rc) {
+ 	w !!,"Error accessing source: ",$System.Status.GetErrorText(rc),!
+ 	w "Unable to set up start point",!
+	q rc
+ }
+ f  q:'rs.Next()  s Event($i(Event))=rs.Data("Time")_" "_rs.Data("Event") m Event(Event)=rs.Data
+ s Value=""
+ s Status=##Class(%Library.Prompt).GetMenu("Start at source event: ",.Value,.Event,,8)
+ i (+Status=0)||(Status=2)||(Value="") q 0
+ q ##class(SYS.Shadowing.Shadow).StartPointFromEvent(Event(Value,"Time"),Event(Value,"Event"),Event(Value,"Location"),.StartPoint)
+PromptStartPointErr s $zt="" d BACK^%ETN 
+ s err=$$Error^%apiOBJ(5002,$ze) d $System.Status.DisplayError(err) 
+ q err
+}
+EditJournalStore(shdwobj) PUBLIC {
+ s Flag=8+512
+ s Value=shdwobj.JournalStore
+ s Help(1)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4196255393"),"Enter the Directory to store journal files copied to this system.") ;RJW1321
+ s Status=##Class(%Library.Prompt).GetString("Directory to store copied journal files: ",.Value,,,.Help,Flag)
+ i (+Status=0)||(Status=2)||(Value="") q 0
+ s shdwobj.JournalStore=Value
+ q 1
+}
+EditKeepOld(shdwobj) PUBLIC {
+ s Flag=8+512
+ s Value=shdwobj.KeepOld
+ s Help(1)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1121736829"),"Enter the number of days to keep old copied journal files on this system.") ;RJW1321
+ s Status=##Class(%Library.Prompt).GetNumber("Days of old copied journals to keep: ",.Value,0,,.Help,Flag)
+ i (+Status=0)||(Status=2) q 0
+ s shdwobj.KeepOld=Value
+ q 1
+}
+EditFilter(shdwobj) PUBLIC {
+ s Flag=8+512
+ s Value=shdwobj.Filter
+ s Help(1)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1849077893"),"Enter the name of an optional routine to filter journal records.") ;RJW1321
+ s Status=##Class(%Library.Prompt).GetString("Filter routine: ",.Value,,,.Help,,Flag)
+ i (+Status=0)||(Status=2) q 0
+ s shdwobj.Filter=Value
+ q 1
+}
+EditDisJrn(shdwobj) PUBLIC {
+ s Value=shdwobj.DisableJournalUpdates
+ s Status=##Class(%Library.Prompt).GetYesNo("Disable journaling of shadow updates: ",.Value,,8)
+ i (+Status=0)||(Status=2) q 0
+ s shdwobj.DisableJournalUpdates=Value
+ q 1
+}
+EditOne(shdwobj) PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q 1
+ i '##class(%Library.ShadowState).CanStart(shdwobj.Status) {
+   s Status=$$Error^%apiOBJ(1017,shdwobj.Name)
+   d $System.Status.DisplayError(Status)
+   q 1
+ }
+ f  {
+ 	s Menu(1)="Source IP or DNS name: "_shdwobj.SourceName
+ 	s Menu(2)="Source port #: "_shdwobj.SourcePort
+ 	s Menu(3)="SSL Config: "_shdwobj.SSLConfig
+ 	s Menu(4)="Database mapping: <...>"
+ 	s Menu(5)="Directory to store copied journals: "_shdwobj.JournalStore
+ 	s Menu(6)="Days of old copied journals to keep: "_shdwobj.KeepOld
+ 	s Menu(7)="Filter routine: "_shdwobj.Filter
+ 	s Menu(8)="Disable journaling of shadow updates: "_$s(shdwobj.DisableJournalUpdates:"Yes",1:"No")
+ 	s Value=""
+ 	s Status=##Class(%Library.Prompt).GetMenu("Field?",.Value,.Menu,,8+128)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+ 	i Value=1 d EditSourceName(shdwobj) Continue
+ 	i Value=2 d EditSourcePort(shdwobj) Continue
+ 	i Value=3 d EditSSLConfig(shdwobj) Continue
+ 	i Value=4 d DatabaseMapping(shdwobj) Continue
+ 	i Value=5 d EditJournalStore(shdwobj) Continue
+ 	i Value=6 d EditKeepOld(shdwobj) Continue
+ 	i Value=7 d EditFilter(shdwobj) Continue
+ 	i Value=8 d EditDisJrn(shdwobj) Continue
+ }
+ s Value=1
+ s Status=##Class(%Library.Prompt).GetYesNo("Save?",.Value,,8)
+ i (+Status=0)||(Status=2) q Status
+ i Value=1 s rc=shdwobj.%Save() i ('rc) d $System.Status.DisplayError(rc)
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ze
+}
+EDIT() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q 1
+ f  {
+	s Value=""
+ 	s Status=##Class(%Library.Prompt).GetArray("Edit shadow: ",.Value,$LB("SYS.Shadowing.Shadow:List"),,,,8+64+512)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+	s shdwobj=##class(SYS.Shadowing.Shadow).%OpenId(Value)
+	i '$isobject(shdwobj) w !!,"Invalid shadow",! continue
+	d EditOne(shdwobj)
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+LIST() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q 1
+ s rs=##class(%Library.ResultSet).%New("SYS.Shadowing.Shadow:List")
+ s rc=rs.Execute() i ('rc) d $System.Status.DisplayError(rc) q rc
+ w !,$j("Name",16),$j("Status",18),$j("Source IP",20),$j(":Port ",6),$j("SSL Config ",16),!
+ f  q:'rs.Next()  w $j(rs.Data("Name"),16),$j(##class(%Library.ShadowState).LogicalToDisplay(rs.Data("Status")),18),$j(rs.Data("Source Name"),20),$j(rs.Data("Source Port"),6),$j(rs.Data("SSL Config"),16),!
+ q 1
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+STAT() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q 1
+ s rs=##class(%Library.ResultSet).%New("SYS.Shadowing.Shadow:Progress")
+ s rs.RuntimeMode=2
+ s rc=rs.Execute() i ('rc) d $System.Status.DisplayError(rc) q rc
+ w !,$j("Name",16),$j("Status",18),$j("Latency",16),$j("#Errors",8),$j("#Open Trans",12),!
+ f  q:'rs.Next()  w $j(rs.Data("Name"),16),$j(rs.Data("Status"),18),$j(rs.Data("Latency"),16),$j(rs.Data("Errors"),8),$j(rs.Data("Open Transactions"),12),!
+ q 1
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+ShowErrors(ShadowID) PUBLIC {
+ s rs=##class(%Library.ResultSet).%New("SYS.Shadowing.Shadow:Errors")
+ s rc=rs.Execute(ShadowID) i ('rc) d $System.Status.DisplayError(rc) q rc
+ f  {
+ 	i 'rs.Next() q
+	w !
+	w !,"Process ID: ",rs.Data("PID")
+	w !,"Last occurred at: ",rs.Data("Time")
+	w !,"First occurred at: ",rs.Data("First Occurred At")
+	w !,"# of reoccurences: ",rs.Data("Reoccurrences")
+	w !,"$ZERROR: ",rs.Data("$ZERROR")
+	w !,"Text: ",rs.Data("Text")
+ }
+ q 1
+}
+ShowOpenTrans(ShadowID) PUBLIC {
+ s rs=##class(%Library.ResultSet).%New("SYS.Shadowing.Shadow:IncompleteTransactions")
+ s rc=rs.Execute(ShadowID) i ('rc) d $System.Status.DisplayError(rc) q rc
+ f  {
+ 	i 'rs.Next() q
+	w !
+	s x="" f  s x=$o(rs.Data(x)) q:x=""  w !,x,": ",rs.Data(x)
+ }
+ q 1
+}
+DetailOne(shdwobj) PUBLIC {
+ s ShadowID=shdwobj.Name
+ w !,"Name: ",ShadowID
+ w !,"Source Name: ",shdwobj.SourceName
+ w !,"Source Port: ",shdwobj.SourcePort
+ w !,"Database mapping: <...>"
+ i $g(shdwobj.StartPoint)]"" w !,"Source Event to start by default: ",$lg(shdwobj.StartPoint,1)," ",$lg(shdwobj.StartPoint,2)
+ w !,"Keep copies of old source journal files: ",shdwobj.KeepOld," days"
+ w !,"Filter routine: ",shdwobj.Filter
+ w !,"Disable journaling of shadow updates: ",$s(shdwobj.DisableJournalUpdates:"Yes",1:"No")
+ s rs=##class(%Library.ResultSet).%New("SYS.Shadowing.Shadow:Progress")
+ s rs.RuntimeMode=2
+ s rc=rs.Execute(ShadowID) i ('rc) d $System.Status.DisplayError(rc) q rc
+ i 'rs.Next() q 1
+ w !,"Status: ",rs.Data("Status")
+ w !,"Latency: ",rs.Data("Latency")
+ w !,"# of Errors: ",rs.Data("Errors")
+ w !,"# of Open Transactions: ",rs.Data("Open Transactions")
+ s Menu(1)="List database mappings"
+ s Menu(2)="List errors"
+ s Menu(3)="List open transactions"
+ f  {
+ 	s Value=""
+ 	s Status=##Class(%Library.Prompt).GetMenu("Option?",.Value,.Menu,,8+128)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+	i Value=1 d ShowDatabaseMapping(shdwobj) continue
+	i Value=2 d ShowErrors(shdwobj.Name) continue
+	i Value=3 d ShowOpenTrans(shdwobj.Name) continue
+ }
+ q 1
+}
+DETAIL() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q 1
+ f  {
+	s Value=""
+ 	s Status=##Class(%Library.Prompt).GetArray("shadow: ",.Value,$LB("SYS.Shadowing.Shadow:List"),,,,8+64+512)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+	s shdwobj=##class(SYS.Shadowing.Shadow).%OpenId(Value)
+	i '$isobject(shdwobj) w !!,"Invalid shadow",! continue
+	d DetailOne(shdwobj)
+ }
+ q 1
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+DELETE() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q 1
+ f  {
+	s Value=""
+ 	s Status=##Class(%Library.Prompt).GetArray("Delete shadow: ",.Value,$LB("SYS.Shadowing.Shadow:List"),,,,8+64+512)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+	s rc=##class(SYS.Shadowing.Shadow).Delete(Value)
+	i ('rc) d $System.Status.DisplayError(rc)
+ }
+ q 1
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+START() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q 1
+ f  {
+	s ShadowID=""
+ 	s Status=##Class(%Library.Prompt).GetArray("Start shadow: ",.ShadowID,$LB("SYS.Shadowing.Shadow:List"),,,,8+64+512)
+ 	i (+Status=0)||(Status=2)||(ShadowID="") q
+	s shdwobj=##class(SYS.Shadowing.Shadow).%OpenId(ShadowID)
+	i '##class(%Library.ShadowState).CanStart(shdwobj.Status) {
+	  d $System.Status.DisplayError($$Error^%apiOBJ(1048))
+	  q
+	}
+	s rc=##class(SYS.Shadowing.Shadow).CheckPointInfo(ShadowID,.cpinfo)
+	i rc,$g(cpinfo) {
+	  w !!?30,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3644768008"),"*** WARNING ***")
+	  w !?4,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"456990852"),"There is a checkpoint from previous shadowing session.")
+	  w !?4,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1509514463"),"You might want to RESTART the shadow from that checkpoint instead.")
+	  w !?4,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"260674957"),"If you do START, the checkpoint and any remaining shadow copies of journal")
+	  w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4002556397"),"files from previous shadowing session will be deleted."),!
+	  s Start=0
+ 	  s Status=##Class(%Library.Prompt).GetYesNo("Start anyway?",.Start,,8)
+ 	  i (+Status=0)||(Status=2)||('Start) q
+	}
+	s Status=$$PromptStartPoint(shdwobj,.StartPoint) 
+	i ('Status) q
+	s shdwtemp=##class(SYS.Shadowing.Shadow).%New() ;a throw-away object
+	m shdwtemp.StartPoint=StartPoint
+	d shdwtemp.GetStartPoint(.Time,.EventName,.Location)
+	w !!,"Shadow instance '"_ShadowID_"' will be started at the following source event -- "_$c(13,10)_$g(Time)_" "_$g(EventName)_" "_$g(Location),!
+	k Start ;no default value for the following prompt
+ 	s Status=##Class(%Library.Prompt).GetYesNo("Start now?",.Start,,8)
+ 	i (+Status=0)||(Status=2)||('Start) q
+	s rc=shdwobj.Start(.StartPoint)
+	i ('rc) d $System.Status.DisplayError(rc) i 1
+	e  w !,"Shadow <",ShadowID,"> has started",!
+ }
+ q 1
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+STOP() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q 1
+ f  {
+	s ShadowID=""
+ 	s Status=##Class(%Library.Prompt).GetArray("Stop shadow: ",.ShadowID,$LB("SYS.Shadowing.Shadow:List"),,,,8+64+512)
+ 	i (+Status=0)||(Status=2)||(ShadowID="") q
+        s Rollback=0
+ 	s Status=##Class(%Library.Prompt).GetYesNo("Roll back open transactions (if any)?",.Rollback,,8)
+ 	i (+Status=0)||(Status=2) q
+	i Rollback s rc=$$STOPnROLL^SHDWCLI(ShadowID)
+	e  s rc=$$STOP^SHDWCLI(ShadowID)
+	i ('rc) d $System.Status.DisplayError(rc)
+	e  w !,"Shadow <",ShadowID,"> stopped",!
+ }
+ q 1
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+SUSPEND() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q 1
+ f  {
+	s Value=""
+ 	s Status=##Class(%Library.Prompt).GetArray("Suspend shadow: ",.Value,$LB("SYS.Shadowing.Shadow:List"),,,,8+64+512)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+	s rc=$$SUSPEND^SHDWCLI(Value)
+	i ('rc) d $System.Status.DisplayError(rc)
+	e  w !,"Shadow <",Value,"> is suspended",!
+ }
+ q 1
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+RESUME() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q 1
+ f  {
+	s Value=""
+ 	s Status=##Class(%Library.Prompt).GetArray("Resume shadow: ",.Value,$LB("SYS.Shadowing.Shadow:List"),,,,8+64+512)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+	s rc=$$RESUME^SHDWCLI(Value)
+	i ('rc) d $System.Status.DisplayError(rc) i 1
+	e  w !,"Shadow <",Value,"> has resumed",!
+ }
+ q 1
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+RESTART() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q 1
+ f  {
+	s Value=""
+ 	s Status=##Class(%Library.Prompt).GetArray("Restart shadow: ",.Value,$LB("SYS.Shadowing.Shadow:List"),,,,8+64+512)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+	s rc=$$RESTART^SHDWCLI(Value)
+	i ('rc) d $System.Status.DisplayError(rc) i 1
+	e  w !,"Shadow <",Value,"> has restarted",!
+ }
+ q 1
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}

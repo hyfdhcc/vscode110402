@@ -1,0 +1,644 @@
+ROUTINE TASKMGR [Type=INT]
+TASKMGR ; Cache Task manager	;RFD964  9/18/13
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ n
+MENU s $zt="MENUE"
+ w !
+ w !,"1) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4085034206"),"Create a Task")
+ w !,"2) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3532810686"),"Edit a Task")
+ w !,"3) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4246954580"),"List Tasks")
+ w !,"4) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2217291786"),"Delete a Task")
+ w !,"5) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1777206210"),"Suspend a Task")
+ w !,"6) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2315783362"),"Resume a Task")
+ w !,"7) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1071803248"),"Run a Task")
+ w !,"8) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1275260151"),"Task Reports")
+ w !,"9) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1375033480"),"Task Manager Options")
+ w !,"10) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"876292912"),"Exit")
+ w !
+ s Option=$$OPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1071287907"),"Option? "),10,10)
+ i Option=1 d TASKINFO(0) g MENU
+ i Option=2 d TASKINFO(1) g MENU
+ i Option=3 d TASKLIST() g MENU
+ i Option=4 d TASKDELETE() g MENU
+ i Option=5 d TASKSUSPEND() g MENU
+ i Option=6 d TASKRESUME() g MENU
+ i Option=7 d TASKRUN() g MENU
+ i Option=8 d TASKREPORTS g MENU
+ i Option=9 d TASKOPTIONS g MENU
+ q
+MENUE s $zt=""
+ i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ q
+TASKINFO(Flag) {
+TASKINFO1 s $zt="TASKINFOE"
+	Set HaveMailServer=##class(%SYS.Task.Config).GetData("MailServer")]""
+	If Flag=0 { 
+		s Name=$$GETTASK($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1738489176"),"Task name to create? "),0,0) q:Name=$C(0)
+		Set Task=##class(%SYS.Task).%New()
+		Set Task.Name=Name
+		}
+	Else {
+		s Name=$$GETTASK($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1075487612"),"Task number to edit? "),1,3,.Number) q:Name=$C(0)
+		s Task=##class(%SYS.Task).%OpenId(Number,4)
+	}
+	i 'Task Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1720091924"),"Task not available for edit") Q
+UPDATEINFO	D GetTaskInfo(Task) q:POP
+	i $$YN($$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3177712267"),"Confirm changes to task %1"),Task.Name),"Y")="N" g TASKINFO1
+	s Task.SkipAuditOnReschedule=0
+	Set Status=Task.%Save()
+	If 'Status { Do $system.OBJ.DisplayError(Status) Goto UPDATEINFO}
+	d TASKDETAIL(Task.%Id())
+	g TASKINFO1
+TASKINFOE s $zt=""
+ i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ q
+GetTaskInfo(Task) s $ZT="GetTaskInfoE"
+ s POP=1
+Name
+ s Name=$$STRINGOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4262580536"),"Name"),Task.Name,1) q:Name=$C(0)
+ S Task.Name=Name
+Description
+ s Description=$$STRINGOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3950563313"),"Description"),Task.Description,1) q:Description=$C(0)
+ S Task.Description=Description
+NameSpace
+ i Task.Type'=0 {
+	s NameSpace=$$STRINGOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2970675701"),"Namespace"),Task.NameSpace,0) q:NameSpace=$C(0)
+	s NameSpace=$zcvt(NameSpace,"U")
+	d List^%SYS.NAMESPACE(.nslist)
+	i $d(nslist(NameSpace)) s POP=0 
+	i POP=1 w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3426613596"),"Namespace %1 does not exist, please re-enter"),NameSpace) g NameSpace
+ } else {
+	 s NameSpace="%SYS"
+ }
+ S Task.NameSpace=NameSpace
+ s POP=1
+TaskClass
+ s TaskClass=$$STRINGOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1577554303"),"Task Class"),Task.TaskClass,0) q:TaskClass=$C(0)
+	If 'Task.CheckClass(TaskClass,NameSpace) W !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4121557686"),"Task Class must exist in the namespace") g TaskClass
+	Set Task.TaskClass=TaskClass
+Settings	
+	Set where=$zu(5,Task.NameSpace)
+	Set objTaskClass=$classmethod(Task.TaskClass,"%New")
+	Do objTaskClass.SetSettings(Task.Settings)
+	Set Settings=objTaskClass.GetSettings()
+	If $ll(Settings) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2098513667"),"Settings:")
+	For i=1:2:($ll(Settings)) {
+		Set name=$li(Settings,i)
+		If objTaskClass.GetCollectionType(name)]"" Continue  // exclude collections
+		Set displayName=objTaskClass.GetPropertyName(name)
+		Set value=$li(Settings,i+1)
+		f  {
+			Set value=$$STRINGOPTION(displayName,value,1) q:value=$C(0)
+			Set status=$method(objTaskClass,name_"IsValid",value)
+			Continue:'status
+			Set $li(Settings,i,i+1)=$lb(name,value)
+			Quit
+		}
+	}
+	Do objTaskClass.SetSettings(Settings)
+	Set objTaskClass=""
+	Set where=$zu(5,"%SYS")
+	Set Task.Settings=Settings
+Priority
+	Set Priority=$$Priority^TASKMGR1(Task.Priority)
+	q:Priority=$C(0)
+	s Task.Priority=Priority-1
+Mode
+ w !
+ w !,"1) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"640249298"),"Normal")
+ w !,"2) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"969571792"),"Batch")
+ w !
+ s IsBatch=$$NUMOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"939059349"),"Mode"),(Task.IsBatch)+1,1,2) 
+ q:IsBatch=$C(0)
+ s Task.IsBatch=IsBatch-1
+MirrorStatus
+ i $SYSTEM.Mirror.IsMember() {
+	s MirrorStatus=$$MirrorStatus^TASKMGR1(Task.MirrorStatus)
+	q:MirrorStatus=$C(0)
+	s Task.MirrorStatus=MirrorStatus
+ }
+TimePeriod
+ w !
+ w !,"1) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1331463278"),"Daily")
+ w !,"2) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1500557074"),"Weekly")
+ w !,"3) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"622395140"),"Monthly")
+ w !,"4) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3180018154"),"Monthly special")
+ w !,"5) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1021483240"),"After another task completes")
+ w !,"6) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"421367435"),"On Demand")
+ w !
+ s TimePeriod=$$NUMOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2623778972"),"Run task how often"),(Task.TimePeriod)+1,1,6) q:TimePeriod=$C(0)
+ s (Task.TimePeriod,TimePeriod)=TimePeriod-1
+ if TimePeriod=0 {
+ 	s TimePeriodEvery=$$NUMOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2647698820"),"How many days between runs"),Task.TimePeriodEvery,1,7) q:TimePeriodEvery=$C(0)
+	S Task.TimePeriodEvery=TimePeriodEvery
+	s TimePeriodDay="" 
+ } Elseif TimePeriod=1 {
+ 	s TimePeriodEvery=$$NUMOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2140213787"),"How many weeks between runs"),Task.TimePeriodEvery,1,5) q:TimePeriodEvery=$C(0)
+	S Task.TimePeriodEvery=TimePeriodEvery
+ 	S TimePeriodDay=Task.TimePeriodDay
+ 	i TimePeriodDay="" s TimePeriodDay=1
+	s TimePeriodDay=$$MULTIDAYOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2089789809"),"Days to run on"),TimePeriodDay,1,7) q:TimePeriodDay=$C(0)
+	s Task.TimePeriodDay=TimePeriodDay
+ } ElseIf TimePeriod=2 {
+ 	s TimePeriodEvery=$$NUMOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1493390500"),"How many months between runs"),Task.TimePeriodEvery,1,12) q:TimePeriodEvery=$C(0)
+ 	s TimePeriodDay=Task.TimePeriodDay
+ 	i TimePeriodDay="" s TimePeriodDay=1
+	s TimePeriodDay=$$NUMOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3232854760"),"Day to run on (1-31, 31=last day of month)"),TimePeriodDay,1,31) q:TimePeriodDay=$C(0)
+	s Task.TimePeriodDay=TimePeriodDay
+	s Task.TimePeriodEvery=TimePeriodEvery
+ } elseIf TimePeriod=3 {
+ 	s TimePeriodDay=Task.TimePeriodDay
+ 	s Week=$p(TimePeriodDay,"^")
+ 	s Day=$p(TimePeriodDay,"^",2)
+ 	s TimePeriodEvery=$$NUMOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1493390500"),"How many months between runs"),Task.TimePeriodEvery,1,12) q:TimePeriodEvery=$C(0)
+ 	s Week=$$NUMOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"777440763"),"Run which week"),Week,1,5) q:Week=$C(0)
+ 	w !
+ 	w !,"1) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3421684983"),"Sunday")
+ 	w !,"2) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3632146495"),"Monday")
+ 	w !,"3) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"597723493"),"Tuesday")
+ 	w !,"4) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"395286495"),"Wednesday")
+ 	w !,"5) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3078746362"),"Thursday")
+ 	w !,"6) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3072242550"),"Friday")
+ 	w !,"7) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3910980832"),"Saturday")
+ 	w !
+	s Day=$$NUMOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3166688702"),"Day to run on"),Day,1,31) q:Day=$C(0)
+	s TimePeriodDay=Week_"^"_Day
+	s Task.TimePeriodDay=TimePeriodDay
+	s Task.TimePeriodEvery=TimePeriodEvery
+ } Elseif TimePeriod=4 {
+	Set RunAfter=Task.RunAfterGUID
+	Set RunAfterText=##class(%SYS.Task).DisplayGUID(RunAfter)
+	S Number=##class(%SYS.Task).GetRunAfterID(RunAfter)
+	For  {
+		s RunAfter=$$GETTASK($$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"847345884"),"Task number to run after? %1 => "),RunAfterText),1,3,.Number) 
+		If RunAfter=$C(0) && (Task.RunAfterGUID]"") Quit
+		Set Task.RunAfterGUID=##class(%SYS.Task).GetRunAfterGUID(Number)
+		If Task.RunAfterGUID]"" Quit
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1291213271"),"Please enter the Task number to run after")
+	}
+ } Elseif TimePeriod=5 {
+	s Task.TimePeriodEvery=""
+	s Task.TimePeriodDay=""
+	s Task.DailyFrequency=0
+	s Task.DailyStartTime=0
+	s Task.DailyFrequencyTime=""
+	s Task.DailyIncrement=""
+	s Task.DailyEndTime=""
+	s Task.StartDate=+$h
+	s Task.EndDate=""
+ }
+Frequency
+ i TimePeriod'=4,TimePeriod'=5 {
+ w ! 
+ w !,"1) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3671252920"),"Run once on the day scheduled")
+ w !,"2) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4187384170"),"Run several times on the day scheduled")
+ w !
+ s DailyFrequency=$$NUMOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2672717967"),"Frequency to run"),(Task.DailyFrequency)+1,1,2) q:DailyFrequency=$C(0)
+ s (Task.DailyFrequency,DailyFrequency)=DailyFrequency-1
+ if Task.DailyFrequency=0 {
+	s DailyStartTime=$$GETTIME($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3365077156"),"Time to run task"),Task.DailyStartTime) q:DailyStartTime=$C(0)
+	s Task.DailyStartTime=DailyStartTime
+	s Task.DailyFrequencyTime=""
+	s Task.DailyIncrement=""
+	s Task.DailyEndTime=""
+ }
+ if DailyFrequency=1 {
+	w !
+	w !,"1) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1876325183"),"Minutes")
+	w !,"2) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1272681097"),"Hours")
+	w !
+	S DailyFrequencyTime=Task.DailyFrequencyTime
+	i DailyFrequencyTime="" s DailyFrequencyTime=0
+	s DailyFrequencyTime=$$NUMOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3629222304"),"Time Interval"),DailyFrequencyTime+1,1,2) q:DailyFrequencyTime=$C(0)
+	s (Task.DailyFrequencyTime,DailyFrequencyTime)=DailyFrequencyTime-1
+	s DailyIncrement=Task.DailyIncrement
+	i DailyIncrement="" s DailyIncrement=1
+	s DailyIncrement=$$NUMOPTION($s(DailyFrequencyTime=0:$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1876325183"),"Minutes"),1:$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1272681097"),"Hours"))_" "_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3868962252"),"between runs"),DailyIncrement,1,$s(DailyFrequencyTime=0:1440,1:24)) q:DailyIncrement=$C(0)
+	s Task.DailyIncrement=DailyIncrement
+	s DailyStartTime=$$GETTIME($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3363266933"),"First time to run task"),Task.DailyStartTime) q:DailyStartTime=$C(0)
+	s Task.DailyStartTime=DailyStartTime
+	s DailyEndTime=$$GETTIME($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3428919371"),"Last time to run task"),Task.DailyEndTime) q:DailyEndTime=$C(0)
+	s Task.DailyEndTime=DailyEndTime
+ }
+Expires
+ i $$YN($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"662774590"),"Task Expires"),$s(Task.Expires=0:"N",1:"Y"))="N" {
+	 s Task.Expires=0
+ } else {
+ 	s Task.Expires=1
+	s ExpiresDays=$$NUMOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1500773037"),"Expires in how many days"),Task.ExpiresDays,0,999) Quit:ExpiresDays=$C(0)
+	s ExpiresHours=$$NUMOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2250125747"),"Expires in how many hours"),Task.ExpiresHours,0,24) Quit:ExpiresHours=$C(0)
+	s ExpiresMinutes=$$NUMOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"803954697"),"Expires in how many mins"),Task.ExpiresMinutes,0,60) Quit:ExpiresMinutes=$C(0)
+	s Task.ExpiresDays=$S(ExpiresDays:ExpiresDays,1:"")
+	s Task.ExpiresHours=$S(ExpiresHours:ExpiresHours,1:"")
+	s Task.ExpiresMinutes=$S(ExpiresMinutes:ExpiresMinutes,1:"")
+ }
+ }
+OutputFile
+ i $$YN($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1048819027"),"Open output file"),$s(Task.OpenOutputFile=0:"N",1:"Y"))="N" {
+	 s Task.OpenOutputFile=0
+ } else {
+ 	s Task.OpenOutputFile=1
+OutputDirectory
+ s Directory=$$STRINGOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"771586649"),"Output directory"),Task.OutputDirectory,1) q:Directory=$C(0)
+ s Task.OutputDirectory=Directory
+OutputFilename
+ s Filename=$$STRINGOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3352846325"),"Output file name"),Task.OutputFilename,1) q:Filename=$C(0)
+ s Task.OutputFilename=Filename
+EmailOutputFile
+ 	If HaveMailServer {
+	 	i $$YN($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2509289500"),"Email output file"),$s(Task.EmailOutput=0:"N",1:"Y"))="N" {
+		 	s Task.EmailOutput=0
+		 } else {
+		 	s Task.EmailOutput=1
+			If $$STRINGOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2676188074"),"Email output as BINARY"),$S(Task.OutputFileIsBinary=0:"N",1:"Y"),1)="Y"
+			{
+				Set Task.OutputFileIsBinary=1
+			} Else {
+				Set Task.OutputFileIsBinary=0
+			}
+		 }
+ 	}
+ }
+EmailOnCompletion
+	If HaveMailServer {
+		Set EmailOnCompletion=""
+		For i=1:1:Task.EmailOnCompletion.Count() {
+			Set:EmailOnCompletion]"" EmailOnCompletion=EmailOnCompletion_"," 
+			Set EmailOnCompletion=EmailOnCompletion_Task.EmailOnCompletion.GetAt(i)
+		}
+		s EmailOnCompletion=$$STRINGOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"427050551"),"Email notification on completion to (comma sep addresses)"),EmailOnCompletion,1) q:EmailOnCompletion=$C(0)
+		Do Task.EmailOnCompletion.Clear()
+		For i=1:1:$l(EmailOnCompletion,",") {
+			Set email=$p(EmailOnCompletion,",",i)
+			if email]"" Do Task.EmailOnCompletion.Insert(email)
+		}
+	}
+EmailOnError
+	If HaveMailServer {
+		Set EmailOnError=""
+		For i=1:1:Task.EmailOnError.Count() {
+			Set:EmailOnError]"" EmailOnError=EmailOnError_"," 
+			Set EmailOnError=EmailOnError_Task.EmailOnError.GetAt(i)
+		}
+		s EmailOnError=$$STRINGOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"345776757"),"Email notification on error to (comma sep addresses)"),EmailOnError,1) q:EmailOnError=$C(0)
+		Do Task.EmailOnError.Clear()
+		For i=1:1:$l(EmailOnError,",") {
+			Set email=$p(EmailOnError,",",i)
+			if email]"" Do Task.EmailOnError.Insert(email)
+		}
+	}
+SuspendOnError
+ i $$YN($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"283789264"),"Suspend Task on error"),$s(Task.SuspendOnError=1:"Y",1:"N"))="N" {
+	 s Task.SuspendOnError=0
+ } else {
+ 	s Task.SuspendOnError=1
+ }  
+ i TimePeriod=4!(TimePeriod=5) Set POP=0 Quit 
+StartDate
+ s StartDate=$$GETDATE($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1167221256"),"Date to first schedule task"),Task.StartDate) q:StartDate=$C(0)
+ S Task.StartDate=StartDate
+EndDate
+ s EndDate=$$GETDATE($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"77761594"),"Date to last schedule task"),Task.EndDate) q:EndDate=$C(0)
+ S Task.EndDate=EndDate
+RescheduleOnStart
+ i $$YN($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1273638526"),"Reschedule task on system restart"),$s(Task.RescheduleOnStart=0:"N",1:"Y"))="N" {
+	 s Task.RescheduleOnStart=0
+ } else {
+ 	s Task.RescheduleOnStart=1
+ }
+ s POP=0
+ q
+GetTaskInfoE s $zt=""
+ i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ s POP=1 
+ q
+}
+TASKDELETE() {
+TASKDELETE1 s $ZT="TASKDELETEE"
+ s Name=$$GETTASK($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"497836297"),"Task name to delete? "),1,0,.Number) q:Name=$C(0)
+ i $$YN($$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3456180515"),"Do you want to delete Task %1"),Name),"N")="N" g TASKDELETE1
+ Set Status=##class(%SYS.Task).%DeleteId(Number)
+ If Status {w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"93934700"),"Task %1 deleted"),Name)}
+ Else {Do $system.OBJ.DisplayError(Status)}
+ g TASKDELETE1
+TASKDELETEE s $zt=""
+ i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ q
+}
+TASKSUSPEND() {
+TASKSUSPEND1 s $ZT="TASKSUSPENDE"
+ s Name=$$GETTASK($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3238546656"),"Task name to suspend? "),1,3,.Number) q:Name=$C(0)
+ i $$YN($$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"590465255"),"Do you want to suspend Task %1"),Name),"Y")="N" g TASKSUSPEND1
+ i $$YN($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2976988660"),"Reschedule task when task is supposed to run"),"Y")="Y" {
+	 s Flag=2
+ } else {
+	 s Flag=1
+ }
+	Set ID=##class(%SYS.Task).FindId(Name)
+	Set Status=##class(%SYS.Task).Suspend(ID,Flag)
+	If Status {w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1255457836"),"Task %1 suspended"),Name)}
+	Else { Do $system.OBJ.DisplayError(Status) }
+ g TASKSUSPEND1
+TASKSUSPENDE s $ZT=""
+ i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ q
+}
+TASKRESUME() {
+TASKRESUME1 s $ZT="TASKRESUMEE"
+ s Name=$$GETTASK($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"403269244"),"Task name to resume? "),1,3,.Number) q:Number=$C(0)
+ i $$YN($$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1538280093"),"Do you want to resume Task %1"),Name),"Y")="N" g TASKRESUME1
+	Set Status=##class(%SYS.Task).Resume(Number)
+	If Status {w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2697540267"),"Task %1 resumed"),Name)}
+	Else { Do $system.OBJ.DisplayError(Status)}
+ g TASKRESUME1
+TASKRESUMEE s $zt=""
+ i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ q
+}
+TASKRUN() {
+TASKRUN1 s $ZT="TASKRUNE"
+ s Name=$$GETTASK($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1802345530"),"Task number to run? "),1,3,.Number) q:Name=$C(0)
+ s Date=$$GETDATE($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"702099857"),"Date to run task"),+$h) q:Date=$C(0)
+ s Time=$$GETTIME($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3365077156"),"Time to run task"),$p($h,",",2)) q:Time=$C(0)
+ i $$YN($$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2775439294"),"Confirm running task %1 at %2"),Name,$zdatetime(Date_","_Time,3,2)),"Y")="N" g TASKRUN1
+ d ##class(%SYS.Task).RunOnce(Number,Date,Time)
+ w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3891431577"),"Task %1 queued for %2"),Name,$zdatetime(Date_","_Time,3,2))
+ g TASKRUN1
+TASKRUNE s $zt=""
+ i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ q
+}
+TASKOPTIONS s $ZT="TASKOPTIONSE"
+ w !
+ w !,"1) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4205045027"),"Task Manager Information")
+ w !,"2) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1269661455"),"Start Task Manager")
+ w !,"3) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2196412421"),"Suspend Task Manager")
+ w !,"4) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1477083081"),"Resume Task Manager")
+ w !,"5) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2793067076"),"Task Manager History")
+ w !,"6) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"768121462"),"Define Mail Settings")
+ w !,"7) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"876292912"),"Exit")
+ w !
+ s Option=$$OPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1071287907"),"Option? "),7,7)
+ i Option=1 d INFO() g TASKOPTIONS
+ i Option=2 d START() g TASKOPTIONS
+ i Option=3 d SUSPEND() g TASKOPTIONS
+ i Option=4 d RESUME() g TASKOPTIONS
+ i Option=5 d PURGE() g TASKOPTIONS
+ i Option=6 d MAIL() g TASKOPTIONS
+ q
+TASKOPTIONSE s $zt=""
+ i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ q
+INFO() {
+ s $ZT="INFOE"
+ w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3136722309"),"Task Manager Version: %1"),##class(%SYS.Task).VersionGet())
+ w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1050947211"),"Task Manager is currently %1"),$case(##class(%SYS.Task).TASKMGRStatus(),0:$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2948462001"),"not running"),1:$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"790727023"),"running"),:$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2325058159"),"suspended")))
+ w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2576973663"),"Task History purged after %1 days"),##class(%SYS.Task).HistoryPurgeGet())
+ q
+INFOE s $zt=""
+ i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ q
+}
+START() {
+	S $ZT="STARTE"
+	i ##class(%SYS.Task).TASKMGRStatus() w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1067701360"),"Task Manager is currently running") q
+	w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4211934992"),"Task Manager is not running"),!
+	w:$SYSTEM.Version.GetOS()'["Windows" !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"979048188"),"Ensure that you are using a privileged account to start the TASKMGR"),!
+	i $$YN($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1960252605"),"Do you want to start Task Manager"),"Y")="N" q
+	d ##class(%SYS.Task).StartTASKMGR()
+	h 5
+	If ##class(%SYS.Task).TASKMGRStatus() w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4209708361"),"Task Manager started") q
+	w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"304157042"),"Task Manager failed to start, check the cconsole.log file for errors")
+	q
+STARTE s $zt=""
+	i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+	q
+}
+SUSPEND() {
+	s $ZT="SUSPENDE"
+	i ##class(%SYS.Task).SuspendGet() {
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1142653944"),"Task Manager is suspended"),!
+		Quit
+	}
+	i $$YN($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1869607359"),"Do you want to suspend the Task Manager"),"Y")="N" q
+	i ##class(%SYS.Task).SuspendSet(1) {
+		w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1142653944"),"Task Manager is suspended")
+	}
+	q
+SUSPENDE s $zt=""
+	i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+	q
+}
+RESUME() {
+ s $ZT="RESUMEE"
+ i ##class(%SYS.Task).SuspendGet()=0 {
+	 Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2417618865"),"Task Manager not Suspended"),!
+	 Quit
+ }
+ i $$YN($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3538703545"),"Do you want to resume the Task Manager"),"Y")="N" q
+ i ##class(%SYS.Task).SuspendSet(0) {
+	 w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1487719"),"Task Manager resumed")
+ }
+ q
+RESUMEE s $zt=""
+ i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ q
+}
+PURGE() {
+PURGE1 s $ZT="PURGEE"
+ s Days=##class(%SYS.Task).HistoryPurgeGet()
+ w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2996608125"),"Number of days to keep Task History? ")_Days_" => "
+ r Option s:Option="" Option=Days
+ i '(Option?1.4N) w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3709371068"),"Please enter a number") g PURGE1
+ d ##class(%SYS.Task).HistoryPurgeSet(+Option)
+ w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"953816723"),"Number of days set to %1"),Option)
+ i $$YN($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"730840388"),"Do you want to purge the Task History"),"Y")="N" q
+ d ##class(%SYS.Task.History).PurgeHistory()
+ w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"966508975"),"Task History purged")
+ q
+PURGEE s $zt=""
+ i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ q
+}
+GETTASK(Prompt,Mode,Type,Number) {
+ Set Rset = ##class(%Library.ResultSet).%New("%SYS.Task:TaskList")
+ d Rset.Execute()
+ Set tasklist(0)=$lb($$LocalizeQueryColumn^TASKMGR1(Rset.GetColumnName(1)),$$LocalizeQueryColumn^TASKMGR1(Rset.GetColumnName(2)),$$LocalizeQueryColumn^TASKMGR1(Rset.GetColumnName(6)))
+ While Rset.Next() {
+	s tasklist(Rset.Get("ID"))=Rset.GetData(1)_"^"_Rset.GetData(2)_"^"_Rset.Get("ID")_"^"_Rset.Get("Suspended")
+ }
+GETTASK1 s $zt="GETTASKE"
+ w !!,Prompt
+ R Task i (Task="")!(Task="^")!($zcvt(Task,"U")="STOP") Set Number=$C(0) q $C(0)
+ i (Mode=2),(Task="*") Set Number="*" q "*"
+ i Task="?" w ! d  w ! g GETTASK1
+ . w !,"   ID",?8,$lg(tasklist(0),1),?36,$lg(tasklist(0),2),?47,$lg(tasklist(0),3)
+ . Set i=0
+ . For  Set i=$O(tasklist(i)) Quit:i=""  d
+ . . w !,$j(i,5)_") ",?8,$p(tasklist(i),"^",1),?36,$p(tasklist(i),"^",2),?47,$p(tasklist(i),"^",4)
+ Set Rset=""
+ s Index=0
+ i Task,$d(tasklist(Task)) Set Index=Task,Task=$p(tasklist(Task),"^",1) Write "  ",Task,!
+ If 'Index {
+	 Set i=0
+	 For  Set i=$O(tasklist(i)) Quit:i=""  i $p(tasklist(i),"^")=Task s Index=i q
+ }
+ i (Mode=0),(Index'=0) w !,"Task "_Task_" already exists, please re-enter" g GETTASK1
+ i (Mode),(Index=0) w !,"Task "_Task_" does not exist, please re-enter" g GETTASK1
+ i (Mode),(Type=0),$p(tasklist(Index),"^",2)="System" w !,"Cannot select System Task "_Task_", please re-enter" g GETTASK1
+ Set Number=Index
+ q Task
+GETTASKE S $ZT="GETTASKE1"
+ i $ze["<INTERRUPT>" q $C(0)
+ w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ q $C(0)
+GETTASKE1 s $zt=""
+ w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ q $C(0)
+ }
+OPTION(prompt,default,max) [] {
+ s $zt="OPTIONE"
+OPTION1 w !,prompt
+ r Option i Option="" q default
+ i '(Option?1.2N)!(Option<1)!(Option>max) w !!,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3288010699"),"Please enter a number between 1 and %1"),max),! g OPTION1
+ q +Option
+OPTIONE s $zt=""
+ i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ q 0
+}
+MULTIDAYOPTION(prompt,default,min,max) [] {
+	Quit $$MULTIDAYOPTION^TASKMGR1(prompt,default,min,max)
+} 
+NUMOPTION(prompt,default,min,max) [] {
+	Quit $$NUMOPTION^TASKMGR1(prompt,default,min,max)
+}
+STRINGOPTIONEXT(prompt,default,allownull,same) Quit $$STRINGOPTION(prompt,default,allownull,.same)
+STRINGOPTION(prompt,default,allownull,same) [] {
+ s $zt="STRINGOPTIONE"
+STRINGOPTION1 w !,prompt_"? " i default'="" w default_" => "
+ s same=0
+ r Option i Option="",(default'="") s same=1 q default
+ i Option="",(allownull=0) w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1380879397"),"Please enter a non-null value") g STRINGOPTION1 
+ q Option
+STRINGOPTIONE s $zt=""
+ i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ q $C(0)
+}
+GETTIME(prompt,default) [] {
+ s $zt="GETTIMEE"
+GETTIME1
+	s default=default\60*60
+	w !,prompt_"? "_$ztime(default,2)_" => " 
+	r Option i Option="" q default
+	s Option=$ztimeh(Option,,$C(0))
+	i Option=$C(0) w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1413884408"),"Invalid time, please re-enter") g GETTIME1
+	q Option\60*60
+GETTIMEE s $zt=""
+	i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+	q $C(0)
+}
+GETDATE(prompt,default) [] {
+ s $zt="GETDATEE"
+GETDATE1
+	w !,prompt_"? "
+	i +default'=0 w $zdate(default,3)_" => " 
+	r Option i Option="" q default
+	s Option=$zdateh(Option,5,,6,,,,,$C(0))
+	i Option=$C(0) w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1333283697"),"Invalid date, please re-enter") g GETDATE1
+	q Option
+GETDATEE s $zt=""
+	i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+	q $C(0)
+}
+TASKREPORTS s $ZT="TASKREPORTSE"
+	Do TASKREPORTS^TASKMGR1
+	Set Option=$$OPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1071287907"),"Option? "),6,6)
+	i Option=1 d TASKSCHEDULE() g TASKREPORTS
+	i Option=2 d TASKDETAIL("") g TASKREPORTS
+	i Option=3 d TASKHISTORY() g TASKREPORTS
+	i Option=4 d TASKHISTORYDETAIL() g TASKREPORTS
+	i Option=5 d UpcomingTasks^TASKMGR1 g TASKREPORTS
+	q
+TASKREPORTSE s $zt=""
+	i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+	q
+TASKSCHEDULE() PRIVATE {
+	Do TASKSCHEDULE^TASKMGR1
+}
+TASKDETAIL(TaskNumber) PRIVATE { 
+TASKDETAIL1	s $ZT="TASKDETAILE"
+	i TaskNumber="" {
+		s Name=$$GETTASK($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1299577689"),"Display detail of which task (*=ALL)? "),2,3,.Number) q:Number=$C(0)
+	} Else { Set Number=TaskNumber}
+	Set Rset = ##class(%Library.ResultSet).%New("%SYS.Task:TaskListDetail")
+	d Rset.Execute()
+	While Rset.Next() {
+		Set ID=Rset.Get("ID")
+		If ID=Number!(Number="*") {
+			w !,"------------------"
+			f i=1:1:Rset.GetColumnCount() w !,$$LocalizeQueryColumn^TASKMGR1(Rset.GetColumnName(i))_":",?22,Rset.GetData(i)
+		}
+	}
+	If TaskNumber="" G TASKDETAIL1
+	Quit
+TASKDETAILE s $zt=""
+	i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+	Q
+}
+TASKHISTORY() PRIVATE {
+	Do TASKHISTORY^TASKMGR1
+}
+TASKHISTORYDETAIL() PRIVATE {
+	D TASKHISTORYDETAIL^TASKMGR1
+}
+MAIL() PRIVATE { Set $zt="MAILE"
+MAIL1	//
+	D MAIL^TASKMGR1
+ 	s Option=$$OPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1071287907"),"Option? "),7,7)
+ 	i Option=1 d MAILSERVER^TASKMGR1 g MAIL1
+ 	i Option=2 d MAILPORT^TASKMGR1 g MAIL1
+ 	i Option=3 d MAILREPLY^TASKMGR1 g MAIL1
+ 	i Option=4 d MAILSENDER^TASKMGR1 g MAIL1
+ 	i Option=5 d TIMEZONE^TASKMGR1 g MAIL1
+ 	i Option=6 d MAILAUTHUSER^TASKMGR1 g MAIL1
+ 	q
+MAILE	s $zt=""
+	i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+}
+MAILREPLY() PRIVATE {
+	D MAILREPLY^TASKMGR1
+}
+MAILSENDER() PRIVATE {
+	D MAILSENDER^TASKMGR1
+}
+TIMEZONE() PRIVATE {
+	D TIMEZONE^TASKMGR1
+}
+MAILAUTHUSER() PRIVATE {
+	D MAILAUTHUSER^TASKMGR1
+}
+TASKLIST() PRIVATE {
+	Do TASKLIST1^TASKMGR1
+}
+GETTASK1(Prompt,Mode,Type,Number)
+	Quit $$GETTASK(Prompt,Mode,Type,.Number)
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R

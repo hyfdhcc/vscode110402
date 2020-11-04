@@ -1,0 +1,133 @@
+ROUTINE DZCVTFILE [Type=INT]
+DZCVTFILE ; Convert some sequential/RMS file types for cross-system compatibility ; RJF044 04/28/06
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+	S $ZT="errmain"
+	N cvtype,infile,outfile,err
+getinput
+	D DisplayOptions()
+	R !!,"Enter Desired Option:  ",cvtype Q:cvtype=""  S cvtype=+cvtype
+	I cvtype<1,cvtype>2 G getinput
+	R !,"Source file for input:  ",infile I '$L(infile) G getinput
+	R !,"Output file to create:  ",outfile I '$L(outfile) G getinput
+	I '$$Convert(cvtype,infile,outfile,.err) {
+		W !!,"Error occurred converting the file:  ",!,"  ",err
+	} ELSE { W !!,"File successfully converted." }
+	Q
+errmain
+	S $ZT=""
+	W !,"Error:  "_$ZE
+	Q
+	; DisplayOptions()
+	;   Write conversion options to current device
+	; Returns: nothing
+DisplayOptions() PUBLIC {
+	W !!,"File Conversion Options: "
+	W !,"1:  Reads an RMS variable length record format file (such as that"
+	W !,"    created using COS variable record length file i/o on VMS), and"
+	W !,"    outputs a file that is binary compatible with COS variable record"
+	W !,"    length file i/o on UNIX and Windows.  The outputted file can be"
+	W !,"    transferred to UNIX/Windows in a binary-compatible way such as"
+	W !,"    binary FTP. This conversion must be performed on the VMS system."
+	W !
+	W !,"2:  Reads a file that was created on UNIX or Windows using COS variable"
+	W !,"    record length file i/o and outputs an RMS file with variable record"
+	W !,"    length.  The outputted file can be read on VMS using COS variable"
+	W !,"    record length file i/o.  This coversion must be performed on VMS"
+	W !,"    and the input file must be transferred from the source to VMS in a"
+	W !,"    binary-compatible way such as binary FTP."
+	W !
+}
+	; Convert()
+	;   Converts between RMS file formats and Windows/UNIX
+	; Returns: 1/0 for success/failure
+	; Input Parameters
+	;   cvtype - (required) type of conversion to perform
+	;            See DisplayOptions() for allowed types and description
+	;   infile - (required) file name to convert
+	;   outfile - (required) file name to output
+	; Output Parameters:
+	;   err - error text set on failure return
+Convert(cvtype,infile,outfile,err) PUBLIC {
+	S $ZT="err",err="",opened=0
+	S zu6840=$zu(68,40,1) ; use $ZEOF 
+	S cvtype=$G(cvtype),infile=$G(infile),outfile=$G(outfile)
+	I infile="" S err="Missing input file name" G retfail
+	I outfile="" S err="Missing output file name" G retfail
+	I cvtype=1 { ; prepare RMS "V" mode file to send to UNIX/Windows
+		I '$$IsVMS() S err="This conversion must be run on a VMS system" G retfail
+		S opened=$$OpenFiles(infile,outfile,"VR","WNU",.err) I 'opened G retfail
+		F  U infile R x Q:$ZEOF  U outfile W $ZWCHAR($L(x)),x
+	} 
+	ELSEIF (cvtype=2) { ; convert UNIX/Windows "V" mode to RMS
+		I '$$IsVMS() S err="This conversion must be run on a VMS system" G retfail
+		S opened=$$OpenFiles(infile,outfile,"UR","WNV",.err) I 'opened G retfail
+		F  {
+			U infile R x#2 Q:$ZEOF  ; done conversion successfully
+			; $ZEOF won't be set if there are fewer bytes than expected at the end of the file
+			I $L(x)<2 S err="Unexpected end of file" G retfail
+			S len=$ZWASCII(x) I 'len U outfile W "" CONTINUE
+			R x#len I $ZEOF s err="Invalid input file format" G retfail
+			; $ZEOF won't be set if there are fewer bytes than expected at the end of the file
+			I $L(x)<len S err="Unexpected end of file" G retfail
+			U outfile W x
+		}
+	}
+	ELSE { ; default
+		S err="Invalid conversion type specified"
+		G retfail
+	}
+	I $ZU(68,40,zu6840)
+	C infile,outfile
+	Q 1
+err 
+	S $ZT=""
+	S err="Unexpected error: "_$ZE
+retfail
+	I $ZU(68,40,zu6840)
+	I $G(opened) C infile,outfile
+	Q 0
+}
+	; OpenFiles()
+	;   Opens two files in specified modes
+	; Returns:
+	;   1 on success
+	;   0 on failure
+	;   On failure return, both files will be closed.
+	; Input Parameters:
+	;   f1 - (required) first file name
+	;   f2 - (required) second file name
+	;   f1mode - (required) mode string for f1
+	;   f2mode - (required) mode string for f2
+	; Output Parameters:
+	;   err - error text set on failure return
+OpenFiles(f1,f2,f1mode,f2mode,err) PRIVATE {
+	S $ZT="err",err="",opened=0
+	O f1:f1mode:2 E  S err="Failed to open "_f1 Q 0
+	S opened=1
+	O f2:f2mode:2 E  C f1 S err="Failed to open "_f2 Q 0
+	S opened=2
+	Q 1
+err 
+	S $ZT=""
+	I $G(opened) C f1 I opened=2 C f2
+	S err="Unexpected error: "_$ZE
+	Q 0
+}
+	; IsVMS()
+	; Returns 1 if this is a VMS machine, 0 otherwise
+IsVMS() PRIVATE { Q ($ZVERSION(1)=1) }

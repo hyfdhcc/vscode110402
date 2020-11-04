@@ -1,0 +1,31 @@
+ROUTINE LANGZINST [Type=INT]
+%LANGZINST ;Gen defaults for customer written cmd routines ;LFT1320 10/26/04
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+INSTALL ;
+ n rtntype,rtn,base,len,custrtn
+ ;
+ ; C = commands, F = functions, V = variables
+ f rtntype="C","F","V" d
+ . s rtn="LANG"_rtntype  ; starting point for $ORDER()
+ . s base=rtn
+ . s len=$L(base)
+ . f  s rtn=$O(^rOBJ(rtn)) q:$E(rtn,1,len)'=base  d
+ . . s custrtn="%Z"_$E(rtn,2,$L(rtn))
+ . . q:$D(^ROUTINE(custrtn))  ; already exists
+ . . q:$D(^rOBJ(custrtn))  ; already exists
+ . . x "zr  zl LANGZDEF zs "_custrtn  ; generate it

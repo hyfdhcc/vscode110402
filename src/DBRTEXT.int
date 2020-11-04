@@ -1,0 +1,142 @@
+ROUTINE DBRTEXT [Type=INT]
+DBRTEXT ; 1992 AN ; LRS181 07/31/97
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;DBRTEXT.INC; STC2115, 8/2/12
+GO       K dbrtext
+aborting d entry("aborting")
+ ;;[Aborting restoration from this backup file]
+abtdmt d entry("abtdmt")
+ ;;[Aborting restoration of this directory and dismounting it]
+ ;;
+anymore0 d entry("anymore0")
+ ;;Do you have any backups to restore?
+anymore1 d entry("anymore1")
+ ;;Do you have any more backups to restore?
+ASKRES d entry("ASKRES")
+ ;;Restore: 1. All directories
+ ;;         2. Selected and/or renamed directories
+ ;;         3. Display backup volume information
+ ;;         4. Exit the restore program
+ALREADY d entry("ALREADY")
+ ;;Do you want to set switch 10 so that other processes will be
+ ;;prevented from running during the restore?
+MAYBE d entry("MAYBE")
+ ;;NOTE: Some operations could cause switch 10 to be set for a few seconds.
+ ;;      A warning message will be printed if this happens.
+chnglist d entry("chnglist")
+ ;;Do you want to change this list of directories?
+confirmRestore d entry("confirmRestore")
+ ;;Restore will overwrite the data in the old database. Confirm Restore?
+CREATE d entry("CREATE")
+ ;;You can retry opening it, create it, or abort the restoration
+ ;;of this directory.
+DIRNAM d entry("DIRNAM")
+ ;;
+ ;;For each database included in the backup file, you can:
+ ;;
+ ;; -- press RETURN to restore it to its original directory;
+ ;; -- type X, then press RETURN to skip it and not restore it at all.
+ ;; -- type a different directory name.  It will be restored to the directory
+ ;;    you specify.  (If you specify a directory that already contains a 
+ ;;    database, the data it contains will be lost).
+ ;;
+DUPLDIR d entry("DUPLDIR")
+ ;;!Directory # was already specified
+ ;;as the target of another restore operation
+ ;;
+ ;;
+NotExist d entry("NotExist")
+ ;;!Directory # does not exist
+ ;;at the operating system level so a database cannot be stored there.
+MakeLater d entry("MakeLater")
+ ;;   You can continue and this check will be repeated when restoration
+ ;;   to that directory begins, at which time you can choose to have it
+ ;;   be created, or else you can select a different directory now.
+ ;;Do you want to modify your selection of directory?
+MakExist d entry("MakExist")
+ ;;   You can have this utility make the directory and then create a
+ ;;   database in it by responding "C" to the following question.
+dirnexis d entry("dirnexis")
+ ;;!Directory # does not contain a database
+ ;;or it can't be accessed.
+DIRREST0 d entry("DIRREST0")
+ ;; You can continue the restoration of this directory, abort the
+ ;; restoration of this directory, or abort this restoration session
+ ;; altogether.  All of these choices will probably result in losing
+ ;; data and maybe in database degradation.
+ ;;Continue the restoration of this directory?
+ ;;
+DIRREST1 d entry("DIRREST1")
+ ;; You can retry writing these blocks, skip these blocks and continue
+ ;; restoring to this directory, abort the restoration of this
+ ;; directory, or abort restoring this backup.  All but the choice of
+ ;; retrying will result in losing data and maybe in database
+ ;; degradation.
+ ;;Retry these blocks?
+DIRREST2 d entry("DIRREST2")
+ ;; You can skip this block and continue the restoration of this
+ ;; directory, abort the restoration of this directory, or abort this
+ ;; restoration session altogether.  All of these choices will probably
+ ;; result in losing data and maybe in database degradation.
+ ;;Continue the restoration of this directory?
+erbadrec d entry("erbadrec")
+ ;;!Invalid backup data record read from device # for
+ ;;database block # of directory #.
+erbadlab d entry("erbadlab")
+ ;;!Invalid backup label record read from device # following
+ ;;directory #.
+skip2lab d entry("skip2lab")
+ ;; If you do not continue, the restoration of this backup will be
+ ;; aborted.  If you do continue, you will have missed a directory
+ ;; label block that will result in your missing the restore of a
+ ;; portion of a directory.
+ ;;
+ ;;Continue?
+endofvol d entry("endofvol")
+ ;;!End of backup device # encountered prematurely while
+ ;;reading directory #.
+ ;;Aborting restoration.  Data may have been lost.  Database degradation
+ ;;is likely.
+errabort d entry("errabort")
+ ;;
+ ;;***ERROR OCCURRED: [#] -- Aborting restoration.
+ ;;
+errmrk d entry("errmrk")
+ ;;Error marking directory # as the target of a restore.
+ ;;# will not be restored.
+ ;;
+errmrk1 d entry("errmrk1")
+ ;;Directory # was created, but an error occurred trying
+ ;;to mark it as a restoration target.
+ ;;
+errmrk2 d entry("errmrk2")
+ ;;Directory # is mirrored and cannot be the target of a restore.
+ ;;# will not be restored.
+ ;;
+ g ^DBRTEXT1
+entry(fromtag) ;Scan lines starting at fromtag+1 and put in dbrtext(fromtag)
+ n break,i,line,stop,tag,text
+ s break=$c(13,10) ;Maybe not system-independent???
+ f i=1:1 d  q:stop  s dbrtext(fromtag)=$g(dbrtext(fromtag))_break_text
+ . s line=$text(@fromtag+i)
+ . s tag=$p(line,";;"),text=$p(line,";;",2)
+ . i $e(text)="!" s $e(text)=$c(7) ;Leading bang becomes bell
+ . s stop=$$isblank(line)!$$nonblank(tag)
+ q
+isblank(line) q $tr(line," ","")=""
+nonblank(line) q '$$isblank(line)

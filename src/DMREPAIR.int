@@ -1,0 +1,1085 @@
+ROUTINE DMREPAIR [Type=INT]
+DMREPAIR ; API for database repair ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/diagnostic/dmrepair.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ShowMessage(sc,device) [] PRIVATE {
+    Do DecomposeStatus^%SYS.DATABASE(sc,.msglist,0,"")
+    Do wrtmsg($C(13,10),device)
+    For i=1:1:msglist {	Do wrtmsg(msglist(i)_$C(13,10),device) }
+}
+wrtmsg(msg,device) [] PRIVATE {
+    Quit:'$L(msg)  ; Avoid argumentless writes...
+    If device=-1 { Do $zu(9,"",msg,0,0) Quit }
+    If $g(%UI,"CHUI")="CHUI" { Use device Write msg Quit }
+    Do:$$IjcMsg^%Wprima("DI"_msg)="CANCEL"  ; Return value could be cancel message 
+    . i $$IjcMsg^%Wprima("DI"_$C(13,10)_"Abort received!"_$C(13,10))
+    . zt "Abort"
+}
+ q
+ParseMapBlock(dir,blk,free) [] PUBLIC
+{
+    Set $Ztrap="errParseMapBlock"
+    Quit:blk<1||(blk\1'=blk) $$Error^%apiOBJ(6075,blk)
+    Set info=$zu(49,dir)
+    Quit:(+info)<-1 $$Error^%apiOBJ(184)
+    Quit:'$Piece(info,",",21) $$Error^%apiOBJ(344)
+    Open 63:"^^"_dir
+    View blk
+    If $v($Zutil(40,32,1),0,1)'=$Case(1,0:170,:16) {
+	Close 63
+	Quit $$Error^%apiOBJ(342,blk)
+    }
+    Set free=$View($zu(40,32,10),0,4)
+    Close 63
+    Quit 1
+errParseMapBlock
+    Close 63
+    Set $Ztrap=""
+    Quit:$Zerror["<NOTOPEN>" $$Error^%apiOBJ(184)
+    Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+ParseRepairBlock(dir,blk,blockvar,offset,ref,refprn,val,ccc,len,pad,sub,long,info,N,blocktype,link,bigcount,pntlen,nextpntlen,nextpntval,nextpntoff,pntref,nextpntref,incver,collate,gartree) [] PUBLIC
+{
+    Set $Ztrap="errParse1"
+    Set blksiz=$Piece($zu(49,dir),",",2)
+    Quit:blksiz="" $$Error^%apiOBJ(184)
+    Quit:blksiz=2048 $$Error^%apiOBJ(344)
+    Open 63:"^^"_dir
+    If '$Data(blockvar) {
+    	Quit:(blk<1)||(blk\1'=blk) $$Error^%apiOBJ(6075,blk)
+        View blk
+    } Else {
+	    If $Length(blockvar)=blksiz {
+			View 0:0:-blksiz:blockvar
+    	} Else {
+			Close 63
+			Quit $$Error^%apiOBJ(331,$Length(blockvar))
+    	} 
+    }
+    Quit $$ParseRepairViewBuf(dir,.offset,.ref,.refprn,.val,.ccc,.len,.pad,.sub,.long,.info,.N,.blocktype,.link,.bigcount,.pntlen,.nextpntlen,.nextpntval,.nextpntoff,.pntref,.nextpntref,.incver,.collate,.gartree)
+errParse1 ;
+    Set:$g(N) N=N-1
+    Set $Ztrap=""
+    Quit:$Zerror["<NOTOPEN>" $$Error^%apiOBJ(184)
+    Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+ParseRepairViewBuf(dir,offset,ref,refprn,val,ccc,len,pad,sub,long,info,N,blocktype,link,bigcount,pntlen,nextpntlen,nextpntval,nextpntoff,pntref,nextpntref,incver,collate,gartree) [] PUBLIC
+{
+    Set $Ztrap="err"
+    Set blksiz=$Piece($zu(49,dir),",",2) 
+    Quit:blksiz=2048 $$Error^%apiOBJ(344)
+    Set link=$v($Zutil(40,32,4),0,4)
+    Set blocktype=$v($Zutil(40,32,1),0,1)
+    Quit:$$getType(blocktype)=24 $$Error^%apiOBJ(332)
+    Quit:$$getType(blocktype)=17 $$Error^%apiOBJ(364)
+    If $zb(+blocktype,32,1) {
+	If '$$IsTypeLegal(blocktype-32) {
+	    Set rc=$$Error^%apiOBJ(195,$$getType(blocktype))
+	    Goto erexit
+	}
+	Set blocktype=blocktype-32
+	View $Zutil(40,32,1):0:1:blocktype
+	Set gartree=1
+    } Else {
+	Set gartree=0
+	If '$$IsTypeLegal(blocktype) {
+	    Set rc=$$Error^%apiOBJ(195,blocktype)
+	    Goto erexit
+        }
+    }
+    Set OFF=$s($d(offset):offset,1:$v($zu(40,32,0),0,4)+$zu(40,32,10))
+    Set incver=$View($Zutil(40,32,5),0,4)
+    Set collate=$v($zu(40,32,2),0,1)
+    If (blocktype=8)!(blocktype=9) {  ;JO2150
+	Set bigcount=$View($zu(40,32,6),0,4)
+	Set pntlen=$View($Zutil(40,32,3),0,2)
+	Set nextpntlen=$View($Zutil(40,32,8),0,2)
+	Set nextpntval=$View($Zutil(40,32,9),0,1)
+	Set nextpntoff=$View($Zutil(40,32,7),0,1)
+	Set rc=$$GetNodeReferences(0,.internal,.printable)
+	Goto:('rc) erexit
+	Set pntref("internal")=internal
+	Set pntref("printable")=printable
+	Set rc=$$GetNodeReferences(-1,.internal,.printable)
+	Goto:('rc) erexit
+	Set nextpntref("internal")=internal
+	Set nextpntref("printable")=printable
+	If $v($Zutil(40,32,4),0,4),nextpntlen,(nextpntoff#2) {
+	    Set storednextoff=$Case(blksiz,2048:2036,:(blksiz-$zu(40,32,10)))-nextpntlen
+	    Set storednextoff=(storednextoff\4)*4
+	    Set storednext=$View(storednextoff+$zu(40,32,10),0,-nextpntlen)
+	    If storednext'=nextpntref("internal") {
+		Set nextpntoff=-1_","_storednext
+	    }
+	}
+    }
+    If OFF>blksiz {
+	Set rc=$$Error^%apiOBJ(196,OFF,blksiz-addoff)
+	Goto erexit
+    }
+    Set offset=OFF 
+    Set off=$zu(40,32,10),N=0
+    If blocktype'=9,blocktype'=13 {
+	For N=1:1 {
+	    Set X=$V(N-1*2+1,-6)
+	    Quit:X=""
+	    Set rc=$$GetNodeReferences(N-1*2+1,.internal,.printable)
+	    If ('rc) { Set X="" Quit }
+	    Set ref(N)=internal
+	    Set refprn(N)=printable
+	    Set val(N)=$V(N-1*2+2,-6)
+	    Set A=off
+	    Set info(N)=$v(A,0,4)
+	    Set info=$zu(167,0,'(blocktype=8 || (blocktype=9) || (blocktype=12) || (blocktype=24)),info(N))
+	    Set A=off+4
+	    Set sub(N)=$p(info,"^",2)
+	    Set ccc(N)=$p(info,"^",3)
+	    Set len(N)=$p(info,"^",4)
+	    Set pad(N)=$p(info,"^",5)
+	    Set long(N)=$p(info,"^",6)
+	    Set off=off+len(N)
+	}
+	Set N=N-1
+    } Else {
+        Set prev=""
+        While off<OFF {
+	    Set A=off
+	    Set rawinfo=$v(A,0,4)
+	    Set info=$zu(167,0,0,rawinfo)
+	    Set A=off+4 ;string^sub^ccc^len^pad 
+	    Set sub=$p(info,"^",2)
+	    Set ccc=$p(info,"^",3)
+	    Set len=$p(info,"^",4)
+	    Set pad=$p(info,"^",5)
+	    Set S=$e(prev,1,ccc)
+	    Set end=A+sub-1
+	    For A=A:1:end { Set S=S_$C($V(A,0)) }
+	    Set prev=S
+	    Set N=N+1,ref(N)=S,refprn(N)="^"_S
+	    Set val(N)=$v(N*2,-6)
+	    Set len(N)=len
+	    Set info(N)=rawinfo
+	    Set pad(N)=pad
+	    Set ccc(N)=ccc
+	    Set sub(N)=sub
+	    Set long(N)=0
+	    Set off=off+len
+	}
+    }
+    Close 63
+    Quit 1
+err ;
+    Set:$g(N) N=N-1
+    Set $Ztrap=""
+    Quit:$Zerror["<NOTOPEN>" $$Error^%apiOBJ(184)
+    Quit $$Error^%apiOBJ(5002,$Zerror)
+erexit Close 63
+    Quit rc
+}
+DeleteNodeInRepairBlock(dir,blk,node,num,ref,refprn,val,ccc,len,pad,sub,long,info,OFF,bigcount) [] PUBLIC
+{
+    Quit:(blk<1)||(blk\1'=blk) $$Error^%apiOBJ(6075,blk)
+    Set blksiz=$Piece($zu(49,dir),",",2) 
+    Quit:blksiz="" $$Error^%apiOBJ(184)
+    Quit:blksiz=2048 $$Error^%apiOBJ(344)
+    Open 63:"^^"_dir
+    View blk
+    Set type=$v($Zutil(40,32,1),0,1)
+ i type=8!(type=12) s prefix=$A(val(node)) d  
+ . i prefix=3!(prefix=5)!(prefix=7) Do 
+ . . s numblks=$Piece(val(node),",",2)
+ . . Set bigcount=bigcount-1
+ . . View $zu(40,32,6):0:4:bigcount
+ . i prefix=6 s cmplen=$zu(153,$e(val(node),2,$l(val(node))))
+ . s OFF=OFF-len(node)
+ F I=node:1:num-1 DO
+ . S ref(I)=ref(I+1),val(I)=val(I+1)
+ . S refprn(I)=refprn(I+1)
+ . i I=node d  ;Adjust the next node after the deleted node if there is one
+ . . s info(I)=$zu(167,1,'(type=8 || (type=9) || (type=12) || (type=24)),info(I),info(I+1))
+ . . s newinfo=$zu(167,0,'(type=8 || (type=9) || (type=12) || (type=24)),info(I))
+ . . s len(I)=$p(newinfo,"^",4),pad(I)=$p(newinfo,"^",5),ccc(I)=$p(newinfo,"^",3),sub(I)=$p(newinfo,"^",2)
+ . e  d  
+ . . s len(I)=len(I+1)
+ . . s info(I)=info(I+1)
+ . . s pad(I)=pad(I+1)
+ . . s ccc(I)=ccc(I+1)
+ . . s sub(I)=sub(I+1)
+ K val(num),ref(num),refprn(num),len(num),pad(num),sub(num),ccc(num),long(num),info(num) S num=num-1
+ Set OFF=0
+ For i=1:1:num Set OFF=OFF+len(i)
+ v $zu(40,32,0):0:4:OFF
+ Set OFF=OFF+$zu(40,32,10)
+ s sc=1_$e($$Error^%apiOBJ(193),2,*)
+ If node=1 && (type'=1) {
+	if '((type=9) && (blk=3)) {   ;JO2438
+       Set sc=$select(+sc:1_$e($$Error^%apiOBJ(194),2,*),1:$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ(194),2,*)))
+       Set sc=$select(+sc:1_$e($$Error^%apiOBJ(188),2,*),1:$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ(188),2,*)))
+	}
+ }
+ Quit sc
+}
+InsertNodeInRepairBlock(dir,blk,newref,insref,insval,num,ref,refprn,val,ccc,len,pad,sub,long,info,OFF,nodenum) [] PUBLIC
+{
+    Quit:(blk<1)||(blk\1'=blk) $$Error^%apiOBJ(6075,blk)
+    Set blksiz=$Piece($zu(49,dir),",",2)
+    Quit:blksiz="" $$Error^%apiOBJ(184)
+    Quit:blksiz=2048 $$Error^%apiOBJ(344)
+    Set sc=1
+    Open 63:"^^"_dir
+    View blk
+    Set type=$v($Zutil(40,32,1),0,1)
+ S lastccc=0,Z=0,POP=0
+ F I=1:1:num S A=ref(I) G exists:A=insref d trackccc G insert:POP
+ ; next 2 lines only if node is at beginning or end 
+ i 'num s I=0
+ s I=I+1,CON=0
+ ;
+insert Set nodenum=I If type=9 Do  
+ . s newsub=$l(insref)-(Z-CON)
+ . s newlen=newsub+11
+ . s newpad=0,newlen=newlen+4 
+ . i newlen#4 s newpad=4-(newlen#4),newlen=newlen+newpad
+ . s newinfo=$zu(167,3,0,newlen,newsub,Z-CON,newpad,1)
+ Else  i (type=8 || (type=9) || (type=12) || (type=24)) d  
+ . s cmplen=$zu(153,insval)
+ . i cmplen,cmplen<($l(insval)*2) s insval=$c(6)_insval  ;compact unicode
+ . e  i cmplen s insval=$c(4)_insval   ; unicode
+ . e  s insval=$c(0)_insval ; string
+ . s newsub=$l(insref)-(Z-CON)
+ . s newlen=newsub+$Case(cmplen,0:$l(insval)-1,:$Case($Ascii(insval),4:(2*$l(insval))-1,:cmplen+1))
+ . s newpad=0,newlen=newlen+4 
+ . i newlen#4 s newpad=4-(newlen#4),newlen=newlen+newpad
+ . s newinfo=$zu(167,3,0,newlen,newsub,Z-CON,newpad,$Case(cmplen,0:1,:0))
+ Else  Do  
+ . Set blknum=$Piece(insval,",",2),insertlong=$Piece(insval,",",1)
+ . Set newsub=$Length(insref)-(Z-CON)
+ . Set ptrtype=$Case($Length(insref)>53,1:1,:2)
+ . Set extracount=$Zutil(167,$Case(ptrtype,1:5,:4),0,blknum)
+ . Set newpad=0,newlen=newsub+4+extracount
+ . If newlen#4 Set newpad=4-(newlen#4),newlen=newlen+newpad
+ . If ptrtype=1 Set newinfo=$zu(167,3,1,newlen,newsub,Z-CON,newpad,0)
+ . Else  Set newinfo=$zu(167,3,2,newlen,newsub,Z-CON,newpad,0,blknum)
+ . If $Piece(insval,",",1) Set newinfo=newinfo+$Case(ptrtype,1:(2**12),:(2**30))
+ i OFF+newlen>blksiz Close 63 q $$Error^%apiOBJ(192)
+ S OFF=OFF+newlen
+ s N=num
+ F J=N:-1:I S ref(J+1)=ref(J),val(J+1)=val(J),refprn(J+1)=refprn(J),ccc(J+1)=ccc(J),pad(J+1)=pad(J),len(J+1)=len(J),info(J+1)=info(J),sub(J+1)=sub(J),long(J+1)=long(J)
+ S N=N+1,ref(I)=insref,val(I)=insval,refprn(I)="^"_newref,long(I)=$Get(insertlong)
+ s sub(I)=newsub,pad(I)=newpad,len(I)=newlen,ccc(I)=Z-CON,info(I)=newinfo
+ i I<N d  
+ . s info(I+1)=$zu(167,2,'(type=8 || (type=9) || (type=12) || (type=24)),Zsave,info(I),info(I+1))
+ . s newinfo=$zu(167,0,'(type=8 || (type=9) || (type=12) || (type=24)),info(I+1))
+ . s len(I+1)=$p(newinfo,"^",4),pad(I+1)=$p(newinfo,"^",5),ccc(I+1)=$p(newinfo,"^",3),sub(I+1)=$p(newinfo,"^",2)
+ s num=N 
+ I N=I {
+    s sc=$select(+sc:1_$e($$Error^%apiOBJ(185,I),2,*),1:$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ(185,I),2,*)))
+    s sc=$select(+sc:1_$e($$Error^%apiOBJ(186),2,*),1:$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ(186),2,*)))
+    Close 63 q sc
+ }
+ I I=1 {
+    Set sc=$select(+sc:1_$e($$Error^%apiOBJ(187),2,*),1:$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ(187),2,*)))
+    Set sc=$select(+sc:1_$e($$Error^%apiOBJ(188),2,*),1:$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ(188),2,*)))
+    Set sc=$select(+sc:1_$e($$Error^%apiOBJ(186),2,*),1:$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ(186),2,*)))
+    Close 63 q sc
+ }
+ Set sc=$select(+sc:1_$e($$Error^%apiOBJ(189,I),2,*),1:$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ(189,I),2,*)))
+ Set sc=$select(+sc:1_$e($$Error^%apiOBJ(190,I),2,*),1:$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ(190,I),2,*)))
+ Close 63 Quit sc
+trackccc  ;
+ f Z=1:1 Q:$E(A,Z)'=$E(insref,Z) 
+ s Z=Z-1,CON=0 ; sets Z to the last common character
+ i Z-lastccc>0 s CON=Z-lastccc
+ s Zsave=Z
+ i Z<lastccc s POP=1,Z=lastccc q  
+ s lastccc=Z i $e(A,Z+1)]$e(insref,Z+1) s POP=1
+ q  
+exists q 1_$e($$Error^%apiOBJ(191,I-1),2,*)
+}
+GetCollationRuleInViewBuffer(dir,blk) [] PUBLIC
+{
+    Quit:(blk<1)||(blk\1'=blk) $$Error^%apiOBJ(6075,blk)
+    Set blksiz=$Piece($zu(49,dir),",",2) 
+    Quit:blksiz="" $$Error^%apiOBJ(184)
+    Quit:blksiz=2048 $$Error^%apiOBJ(344)
+    Set $Ztrap="errGetCollation"
+    Open 63:"^^"_dir
+    View blk
+    Set sc=1_$e($$Error^%apiOBJ($Zutil(70,1,$v($zu(40,32,2),0,1))),2,*)
+    Close 63
+    Quit sc
+errGetCollation
+    Close 63
+    Set $Ztrap="" If $Zerror["<NOTOPEN>" Quit $$Error^%apiOBJ(184)
+    Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+EncodeGlobalReference(ref,colrule) [] PUBLIC
+{
+ s (beg,end)=1
+ s glo=$p(ref,"("),sub=$p(ref,"(",2,$l(ref)),sub=$e(sub,1,$l(sub)-1)
+ i $e(glo)="^" s glo=$e(glo,2,$l(glo))
+ f  q:end>$l(sub)  s glo=glo_$$enum($$ename())
+ q glo
+ename() ; parse one subscript field
+ s beg=end i $e(sub,beg)="""" g equote
+ s end=$f(sub,",",beg) s:'end end=$l(sub)+2 q $e(sub,beg,end-2)
+equote s glo=""
+plp s end=end+1,c=$e(sub,end) i c]"",c'="""" s glo=glo_c g plp
+ i c]"",$e(sub,end+1)="""" s glo=glo_c,end=end+1 g plp
+ s end=end+2 q glo
+enum(x) i x="" q ""
+ Q $c(0)_$zu(70,2,x,colrule)
+}
+ChangeValueInRepairBlock(dir,blk,node,newval,ref,val,ccc,len,pad,sub,long,info,OFF) [] PUBLIC
+{
+    Quit:(blk<1)||(blk\1'=blk) $$Error^%apiOBJ(6075,blk)
+    Set blksiz=$Piece($zu(49,dir),",",2) 
+    Quit:blksiz="" $$Error^%apiOBJ(184)
+    Quit:blksiz=2048 $$Error^%apiOBJ(344)
+    Open 63:"^^"_dir
+    View blk
+ s OFF=$v($zu(40,32,0),0,4)+$zu(40,32,10)
+ s type=$v($Zutil(40,32,1),0,1)
+ I type=8!(type=24) DO  Quit:$Get(noroom) $$Error^%apiOBJ(192)
+ . S prefix=$A(val(node)),L=$L(val(node))
+ . i prefix=6 s cmplenold=$zu(153,$e(val(node),2,$l(val(node))))
+ . s cmplen=$zu(153,newval)
+ . i cmplen,cmplen<($l(newval)*2) s newval=$c(6)_newval  ; compact unicode
+ . e  i 'cmplen s newval=$c(0)_newval  ; ascii
+ . e  s newval=$c(4)_newval   ; unicode
+ . s oldinfo=$zu(167,0,0,info(node)),oldsub=$p(oldinfo,"^",2),oldccc=$p(oldinfo,"^",3)
+ . s newlen=oldsub+$Case(cmplen,0:$l(newval)-1,:$Case($Ascii(newval),4:(2*$l(newval))-1,:cmplen+1))
+ . s newpad=0,newlen=newlen+4 i newlen#4 s newpad=4-(newlen#4),newlen=newlen+newpad
+ . Set info(node)=$zu(167,3,0,newlen,oldsub,oldccc,newpad,$Case(cmplen,0:1,:0))
+ . i (OFF-len(node)+newlen)>(blksiz-$zu(40,32,10)) Set noroom=1 Quit
+ . s OFF=OFF-len(node)+newlen,len(node)=newlen,pad(node)=newpad
+ . s val(node)=newval
+ e  i type=9 d  Close 63 q 1 ;Global directory is a data block
+ . s $p(val(node),",",2)=newval
+ Else  Do  
+ . Set oldinfo=info(node)
+ . Set oldlong=$Piece(val(node),",",1)
+ . Set val(node)=newval
+ . Set newblockval=$Piece(newval,",",2),long(node)=$Piece(newval,",",1)
+ . Set ptrtype=$Piece($Zutil(167,0,1,info(node)),"^",1)  
+ . Set newextra=$Zutil(167,$Case(ptrtype,1:5,:4),0,newblockval)
+ . If ptrtype=2,'newextra Do  ;Type 2 pointer node, only 12 bits needed
+ . . Set oldinfo1=oldinfo\262144,oldblk=(oldinfo1#4096)*262144 
+ . . Set info(node)=oldinfo-oldblk+(newblockval*262144)
+ . Else  Do  
+ . . Set newpad=0,newlen=sub(node)+4+newextra
+ . . If newlen#4 Set newpad=4-(newlen#4),newlen=newlen+newpad
+ . . Set len(node)=newlen,pad(node)=newpad
+ . . If ptrtype=1 Set info(node)=$Zutil(167,3,1,newlen,sub(node),ccc(node),newpad,0)
+ . . Else  Set info(node)=$Zutil(167,3,2,newlen,sub(node),ccc(node),newpad,0,newblockval)
+ . ;If long(node)=1 Set info(node)=info(node)+$Case(ptrtype,1:$$$type1bigstringbit,:$$$type2bigstringbit)
+ . If long(node)=1 && 'oldlong Set info(node)=info(node)+$Case(ptrtype,1:(2**12),:(2**30))
+ . Else  If oldlong && 'long(node) Set info(node)=info(node)-$Case(ptrtype,1:(2**12),:(2**30))
+ Close 63 Quit 1
+}
+WriteRepairBlock(saveblock,dir,blk,type,link,num,ref,val,ccc,len,pad,sub,long,info,pntlen,nextpntlen,nextpntval,nextpntoff,incver,collate,nextpntref,gartree) [] PUBLIC
+{
+    Quit:(blk<1)||(blk\1'=blk) $$Error^%apiOBJ(6075,blk)
+    Set blksiz=$Piece($zu(49,dir),",",2) 
+    Quit:blksiz="" $$Error^%apiOBJ(184)
+    Quit:blksiz=2048 $$Error^%apiOBJ(344)
+    Set $Ztrap="errWriteRepair"
+    Open 63:"^^"_dir
+    View blk
+ If $Data(type) View $Zutil(40,32,1):0:1:$Case($Get(gartree),1:type+32,:type)
+ Else  Set type=$$getType($v($Zutil(40,32,1),0,1))
+ If $Data(link) View $Zutil(40,32,4):0:4:link
+ If $Data(incver) View $Zutil(40,32,5):0:4:incver
+ If (type=8)!(type=9) {  ;JO2150
+    If $Data(pntlen) View $Zutil(40,32,3):0:2:pntlen
+    If $Data(nextpntlen) View $Zutil(40,32,8):0:2:nextpntlen
+    If $Data(nextpntval) View $Zutil(40,32,9):0:1:nextpntval
+    If $Data(nextpntoff) View $Zutil(40,32,7):0:1:nextpntoff
+    If $Data(collate) View $Zutil(40,32,2):0:1:collate
+    If $Data(nextpntref) && ($Get(nextpntlen)) {
+       Set storednextoff=$Case(blksiz,2048:2036,:(blksiz-$zu(40,32,10)))-nextpntlen
+       Set storednextoff=((storednextoff\4)*4)+$zu(40,32,10)
+       If ((storednextoff+nextpntlen)'>blksiz) {
+          View storednextoff:0:-nextpntlen:nextpntref
+          Set nextpntoff=1
+       } Else {
+          View $Zutil(40,32,7):0:1:0
+          Set nextpntoff=0
+       }
+    }
+ }
+ Set bigcount=0
+ S off=$zu(40,32,10),node=0,S="" G wrglodir:type=9
+WR1 s A=off S node=node+1 G dowrite:node>num S S=ref(node)
+ v A:0:4:info(node) s A=A+4
+ i ccc(node) s S=$e(S,ccc(node)+1,$l(S))
+ F Y=1:1:$L(S) V A:0:1:$A(S,Y) s A=A+1   ;store the name
+ s A=A+pad(node)
+ ;
+ If (type=2)!(type=6)!(type=66)!(type=70) Do  Set off=off+len(node) Goto WR1
+ . Set blknum=$Piece(val(node),",",2)
+ . Set extracount=len(node)-sub(node)-pad(node)-4
+ . If $Piece($Zutil(167,0,1,info(node)),"^",1)=2 Do  
+ . . If extracount View A:0:extracount:$Zutil(167,4,1,blknum)
+ . Else  View A:0:extracount:blknum
+ S X=val(node),gdviewtype=$Ascii(X),X=$e(X,2,$Length(X))
+ i $p($zu(167,0,0,info(node)),"^",1) d  s off=off+len(node) g WR1
+  . If $Length(X) View A:0:-$Length(X):X
+ If gdviewtype=3!(gdviewtype=5)!(gdviewtype=7) Set bigcount=bigcount+1
+ i gdviewtype=6 s cmplen=$zu(153,X)
+ e  s cmplen=0 ;  What if this is already a long string?
+ i cmplen>756 Close 63 Quit $$Error^%apiOBJ(212)
+ I gdviewtype=1 DO  S off=off+len(node) G WR1 ; Integer value has type byte 0
+ . v A:0:-($l(X)+1):$c(0)_X
+ i gdviewtype=6!(gdviewtype=4) d  s off=off+len(node) g WR1 
+ . View A:0:1:$Case(gdviewtype,6:3,:2) ; intro char in block for compact
+ . If $Zutil(153,X) View A+1:0:(-$l(X))_$Case(gdviewtype,6:"E",:"W"):X
+ . Else  View A+1:0:(-$l(X)):X
+ ;
+ ;BIGSTRINGS HERE
+ i gdviewtype=7!(gdviewtype=5)!(gdviewtype=3) d  s off=off+len(node) g WR1  ; big string types
+ . v A:0:1:$Case(gdviewtype,7:4,5:5,:6) s A=A+1
+ . v A:0:4:$p(val(node),",",3)
+ . s numblks=$p(val(node),",",2)
+ . f numi=1:1:numblks v A+(4*numi):0:4:$p(val(node),",",3+numi)
+ i gdviewtype=8 s off=off+len(node) g WR1 // no value, first node in first block of glo
+ v A:0:-($l(X)+1):$c(1)_X ;double id byte is 1
+ s off=off+len(node) G WR1
+dowrite 
+ View $zu(40,32,6):0:4:bigcount
+ v $zu(40,32,0):0:4:(off-$zu(40,32,10))
+ If $Get(saveblock)="disk" View -blk
+ Else  Set saveblock=$View(0,0,-blksiz)
+ Close 63 Quit 1
+wrglodir s A=off S node=node+1 G dowrite:node>num S S=ref(node)
+ v A:0:4:info(node) s A=A+4
+ i ccc(node) s S=$e(S,ccc(node)+1,$l(S))
+ F Y=1:1:$L(S) V A:0:1:$A(S,Y) s A=A+1   ;store the name
+ S A=A+pad(node) ; move to type field
+ v A:0:1:$p(val(node),",",4)
+ V A+1:0:1:$p(val(node),",",3)
+ V A+2:0:1:$p(val(node),",",5)
+ v A+3:0:4:$p(val(node),",",2)
+ v A+7:0:4:$p(val(node),",",1)
+ S off=off+len(node) G wrglodir
+errWriteRepair
+ Close 63
+ Set $Ztrap="" If $Zerror["<NOTOPEN>" Quit $$Error^%apiOBJ(184)
+ Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+GetTypeName(type)
+ q $case(type,8:"DATA",9:"GLOBAL DIRECTORY",24:"BIG STRING DATA",66:"TOP POINTER",70:"TOP/BOTTOM POINTER",2:"POINTER",6:"BOTTOM POINTER",17:"MIRROR INFORMATION BLOCK",:"")
+IsTypeLegal(type) [] PUBLIC
+{
+ Set sc=0
+ For i=2,6,8,9,66,70,13,17 If type=i Set sc=1 Quit  
+ Quit sc
+}
+GetBlockTypeFromViewBuffer(big)
+ q $case(big,0:$v(2043,0,1),:$v($Zutil(40,32,1),0,1))
+GetDataOffsetFromViewBuffer(big)
+ q $case(big,0:0,:$zu(40,32,10))
+FindLeftBlock(dir,block,left) [] PUBLIC
+{
+    Set $Ztrap="errFindLeft"
+    Quit:(block<1)||(block\1'=block) $$Error^%apiOBJ(6075,block)
+    Set dirinfo=$zu(49,dir)
+    Quit:dirinfo<0 $$Error^%apiOBJ(184)
+    Quit:'$Piece(dirinfo,",",21) $$Error^%apiOBJ(344)
+    Open 63:"^^"_dir
+    View block
+    Set type=$v($Zutil(40,32,1),0,1)
+    Goto:$zb(+type,32,1) quitBlockNotInUse
+    If type=9 { ;JO2150+
+	Set gdblk=3
+	View gdblk
+	Set right=$v($Zutil(40,32,4),0,4)
+	While right,right'=block {
+	    Set gdblk=right
+	    View gdblk
+	    Set right=$v($Zutil(40,32,4),0,4)
+	}
+	Goto:'right quitBlockNotInUse
+	Set left=gdblk
+	Goto fin
+    } ;JO2150-
+    Set isdatablock=(type=8 || (type=9) || (type=12) || (type=24))
+    Set info=$View($zu(40,32,10),0,4)
+    Set sublen=$Piece($Zutil(167,0,'isdatablock,info),"^",2)
+    Goto:'sublen quitBlockNotInUse
+    Set substr=$View($zu(40,32,10)+4,0,-sublen),gloname=$Piece(substr,$c(0))
+    Set rc=$$GetGlobalPointers^%SYS.DATABASE(dir,gloname,.top,.firstdata)
+    If ('rc) {
+	Close 63
+	Quit rc
+    }
+    If block=top || (block=firstdata) {
+	Set left=0
+	Goto fin
+    }
+    View top
+    Set toptype=$v($Zutil(40,32,1),0,1)
+    If isdatablock {
+	Set rc=$$FindGlobalLevels(dir,block,.levels,.blocktab,.curlev)
+	If ('rc) {
+	    Close 63
+	    Quit rc
+	}
+	If 'levels {
+	    Set left=0
+	    Goto fin
+	}
+	Set upblock=blocktab(levels-1) ;get bottom pointer leftmost block
+	Set lastprev=0
+	Do {
+	    View upblock
+	    Set ptr=$View(2,-5)
+	    If ptr=block {
+		Set left=lastprev
+		Quit
+	    }
+	    Set node=2
+	    Do {
+		Set nextptr=$View(node*2,-5)
+		If nextptr="" { Set lastprev=ptr }
+		ElseIf nextptr=block { Set left=ptr Quit }
+		Else {
+		    Set ptr=nextptr
+		    Set node=node+1
+		}
+	    } While (nextptr'="") 
+	    If $Data(left) { Set upblock=0 }
+	    Else { Set upblock=$v($Zutil(40,32,4),0,4) }
+	} While (upblock)
+	Goto:'$Data(left) quitBlockNotInUse
+    } ElseIf type=6 {
+        Goto:toptype'=66 quitDatabaseError
+	View top
+	Set curblk=$View(2,-5) ; could be ptr or botptr
+	View curblk
+	While ($v($Zutil(40,32,1),0,1)'=type) {   ; Skip any pointer levels
+	    View curblk
+	    Set curblk=$View(2,-5)
+	    View curblk
+	}
+	Goto:'$$checkLevel(block,curblk,.left) quitBlockNotInUse
+    } ElseIf type=2 {
+	View top
+	Set curblk=$View(2,-5)
+	View curblk
+	Goto:$$getType($v($Zutil(40,32,1),0,1))'=type quitDatabaseError
+	Do {
+	    Quit:$$checkLevel(block,curblk,.left)
+	    View curblk
+	    Set curblk=$View(2,-5) ;Data block or first pointer block on next level
+	    View curblk 
+	} While ($v($Zutil(40,32,1),0,1)=type)
+	Goto:$v($Zutil(40,32,1),0,1)'=type quitBlockNotInUse
+    } Else {
+	Goto quitDatabaseError
+    }
+fin Close 63
+    Quit 1 ;If checkLevel returned TRUE
+errFindLeft
+    Close 63
+    Set $Ztrap=""
+    Quit:$Zerror["<NOTOPEN>" $$Error^%apiOBJ(184)
+    Quit $$Error^%apiOBJ(5002,$Zerror)
+quitDatabaseError
+    Close 63
+    Quit $$Error^%apiOBJ(329,gloname)
+quitBlockNotInUse
+    Close 63
+    Quit $$Error^%apiOBJ(330,block)
+}
+checkLevel(block,curblk,left) [] PRIVATE
+{
+ If curblk=block { Set left=0 Quit 1 }
+ Set sc=0
+ Do {
+    View curblk
+    Set link=$v($Zutil(40,32,4),0,4)
+    If link=block { Set left=curblk Set sc=1 Quit }
+    Set curblk=link
+ } While (curblk)
+ Quit sc
+}
+FindGlobalLevels(dir,block,&levels,&blocktab,&curlev) [] PUBLIC
+{
+	Quit:(block<1)||(block\1'=block) $$Error^%apiOBJ(6075,block)
+	Set dirinfo=$zu(49,dir)
+	Quit:dirinfo<0 $$Error^%apiOBJ(184)
+	Quit:$p(dirinfo,",",2)=2048 $$Error^%apiOBJ(344)
+	Set $Ztrap="errFindGlobal"
+	Set curlev=0
+	Open 63:"^^"_dir
+	View block
+	Set $Ztrap=""
+	Set type=$v($Zutil(40,32,1),0,1)
+	If $zb(+type,32,1) { Close 63 Quit $$Error^%apiOBJ(330,block) }
+	If (type=9)||(type=13)||(type=17) {
+		Close 63 Set levels=0,curlev=0 Quit 1
+	}
+	Set gloname=$$GetGlobalName(1)
+	Quit:'$zname(gloname,3) $$Error^%apiOBJ(216,gloname)
+	Set rc=$$GetGlobalPointers^%SYS.DATABASE(dir,gloname,.top,.firstdata)
+	Set levels=1,blocktab(1)=top
+	Quit:(top<1)||(top\1'=top) $$Error^%apiOBJ(6075,top)
+	View top
+	Set toptype=$v($Zutil(40,32,1),0,1)
+	If (toptype=70) || (toptype=6) {
+		Set levels=2
+		Set blocktab(2)=firstdata
+	} Else {
+		Set curblk=$View(2,-5)
+		Goto:(curblk<1)||(curblk\1'=curblk) quitDatabaseError
+		View curblk
+		While ($v($Zutil(40,32,1),0,1)=2) {
+			Set levels=levels+1,blocktab(levels)=curblk
+			Set curblk=$View(2,-5)
+			Goto:(curblk<1)||(curblk\1'=curblk) quitDatabaseError
+			View curblk
+		}
+		Goto:$v($Zutil(40,32,1),0,1)'=6 quitDatabaseError
+		Set levels=levels+2,blocktab(levels-1)=curblk,blocktab(levels)=firstdata
+	}
+	For i=1:1:levels {
+		If blocktab(i)=block {
+			Set curlev=i
+			Quit
+		}
+	}
+	If '$Get(curlev) {
+		If (type=8) { Set curlev=levels }
+		ElseIf type=66 { Set curlev=1 }
+		ElseIf type'=2 { Set curlev=levels-1 }
+		ElseIf levels=4 { Set curlev=2 }
+		Else {
+			For i=2:1:levels-2 {
+				If $$checkLevel(block,blocktab(i)) {
+					Set curlev=i
+					Quit
+				}
+			}
+			Goto:'$Get(curlev) quitDatabaseError
+		}
+	}
+	Quit 1
+errFindGlobal
+	Close 63
+	Set $Ztrap=""
+	Quit:$Zerror["<NOTOPEN>" $$Error^%apiOBJ(184)
+	Quit $$Error^%apiOBJ(5002,$Zerror)
+quitDatabaseError
+	Close 63
+	Quit $$Error^%apiOBJ(329)
+}
+FindPointerBlock(dir,blk,upper,checktab) [] PUBLIC
+{
+    Set $Ztrap="errFindPointer"
+    Set sc=$$FindGlobalLevels(dir,blk,.levels,.blocktab,.curlev)
+    Quit:('sc) sc
+    If $d(checktab) {
+	For i=curlev-1:-1:1 {
+	    If $d(@checktab@(dir,blocktab(i))) {
+		Set upper=blocktab(i)
+		Goto quitStatus
+	    }
+	}
+    }
+    If curlev<2 { Set upper=0 Goto quitStatus }
+    Open 63:"^^"_dir
+    View blk
+    Set ref=$v(0,-6)
+    Set upper=blocktab(1)
+    If (curlev>2) {
+        For b=1:1:curlev-2 {
+	    If (upper<1)||(upper\1'=upper) {
+		Set sc=$$Error^%apiOBJ(6075,upper)
+		Quit
+	    }
+	    View upper
+	    For i=1:1 {
+		Set ref1=$v(i*2-1,-6)
+		Quit:ref1=""
+		If ref1]ref { Set found=1 Quit }
+	    }
+	    Set upper=$v((i-1)*2,-5)
+	}
+    }
+quitStatus
+    Close 63
+    Quit sc
+errFindPointer
+    Set $Ztrap=""
+    Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+GetNodeReferences(node,internal,printable) [] PUBLIC
+{
+ Set $Ztrap="errNodeRefs"
+ Set internal=$View(node,-6)
+ Set printable=$View(node,-5)
+ Quit 1
+errNodeRefs
+ Set $Ztrap="errloop"
+ Set len=$Length($G(internal))
+tryagain
+ Set len=len-1
+ Set printable=$Zutil(70,4,$Extract(internal,1,len),$Zutil(70,1,$View($Zutil(40,32,2),0,1)))
+ Set printable="^"_$Extract(printable,1,$Length(printable)-1)_"..."_")"
+ Quit 1
+errloop
+ If $Zerror'["<SUBSCRIPT>" Quit $$Error^%apiOBJ(5002,$Zerror)
+ Set $Zerror="" Goto tryagain
+}
+GetPrintableRef(ref,colrule) [] PUBLIC
+{
+ Set $Ztrap="errgetPrintable"
+ Set (startlen,len)=$Length(ref("internal"))
+decodeRef
+ Set ref("printable")=$Zutil(70,4,$Extract(ref("internal"),1,len),colrule)
+ If len<startlen Set ref("printable")="^"_$Extract(ref("printable"),1,$Length(ref("printable"))-1)_"..."_")"
+ Quit  
+errgetPrintable
+ Set len=len-1
+ Goto decodeRef
+}
+GetMapBlocks(dir,blocks) [] PUBLIC
+{
+ Set $Ztrap="errGetMapBlocks"
+ Set info=$zu(49,dir) i (+info)<-1 Quit $$Error^%apiOBJ(184)
+ Set curmaps=$Piece(info,",",24)
+ Set bigval=$Piece(info,",",21)
+ Quit:'bigval $$Error^%apiOBJ(344)
+ Set curblks=$Piece(info,",",22)
+ Set mapsiz=$Piece(info,",",23)
+ For map=0:1:curmaps-1 {
+    Set mapblock=$$findMapBlock^%SYS.DATABASE(map,bigval)
+    Set first=(map*mapsiz)+1,last=(map+1)*mapsiz
+    If map=(curmaps-1),curblks#mapsiz Set last=(map*mapsiz)+(curblks#mapsiz)
+    Set blocks(mapblock,1)=first,blocks(mapblock,2)=last
+ }
+ Quit 1
+errGetMapBlocks
+ Close 63
+ Set $Ztrap="" i $ze["<NOTOPEN>" q $$Error^%apiOBJ(184)
+ Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+FindMapBlock(dir,blk,mapblk) [] PUBLIC
+{
+    Quit:(blk<1)||(blk\1'=blk) $$Error^%apiOBJ(6075,blk)
+    Set $Ztrap="errFindMapBlock"
+    Set info=$zu(49,dir) i (+info)<-1 Quit $$Error^%apiOBJ(184)
+    Set bigval=$Piece(info,",",21)
+    Quit:'bigval $$Error^%apiOBJ(344)
+    Set mapsiz=$Piece(info,",",23)
+    Set curblks=$Piece(info,",",22)
+    Quit:blk>curblks $$Error^%apiOBJ(341,blk)
+    Set map=$Case(blk#mapsiz,0:(blk\mapsiz)-1,:(blk\mapsiz))
+    Set mapblk=$$findMapBlock^%SYS.DATABASE(map,bigval)
+    Quit 1
+errFindMapBlock
+    Close 63
+    Set $Ztrap=""
+    Quit:$ze["<NOTOPEN>" $$Error^%apiOBJ(184)
+    Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+AllocateBlockInMap(dir,blknum,op,mapblknum,already,newblock,commit) [] PUBLIC
+{
+ Set $Ztrap="errAllocate"
+ Set info=$zu(49,dir) i (+info)<-1 Quit $$Error^%apiOBJ(184)
+ Set blksiz=$Piece(info,",",2)
+ Set bigval=$Piece(info,",",21)
+ Quit:'bigval $$Error^%apiOBJ(344)
+ Set secondaryoff=($Zutil(40,0,51)+((blksiz\4096)*4))
+ Set rc=$$IsBlockAllocated(dir,blknum,.result,.mapblknum,.bitpos,.wordoff,.wordbits)
+ Quit:('rc) rc
+ If result=op { Set already=1 Quit 1 }
+ Set already=0
+ Open 63:"^^"_dir
+ View mapblknum
+ Set bit='op
+ Set wordbits=$Zbitset(wordbits,bitpos,bit)
+ If $Zutil(40,0,0) Set wordbits=$$convertBigEndianWord(wordbits)
+ View wordoff:0:-4:$Extract(wordbits,2,5)
+ Set free=$View($zu(40,32,10),0,4)+$Case(op,1:-1,:1)
+ View $zu(40,32,10):0:4:free
+ If (op && '$Zbitcount(wordbits)) || ('op && ($Zbitcount(wordbits)=1)) {
+    Write !,"have to change 2ndary"
+    s mapsiz=$Case(bigval,0:400,1:30720,2:62464,3:125952,4:252928,5:506880)
+	s blknum=((blknum-1)#mapsiz)+1
+    Set words2=((blknum-1)\32)\32
+    Set bit2=(((blknum-1)\32)#32)+1 ; $zbitset uses 1-based bit #s
+    Set wordoff2=secondaryoff+(words2*4)
+    Set wordbits2=$c(0)_$View(wordoff2,0,-4)
+    If $Zutil(40,0,0) Set wordbits2=$$convertBigEndianWord(wordbits2)
+    Set wordbits2=$Zbitset(wordbits2,bit2,'op)
+    If $Zutil(40,0,0) Set wordbits2=$$convertBigEndianWord(wordbits2)
+    View wordoff2:0:-4:$Extract(wordbits2,2,5)
+    If (op && '$Zbitcount(wordbits2)) || ('op && ($Zbitcount(wordbits2)=1)) {
+       Write !,"have to change master"
+       Set words1=words2\32
+       Set bit1=((((blknum-1)\32)\32)#32)+1 ; $zbitset uses 1-based bit #s
+       Set wordoff1=$Zutil(40,0,51)+(words1*4)
+       Set wordbits1=$c(0)_$View(wordoff1,0,-4)
+       If $Zutil(40,0,0) Set wordbits1=$$convertBigEndianWord(wordbits1)
+       Set wordbits1=$Zbitset(wordbits1,bit1,'op)
+       If $Zutil(40,0,0) Set wordbits1=$$convertBigEndianWord(wordbits1)
+       View wordoff1:0:-4:$Extract(wordbits1,2,5)
+    }
+ }
+ View:$Get(commit) -mapblknum
+ Set newblock=$View(0,0,-blksiz)
+ Close 63
+ Quit 1
+errAllocate
+ Close 63
+ Set $Ztrap="" i $ze["<NOTOPEN>" q $$Error^%apiOBJ(184)
+ Quit $$Error^%apiOBJ(5002,$Zerror)
+ Quit 1
+}
+ChangeFreeCount(dir,mapblk,newcount,commit,newblock) [] PUBLIC
+{
+    Set $Ztrap="errChangeFree"
+    Set info=$zu(49,dir) i (+info)<-1 Quit $$Error^%apiOBJ(184)
+    Set blksiz=$Piece(info,",",2)
+    Set bigval=$Piece(info,",",21)
+    Quit:'bigval $$Error^%apiOBJ(344)
+    Open 63:"^^"_dir
+    View mapblk
+    If $v($Zutil(40,32,1),0,1)'=$Case(bigval,0:170,:16) {
+	Close 63
+	Quit $$Error^%apiOBJ(342,blk)
+    }
+    View $zu(40,32,10):0:4:newcount
+    View:$Get(commit) -mapblk
+    Set newblock=$View(0,0,-blksiz)
+    Quit 1
+errChangeFree
+    Close 63
+    Set $Ztrap="" i $ze["<NOTOPEN>" q $$Error^%apiOBJ(184)
+    Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+IsBlockAllocated(dir,blknum,result,mapblk,bitpos,wordoff,wordbits) [] PUBLIC
+{
+    Quit:(blknum<1)||(blknum\1'=blknum) $$Error^%apiOBJ(6075,blknum)
+    Set $Ztrap="errIsBlock"
+    Set info=$zu(49,dir) i (+info)<-1 Quit $$Error^%apiOBJ(184)
+    Set blksiz=$Piece(info,",",2)
+    Set bigval=$Piece(info,",",21)
+    Quit:'bigval $$Error^%apiOBJ(344)
+    Set mapsiz=$Piece(info,",",23)
+    Set curblks=$Piece(info,",",22)
+    Quit:blknum>curblks $$Error^%apiOBJ(341,blknum)
+    Set mapdataoff=(($Zutil(40,0,51)+((blksiz\4096)*4))+((((blksiz\4096)*32)-(blksiz\4096)-1)*4))
+    Set map=(blknum-1)\mapsiz
+    Set blk=(blknum-1)#mapsiz
+    Open 63:"^^"_dir
+    Set mapblknum=$$findMapBlock^%SYS.DATABASE(map,bigval)
+    If $Data(mapblk),mapblk'=mapblknum {
+	Close 63
+	Quit $$Error^%apiOBJ(343,mapblk,blknum)
+    }
+    Set mapblk=mapblknum
+    If (mapblk<1)||(mapblk\1'=mapblk) {
+	Close 63    
+	Quit $$Error^%apiOBJ(6075,mapblk)
+    }
+    View mapblknum
+    Set word=blk\32,bitpos=blk#32,wordoff=mapdataoff+(word*4)
+    Set bitpos=bitpos+1 ; $zbitget uses 1-based bit #s
+    Set wordbits=$View(wordoff,0,-4)
+    Set wordbits=$c(0)_wordbits
+    If $Zutil(40,0,0) { Set wordbits=$$convertBigEndianWord(wordbits) }
+    Set result='$Zbitget(wordbits,bitpos)
+    Close 63
+    Quit 1
+errIsBlock
+    Close 63
+    Set $Ztrap=""
+    Quit:$ze["<NOTOPEN>" $$Error^%apiOBJ(184)
+    Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+MapOut(dir,mapblk,commit,newblock) [] PUBLIC
+{
+    Set $Ztrap="errMapOut"
+    Set sc=$$GetMapBlocks(dir,.blocks)
+    Quit:('sc) sc
+    Quit:'$d(blocks(mapblk)) $$Error^%apiOBJ(342,mapblk)
+    Set info=$zu(49,dir)
+    Set blksiz=$Piece(info,",",2)
+    Set bigval=$Piece(info,",",21)
+    Quit:'bigval $$Error^%apiOBJ(344)
+    Set mapsiz=$Piece(info,",",23)
+    Set curblks=$Piece(info,",",22)
+    Set nummap=$Piece(info,",",24)
+    Open 63:"^^"_dir
+    View mapblk
+    Set map=mapblk\mapsiz
+    If map=(nummap-1) {
+        If curblks#mapsiz {Set numbytes=(curblks#mapsiz)\8}
+	Else {Set numbytes=mapsiz\8}
+    } Else {
+        Set numbytes=mapsiz\8
+    }
+    Set mapoutstring="",$Piece(mapoutstring,$c(0),numbytes+1)=""
+    View (($Zutil(40,0,51)+((blksiz\4096)*4))+((((blksiz\4096)*32)-(blksiz\4096)-1)*4)):0:-numbytes:mapoutstring
+    Set numbytes=$Case(numbytes#32,0:0,:1)+(numbytes\32)
+    Set mapoutstring="",$Piece(mapoutstring,$c(0),numbytes+1)=""
+    View ($Zutil(40,0,51)+((blksiz\4096)*4)):0:-numbytes:mapoutstring
+    Set numbytes=$Case(numbytes#32,0:0,:1)+(numbytes\32)
+    Set mapoutstring="",$Piece(mapoutstring,$c(0),numbytes+1)=""
+    View ($Zutil(40,0,51)):0:-numbytes:mapoutstring
+    View $zu(40,32,10):0:4:0
+    View:$Get(commit) -mapblk
+    Set newblock=$View(0,0,-blksiz)
+    Close 63
+    Quit 1
+errMapOut
+    Close 63
+    Set $Ztrap=""
+    Quit:$ze["<NOTOPEN>" $$Error^%apiOBJ(184)
+    Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+convertBigEndianWord(wordbits) [] PUBLIC {
+    Set wordbitsbe="",wordbits=$Extract(wordbits,2,5)
+    For i=1:1:4 { Set wordbitsbe=wordbitsbe_$Extract(wordbits,5-i) }
+    Set wordbits=$c(0)_wordbitsbe
+    Quit wordbits
+}
+getType(type) [] Private {
+    Quit $S($zb(+type,32,1):type-32,1:type)
+}
+GetGlobalName(isbig) [] PUBLIC {
+    Quit:'isbig ""
+    Set rc=$$GetNodeReferences(0,.internal,.printable)
+    Quit:('rc) ""
+    Quit $p(internal,$c(0))
+}
+SetBlockList(blocktab,dir,dev) [] PUBLIC {
+    Set $zt="errSet"
+    Set dirinfo=$zu(49,dir)
+    If '$Piece(info,",",21) {
+        Do show("2K database format not supported",dev)
+	Quit 0
+    }
+    Set block="",quit=0
+    Open 63:"^^"_dir
+    For {
+	Set block=$o(@blocktab@(dir,block))
+	Quit:block=""
+	If (block<1)||(block\1'=block) {
+	    Do show("Not a legal block number: "_block,dev)
+	    Return 0
+	}
+	Quit:quit
+	View block
+	Set typ=$v($Zutil(40,32,1),0,1)
+	If typ'=66,typ'=70,typ'=6,typ'=2 {
+	    Kill @blocktab@(dir,block)
+	    Continue:typ'=8
+	    Set rc=$$FindPointerBlock(dir,block,.upblock,blocktab)
+	    If 'rc {
+		Return:$ze["INTERRUPT" 1
+		Set rcx=$$IsBlockAllocated(dir,block,.alloc) 
+		If alloc {
+		    Do show("Error from FindPointerBlock in "_dir,dev)
+		    Do ShowMessage(rc,dev)
+		} Else {
+		    Set $ze=""	;not an error
+		}
+	    } Else {
+		Set:upblock @blocktab@(dir,upblock)=""
+	    }
+	} ElseIf typ=6 || (typ=2) {
+	    Set rc=$$FindGlobalLevels(dir,block,.levels,.blktab,.curlev)
+	    If 'rc {
+		Return:$ze["INTERRUPT" 1
+		Set rcx=$$IsBlockAllocated(dir,block,.alloc) 
+		If alloc {
+		    Do show("Error from FindGlobalLevels in "_dir,dev)
+		    Do ShowMessage(rc,dev)
+		} Else {
+		    Set $ze=""  ;not an error
+		}
+	    } Else {
+		For i=curlev-1:-1:1 {
+		    If $d(@blocktab@(dir,blktab(i))) {
+			Kill @blocktab@(dir,block)
+			Quit
+		    }
+		}
+	    }
+	}
+	Open 63:"^^"_dir
+    }
+    Quit 1
+errSet
+    Set $zt=""
+    Do show("Unexpected error="_$ZE,dev)
+    Quit 0
+}
+DoCheckBList(blocktab,dir,dev) [] PUBLIC
+{
+    Set $zt="errDoCheck"
+    Set errmaxperglobal=1
+    Set errors=0,checked=0,quit=0
+    If dir'="" {
+	Do CheckOneDir
+	Quit 'errors
+    }
+    For {
+	Set dir=$o(@blocktab@(dir))
+	Quit:(dir=""!quit)
+	Do CheckOneDir
+    }
+    Quit 'errors
+errDoCheck
+    Set $zt=""
+    Do show("Unexpected error="_$ZE,dev)
+    Quit 0
+CheckOneDir
+    Do show("Integrity checking DB="_dir,dev)
+    Set block="",rc=1
+    For {
+	Set block=$o(@blocktab@(dir,block))
+	Quit:block=""
+	Do show("Checking Block "_block,dev)
+	Set rc=$$CheckPointerIntegrity^%SYS.DATABASE(dir,block,errmaxperglobal,1)
+	Do ShowMessage(rc,dev) 
+	If 'rc {
+	    Set errors=errors+1
+	    Do show("Error found while checking block "_block,dev)
+	    If $ze["INTERRUPT" {
+		Set quit=1
+		Quit
+	    }
+	} Else {
+	    Do show("No error found for checking block "_block,dev)
+	}
+    }
+}
+show(msg,dev) [] PRIVATE
+{
+    Try {
+	Do:dev=-1 $zu(9,"",msg,(0>0),0)
+	Use dev
+	Write !,msg
+    } Catch { Return 0 }
+    Return 1
+}

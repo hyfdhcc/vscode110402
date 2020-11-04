@@ -1,0 +1,233 @@
+ROUTINE COMMCTRL [Type=INT]
+COMMCTRL ; COMM port control. ; STC1669 09/11/09
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;
+ q
+ ;
+report(x,show) ;report (error, warning, informational, or debug) message to $P.
+ i $g(show) w !,x h 0
+ q 1
+START()
+ i '($zversion(1)=2) q
+ i $zu(67,10,29,$j) ; Set COMCTRL job type
+ i $$iCONTROL()=0 d $zu(9,"","Could not become comm port server",1 /* broadcast and log message*/,2  /* Severe error */) q
+ d INSTALL()
+ f  d
+ . s request=$$iWAIT(10) ;get request
+ . i $$report("COMMCTRL Debug Info:  "_request,.debuglog) ;debug info
+ . i request=-1001 q  ;timeout:  no work
+ . i request>-1 d iLOGIN("COM"_request_":") ;Login request
+ . i request=-1 d INSTALL q  ;perform re-install
+ . i request=-2 d iPURGE q  ;purge all
+ . i request=-3 d iPURGE h  ;exit request
+ . i request=-20 s debuglog=1 q  ;turn debug log on
+ . i request=-21 k debuglog q  ;turn debug log off
+ . i request=-22 s infolog=1 q  ;turn info log on
+ . i request=-23 k infolog q  ;turn info log off
+ . i request=-1002 d $zu(9,"","COMCTRL woke for unknown reason",1 /* broadcast and log message*/,1  /* Warning */) q  ;unknown reason
+ . i request<=(-200000) d iDISABLE(-request-200000) q
+ . i request<=(-100000) d iENABLE(-request-100000) q
+ . q
+ q
+ ;
+INSTALL() Public {
+ s ports=$zu(157,0,3)
+ f i=1:1 s x=$p(ports,",",i) q:x=""  i '$d(^CONFIG("ComPorts",x)) d
+ . s y=+$p(x,"COM",2) s y=$zu(157,2,y) i 'y d $zu(9,"","Error: "_"Could not remove com port "_x,1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN q
+ . s $p(ports,",",i)="" ;remove port from active list
+ s port="" f  s port=$o(^CONFIG("ComPorts",port)) q:port=""  d
+ . s n=+$E(port,4,99)
+ . s c=$p(^CONFIG("ComPorts",port),",",1)
+ . s b=$p(^CONFIG("ComPorts",port),",",2)
+ . s x=$$iADD(n,c,+b)
+ . i x=1 d $zu(9,"","Installed com port "_port,0,0  /* Informational message */)
+ . i x'=1 d $zu(9,"","Error: "_"Could not install com port "_port_", reason = "_x,1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+ q
+}
+ ;
+iLOGIN(port) ;(Internal) Perform remote login on a comm port.
+ n t
+ s $zt="iLOGINe" ;RJW946
+ i $$report("COMMCTRL Info:  "_"Login requested on port "_port,.infolog)
+ j DUMMYRTN^COMMCTRL:("%SYS":2:port:port):2 s t=$t
+ q
+iLOGINe	;
+ d $zu(9,"","Error: "_$ze_" creating process on"_port,1 /* broadcast and log message*/,1  /* Warning */),BACK^%ETN
+ q
+ ;
+DUMMYRTN	;
+ Q
+iPURGE() Private {
+ s ports=$zu(157,0,3)
+ f i=1:1 s x=$p(ports,",",i) q:x=""  i $$iREMOVE(+$e(x,4,99))
+ q
+}
+iCONTROL() ;become comm port server.
+ q $zu(157,5,$j)
+ ;
+iREMOVE(n) ;remove comm port n from the active comm port table.
+ q $zu(157,2,n)
+ ;
+iDISABLE(p)	PRIVATE { ;Internal function to disable a configured port.
+ s $zt="iDISABLEe"
+ s x=$zu(157,7,p)
+ I x=1 i $ZU(9,"","COM"_p_": disabled.")
+ I x'=1 i $ZU(9,"","COM"_p_": disable failed.")
+ q
+iDISABLEe	;
+ s $zt=""
+ i $zu(9,"","COMMCTRL: error disabling COM"_p_": "_$ze)
+ q
+ }
+ ;
+iENABLE(p) PRIVATE { ;Internal function to enable a previously disabled port.
+ i $$STATUS(p)'="0" q  ;status must be exactly disabled.  Use iADD to add a port.
+ s x=$g(^CONFIG("ComPorts","COM"_p_":")) i x'="" d
+ . s c=$p(x,";",1) ;parameters
+ . s b=$p(x,";",2) ;baud rate
+ . s rc=$$iADD(p,c,+b)
+ . i rc i $zu(9,"","COM"_p_": enabled.")
+ . i 'rc i $zu(9,"","COM"_p_": enable failed.")
+ q
+iENABLEe	;
+ s $zt=""
+ i $zu(9,"","COMMCTRL error enabling COM"_p_": "_$ze)
+}
+ ;
+iADD(n,control,baud) Private {
+ q $zu(157,1,n,$g(control),$g(baud))
+} 
+iWAIT(timeout) ;wait for something to do
+ q $zu(157,3,timeout)
+ ;
+iTRACEon(n)     ;Set trace flags
+ i $zu(157,6,n,1)
+ q
+ ;
+iTRACEoff(n)    ;Reset trace flags
+ i $zu(157,6,n,0)
+ q
+SENDMSG(msg) ;send a message to the comm port server.
+ q $zu(157,4,msg)
+shutdown ;Initiate com server shutdown.
+ n x
+ s x=$$SENDMSG(-3)
+ i x w !,"Shutdown failed:  reason = ",x
+ i 'x w "Shutdown succeeded."
+ q
+ ;
+purge ;Purge all com table entries.
+ n x
+ s x=$$SENDMSG(-2)
+ i x w !,"Purge failed:  reason = ",x
+ i 'x w "Purge succeeded."
+ q
+ ;
+update ;Update active table: remove deleted entries; install new entries; modify existing entries.
+ n x
+ s x=$$SENDMSG(-1)
+ i x w !,"Update failed:  reason = ",x
+ i 'x w "Update succeeded."
+ q
+ ;
+logdbg ;Tell com control process to log debug messages to cconsole.log
+ d iTRACEon(3)
+ w $$SENDMSG(-20)
+ q
+ ;
+nologdbg ;Tell com control process to stop logging debug messages to cconsole.log
+ d iTRACEoff(3)
+ w $$SENDMSG(-21)
+ q
+ ;
+loginf ;Tell com control process to log informational messages to cconsole.log
+ w $$SENDMSG(-22)
+ q
+ ;
+nologinf ;Tell com control process to stop logging informational messages to cconsole.log
+ w $$SENDMSG(-23)
+ q
+ ;
+info ;Display com control table setup and state info.
+ w !
+ w !,"configured table size = ",$zu(157,0,1)
+ w !,"entries in table = ",$zu(157,0,2)
+ w !,"ports in table = ",$zu(157,0,3)
+ w !,"controller PID = ",$zu(157,0,4)
+ w !
+ q
+PORTLIST()	;Return list of configured ports.
+ q $zu(157,0,3)
+FORMATPORT(p) PUBLIC {	;Return port formated as COMnn:
+ i '$d(p) q "" ;port must be defined
+ i p?1"COM".E s p=+$e(p,4,99)
+ i p?1"com".E s p=+$e(p,4,99)
+ i p?1n.n s p="COM"_p_":"
+ i p?1"COM"1N.N1":" q p
+ q ""
+}
+STATUS(port) PUBLIC {	;Return status of port COMnn:
+ s $zt="STATUSe"
+ i '$d(port) q "0|Not configured"
+ s p=$$FORMATPORT(port) i p="" q "0|Not configured"
+ s ports=$$PORTLIST
+ f i=1:1 s p1=$p(ports,",",i) i p1=""!(p1=p) q
+ i p1="" q "0|Not configured"
+ q $zu(157,8,+$e(p,4,99))
+STATUSe	;
+ s $zt=""
+ i $zu(9,"",$ze)
+}
+DISABLE(port) PUBLIC {	;Disable port
+ s $zt="DISABLEe"
+ i '$d(port) q "0|Not configured"
+ s rc=$$STATUS(port)
+ i rc="0" q 1 ;already disabled
+ i $e(rc,1)="0" q rc ;Not configured
+ s p=$$FORMATPORT(port)
+ i p'?1"COM"1N.N1":" q "0|Not configured"
+ s p=+$e(p,4,99)
+ s rc=$$SENDMSG(-200000-p) ;disable
+ i rc q "0|Could not send disable message to COM control process."
+ h .2
+ i '$$STATUS(port) q 1
+ h 2
+ i $$STATUS(port) q 0
+ q 1
+DISABLEe	; 
+ s $zt=""
+ i $zu(9,"",$ze)
+}
+ENABLE(port) PUBLIC {	;
+ s $ZT="ENABLEe"
+ i '$d(port) q "0|Not configured"
+ s rc=$$STATUS(port)
+ i rc="1" q 1 ;already enabled
+ i $l(rc)>1 q rc ;Not configured
+ s port=$$FORMATPORT(port)
+ i port'?1"COM"1N.N1":" q "0|Not configured"
+ s p=+$e(port,4,99)
+ s rc=$$SENDMSG(-100000-p) ;enable
+ i rc q 0
+ h .2 s x=$$STATUS(port) i x q 1
+ h 1 s x=$$STATUS(port) i x q 1
+ h 1 q $$STATUS(port)
+ENABLEe	; 
+ s $zt=""
+ i $zu(9,"",$ze)
+}

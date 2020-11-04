@@ -1,0 +1,250 @@
+ROUTINE DBRTEXT1 [Type=INT]
+DBRTEXT1 ; CONTINUATION OF DBRTEXT ;$Change: 4521965 $
+ ; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/user/dbrtext1.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;
+ ; Display text for Cache VAX restore. Store a good part of the
+ ; display text in dbrtext to compact DBREST.
+expand d entry("expand")
+ ;;Expanding # from # to # maps
+ ;;
+expand2 d entry("expand2")
+ ;;Expanding # from # MB to # MB
+ ;;
+expblk d entry("expblk")
+ ;;Expanded final map of # from # to # blocks
+ ;;
+expmap d entry("expmap")
+ ;;Expanding final map of #
+ ;;
+experr d entry("experr")
+ ;;!An error occurred during database expansion!
+ ;;
+expnoblk d entry("expnoblk")
+ ;;Warning: unable to expand final map of #
+ ;;         only # blocks are allocated in that map
+ ;;
+getdev d entry("getdev")
+ ;;(Type STOP to exit)
+ ;;Device name:  #  =>  
+GFINCRES d entry("GFINCRES")
+ ;;Failed to clear GFINCRES flag for #
+ ;;Directory will not be accessible until Cache is restarted
+ ;;
+JRNIN0 d entry("JRNIN0")
+ ;;Restoring a directory restores the globals in it only up to the
+ ;;date of the backup.  If you have been journaling, you can apply  
+ ;;journal entries to restore any changes that have been made in the
+ ;;globals since the backup was made.
+ ;;
+JRNIN1 d entry("JRNIN1")
+ ;;What journal entries do you wish to apply?
+ ;;
+ ;;     1. All entries for the directories that you restored
+ ;;     2. All entries for all directories
+ ;;     3. Selected directories and globals
+ ;;     4. No entries
+ ;;
+ ;;Apply: 1 => 
+nodevnum d entry("nodevnum")
+ ;;You specified M device number #.  M device numbers are inappropriate
+ ;;here because backup and restore do IO directly via the operating system.
+ ;;Your specification has been replaced with the name of the underlying
+ ;;IO device, "#"
+ ;;
+outerr d entry("outerr")
+ ;;!Output error on one or more contiguous blocks"
+ ;;starting with block # while writing to directory #
+ ;;
+procall d entry("procall")
+ ;;Proceed with restoring ALL directories
+quisys d entry("quisys")
+ ;;Waiting for system activity to finish...
+restdeve d entry("restdeve")
+ ;;!Input error on device # while reading directory #
+ ;;
+restlast d entry("restlast")
+ ;;Last block successfully restored was #
+ ;;
+restnone d entry("restnone")
+ ;;No blocks successfully restored for this directory
+ ;;
+restabtq d entry("restabtq")
+ ;;The rest of this directory will be skipped.  Do you want to
+ ;;continue processing this backup file?
+restabty d entry("restabty")
+ ;;[Terminating restoration from this backup file]
+ ;;
+restwont d entry("restwont")
+ ;;!Directory # will not be restored
+ ;;
+rincmpat d entry("rincmpat")
+ ;;!Target of restore # is incompatible with the input volume.
+ ;;Some blocks in the target are unavailable, either because
+ ;;       a) they are marked as BAD, or
+ ;;       b) they are located in the nonexistent portion of a partial map.
+ ;;Cannot restore to this target
+ ;;
+SKIPDIR d entry("SKIPDIR")
+ ;;If you do not continue, the restoration of this backup will be
+ ;;aborted.  If you do continue, there is a small chance that you
+ ;;will have missed a directory label block that will result in
+ ;;your missing the restore of a portion of a directory.]
+ ;;
+ ;;Continue?
+skipblks d entry("skipblks")
+ ;;Skip these blocks and continue restoring to this directory?
+skipdir d entry("skipdir")
+ ;;Skip this directory and continue restoring to other directories?
+stchk0 d entry("stchk0")
+ ;;# blocks restored in # seconds for this pass, # total restored.
+ ;;
+stchk1 d entry("stchk1")
+ ;;Finished this pass of restoring #
+ ;;
+stchk2 d entry("stchk2")
+ ;;We encountered a directory label record with a CRC error.
+ ;;Only the filesize entry is questionable.
+ ;;
+stchk3 d entry("stchk3")
+ ;;We got a read error but all the records passed crc validation.
+ ;;Maybe they're all ok.  The blocks are:
+ ;;
+stchk4 d entry("stchk4")
+ ;;Due to read errors, we skipped some blocks during the restore.
+ ;;
+stchk5 d entry("stchk5")
+ ;;Blocks after # through # in directory # were skipped.
+ ;;
+stchk6 d entry("stchk6")
+ ;;Blocks after # in # through # in directory # were skipped along
+ ;;with at least one directory label record.
+ ;;
+stchk7 d entry("stchk7")
+ ;;We encountered a block (#) with a CRC error.
+ ;;
+stchk8 d entry("stchk8")
+ ;;We encountered a block (#) with a CRC error that was bad during the original copy.
+stchk9 d entry("stchk9")
+ ;;We are skipping it because we also get a disk read error trying to read it from disk.
+ ;;
+stchk10 d entry("stchk10")
+ ;;We will restore it and also keep a copy of its former contents on disk
+ ;;so that you can decide later which version you prefer, or merge the two.
+ ;;
+stchk11 d entry("stchk11")
+ ;;Block size mismatch - the database block size from the backup is not
+ ;;the same as that in the target. Aborting restore of this directory.
+ ;;
+stchk12 d entry("stchk12")
+ ;;Problem detected in a 2kb sized file between the source and target bitmaps.
+ ;;
+stchk13 d entry("stchk13")
+ ;;Target of restore (#) is cluster mounted
+ ;;but it must be privately mounted.
+ ;;
+stchk14 d entry("stchk14")
+ ;;Couldn't mount the directory to be restored (#).
+ ;;
+stchk15 d entry("stchk15")
+ ;;We got a write error.
+ ;;
+stchk16 d entry("stchk16")
+ ;;Unhandled error. Aborting restore.
+ ;;
+stchk17 d entry("stchk17")
+ ;;***FINISHED RESTORE***
+ ;;
+stchk18 d entry("stchk18")
+ ;;The restore is aborted.
+ ;;
+stchk19 d entry("stchk19")
+ ;;Starting skip of #.
+ ;;
+stchk20 d entry("stchk20")
+ ;;     skipped # blocks in # seconds.
+ ;;
+stchk21 d entry("stchk21")
+ ;;Finished this pass of skipping #
+ ;;
+stchk22 d entry("stchk22")
+ ;;![End of volume on device # while skipping directory #].
+ ;;
+stchk23 d entry("stchk23")
+ ;;![Input error on device # while skipping directory #].
+ ;;
+stchk24 d entry("stchk24")
+ ;;We are skipping it because its contents are totally invalid.
+ ;;If we just reached the end of the current volume, this record is
+ ;;duplicated at the beginning of the next volume and you need not
+ ;;worry because no data loss will occur.
+ ;;
+title d entry("title")
+ ;;                        Cache DBREST Utility
+ ;;         Restore database directories from a backup archive
+ ;;
+volnover d entry("volnover")
+ ;;This backup volume was created by an earlier version of Cache
+ ;;
+voldisver d entry("voldisver")
+ ;;This backup volume was created by:
+ ;;   #
+ ;;
+voldis14 d entry("voldis14")
+ ;;The volume label contains:
+ ;;   Volume number      #
+ ;;   Volume backup      # # #
+voldis68 d entry("voldis68")
+ ;;   Previous backup    # # #
+voldis9e d entry("voldis9e")
+ ;;   Last FULL backup   # #
+ ;;   Description        #
+ ;;   Buffer Count       #
+voldis13 d entry("voldis13")
+ ;;   Mirror name        #
+ ;;   Failover Member    #
+voldis13b d entry("voldis13b")
+ ;;   Async Member       #
+whichfun d entry("whichfun")
+ ;;?? Type the number of the function you want
+ ;;
+zu52err d entry("zu52err")
+ ;;!zu52 error number #
+ ;;After restoring the data in #, an error occurred trying to
+ ;;attempting to change its size from # to #
+ ;;
+zu52e0 d entry("zu52e0")
+ ;;Some space might not be available between maps
+zu52e1 d entry("zu52e1")
+ ;;Failed to allocate incremental backup space because
+ ;;Incremental backup has been disabled for database" 
+zu52e2 d entry("zu52e2")
+ ;;Unable to mount database.  Database should not be used.
+ ;;
+ Q       ; END OF DBRTEXT1 main routine
+entry(fromtag) ;Scan lines starting at fromtag+1 and put in dbrtext(fromtag)
+ n break,i,line,stop,tag,text
+ s break=$c(13,10) ;Maybe not system-independent???
+ f i=1:1 d  q:stop  s dbrtext(fromtag)=$g(dbrtext(fromtag))_break_text
+ . s line=$text(@fromtag+i)
+ . s tag=$p(line,";;"),text=$p(line,";;",2)
+ . i $e(text)="!" s $e(text)=$c(7) ;Leading bang becomes bell
+ . s stop=$$isblank(line)!$$nonblank(tag)
+ q
+isblank(line) q $tr(line," ","")=""
+nonblank(line) q '$$isblank(line)

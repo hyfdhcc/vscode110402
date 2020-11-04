@@ -1,0 +1,63 @@
+ROUTINE JRNSTAT [Type=INT]
+JRNSTAT ;
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ; Display journal file, filesize, and transactions
+MAIN ;
+ NEW
+ S $ZT="ERR^JRNSTAT"
+ W !!,$ZV
+ W !,"Journal Status Utility",!
+ S FILE=$ZU(78,3),FSIZE=$$FSIZE(FILE),END=$ZU(78,4)
+ W !,"Journal File:",?20,FILE
+ W !,"Filesize:",?20,FSIZE
+ W !,"End Position: ",?20,END
+ W !!
+ R !,"Display Journal File? (Y)=> ",ANS
+ I $E(ANS)="n"!($E(ANS)="N") Q
+ D DISPLAY
+ Q
+ ;
+FSIZE(FILE)    ;
+ N X,I
+ S L=0,I=0
+ S $ZT="FSIZEERR^JRNSTAT"
+ O FILE
+ F I=1:1 U FILE R X S L=L+$L(X)
+FSIZEERR 
+ I I S I=I-2
+ C FILE
+ Q I+L
+ ;
+DISPLAY ;
+ S X=$ZU(78,5,FILE,0) ;I X<0 W !!,"Unable to open journal file" q
+ S DONE=0
+ S END=$ZU(78,4)
+ S LFA=$ZU(78,17,0) I LFA=0 W !!,"No transactions journal file" q
+ W !
+ F I=1:1 Q:LFA'<END!(DONE)  D
+ . S REF=$ZU(78,13,LFA)
+ . S TYPE=$ZU(78,8,LFA),TYPE=$S(TYPE=6:"SET",TYPE=7:"KILL",1:"")
+ . W !,I,?10,$E(TYPE),?12,REF
+ . S X=0 
+ . I I#21=0 R !!,"PRESS ANY KEY TO CONTINUE OR <ESC> TO QUIT",*X W !
+ . I X=27 S DONE=1
+ . S LFA=$ZU(78,17,LFA)
+ Q
+ ;
+ERR I $G(FILE)'="" C FILE
+ Q

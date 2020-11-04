@@ -1,0 +1,418 @@
+ROUTINE SS [Type=INT]
+SS ; System Utilities ; System Status Report ; JLC1903  8/21/15
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ n
+ Do SYS(1,"") Quit  
+1 n  Do ALL Quit  
+ALL() [] PUBLIC
+{
+ Do SYS(0,"") 
+}
+SYS(Page,Dir="",Filter="") [] PUBLIC
+{
+ s swval=$SYSTEM.Util.GetSwitch(10)
+ s SW10=+swval,SWJOB=$S('SW10:"",1:$P(swval,",",2))
+ s $zt="errtrap"
+ s:$I=$P IOMS=$System.Device.GetRightMargin()
+ D:'SW10 CURRENT(.RM)
+ S:SW10 RM=80     
+ w #
+ W !,$$CC("Cache System Status: "_$$ZT($P($H,",",2))_" "_$ZDATE($H,2,,4),RM)
+ I SW10 d
+ . W !,$$CC("*** Switch 10 Set by Process: "_$s(($zversion(1)=1):$ZH(+SWJOB),1:SWJOB)_" ***",RM)
+ ;
+ s query="SS",parm=1
+ i Filter]"" s query=$p(Filter,":"),parm=$p(Filter,":",2)
+ ;
+ Set Rset=##class(%Library.ResultSet).%New("SYS.Process:"_query)
+ Do Rset.Execute(parm)
+ Do HEADER(Rset)
+ s POP=0
+ While Rset.Next() {
+	s NameSpace=Rset.Get("Namespace")
+	i NameSpace="" s NameSpace="%SYS" 
+	i (Dir'=""),(NameSpace'=Dir) continue
+	Set Pid=Rset.Get("Process")
+	i (Page=1)&(($Y+(Pid=SWJOB))>20) If $$Prompt(Rset) s POP=1 Quit
+	Set JobType=Rset.Get("JobType")
+	w !,$J($s(($zversion(1)=1):$ZH(+Pid),1:Pid),8)_$Case(JobType,1:"*",:"")
+	s pdev=Rset.Get("Device")
+	i pdev["TCP" s pdev=$p(pdev,"|",1,3)_$s(pdev["*":"*",1:"")
+	w ?10,pdev
+	w:$x>22 ! w ?22,Rset.Get("Namespace")
+	s Routine=Rset.Get("Routine")
+	i ($e(Routine,$l(Routine)-1,$l(Routine))?1"."1N)&('(($e(Routine,1,2)="MV")&($l(Routine,".")=2))) s Routine=$e(Routine,1,$l(Routine)-2)
+	w:$x>37 ! w ?37,Routine
+	s CPU=Rset.Get("CPU")
+	w:$x>(56-$l(CPU)) ! w ?(56-$l(CPU)),CPU_","_Rset.Get("Glob")
+	w:$x>63 ! w ?63,Rset.Get("Pr")
+	s Username=Rset.Get("User")
+	s Location=Rset.Get("Location")
+	i Location=Routine s Location=""
+	w ?66
+	i Username]"" {
+		w $S($L(Username)>14:$E(Username,1,14-1)_"*",1:Username)
+	} else {
+		w $S($L(Location)>14:$E(Location,1,14-1)_"*",1:Location)
+	}
+	i SW10,Pid=SWJOB W !,"   *** Has Switch 10 Set ***"
+	i (JobType=2)||(JobType=27)||(JobType=28)||(JobType=26)||(JobType=23)||(JobType=25)||(JobType=48)||(JobType=47)||(JobType=42)||(JobType=59)||(JobType=60)!(JobType=1)||(JobType=3) {
+		s NUSR=$Get(NUSR)+1
+	} else {
+		s NSYS=$Get(NSYS)+1
+	}
+ }
+ U:$D(IOMS)&&(IOMS'=$System.Device.GetRightMargin()) $I:/MAR=IOMS 
+ w ! ;
+ i POP q 1
+ s NGLO=##Class(%SYS.System).GetGlobalCache()
+ s NGLO=$FN(NGLO,"",0)
+ S NROU=##class(%SYS.System).GetRoutineCache()
+ s NROU=$FN(NROU,"",0)
+ ;
+ W !,+$g(NUSR)_" user, "_+$g(NSYS)_" system, "
+ W NGLO_" mb global/"_NROU_" mb routine cache"
+ W ! Q 1
+errtrap ;
+ I $D(IOMS)&&(IOMS'=$System.Device.GetRightMargin()) U $I:/MAR=IOMS
+ Q 1
+}
+HEADER(Rset) {
+ W !," "_Rset.GetColumnName(1)
+ w ?10,Rset.GetColumnName(3)
+ W ?22,Rset.GetColumnName(4)
+ w ?37,Rset.GetColumnName(5)
+ w ?53,Rset.GetColumnName(6),",",Rset.GetColumnName(7)
+ w ?63,Rset.GetColumnName(8)
+ w ?66,Rset.GetColumnName(9),"/",Rset.GetColumnName(10)
+ Q
+}
+ZT(t) [] PRIVATE ; return formatted time string given 't' seconds
+{
+ S h=t\3600,m=$TR($J(t\60#60,2)," ",0),a=" am"
+ S:h>11 a=" pm",h=h-12 S:'h h=12 Q ($J(h,2)_":"_m_a) ;hh:mm am
+}
+CC(str,rm) [] PUBLIC; Center a string within 'rm' margin
+{
+ Q $J(str,$L(str)+rm\2)
+}
+ ; Copied from ^%IS
+CURRENT(RM) [] PRIVATE ; INTERNAL ENTRY TO SET PARAMETERS FOR CURRENT DEVICE
+{
+ S MSYS=$Case($zversion(1),1:"M/AV",2:"M/WNT",3:"M/UX",:"UNKNOWN") ;get platform type
+ ;
+ S E=$G(^%IS($I,1)) D VTRMCK(.E):E=""
+ S FF="#",SL=24,BS="*8",RM=80,SUB="",XY="",ZFF=$C(12),ZBS=$C(8,32,8)
+ S A=$P(E,"^",3) I A]"",$G(^%IS(0,"SUB",A))]"" DO  
+ . S SUB=A,A=^%IS(0,"SUB",SUB),FF=$P(A,"^",2),RM=+A,SL=$P(A,"^",3)
+ . S BS=$P(A,"^",4),XY=$P(A,"^",5),ZFF=$P(A,"^",8),ZBS=$P(A,"^",9)
+ . I ZFF]"" S ZFF=$$VALUE(ZFF)
+ . I ZBS]"" S ZBS=$$VALUE(ZBS)
+ I $ZU(22,0,ZFF,ZBS) ;set the new value
+ O $I:RM Q 1
+}
+VALUE(x) N X S $ZT="VALERR^"_$ZN X ("S X="_x) Q X
+VALERR Q $G(X)
+VTRMCK(E) [] PRIVATE ;Check for virtual terminal, if $I is not in %IS table.
+{
+ I $Case($zversion(1),1:"M/AV",2:"M/WNT",3:"M/UX",:"UNKNOWN")="M/UX" DO  Q 1 ;unix default terminal type
+ . ;no longer limited to /dev/tty or /dev/pt
+ . S X="TERM",E=$G(^%IS(X,1)) ;default terminal type
+ ; If the tty is not in the %IS table, it's probably a network device.
+ ; It should probably just be put in the table, but for now we will
+ ; just do what M/VX does, in case anything out there depends on this.
+ ;
+ S X="TERM" I $$UC($I)?1"VT".E,$D(^%IS("VT0:")) S X="VT0:"
+ E  I $$UC($I)?1"RTA".E,$D(^%IS("RT0:")) S X="RT0:"
+ E  I $$UC($I)?1"LTA".E,$D(^%IS("LT0:")) S X="LT0:"
+ E  I $$UC($I)?1"|TNT|".E,$D(^%IS("|TNT|")) s X="|TNT|"
+ E  I $$UC($I)?1"|TRM|".E,$D(^%IS("|TRM|")) s X="|TRM|"
+ S E=$G(^%IS(X,1)) Q 1  ;default terminal types
+}
+UC(x) q $zcvt(x,"u")
+Prompt(Rset,WID,WIDDirsave,TAB) [] PRIVATE ; ask for prompt when pagination in effect
+{
+ r !,!,"Press Q or q to quit, any other character to continue. ",ans#1:20
+ I "Qq"'[$E(ans_"X") W # d HEADER(Rset) q 0
+ q 1
+}
+ ;
+SHUTDOWN() [] PUBLIC
+{
+ S (NSYS,NJOB,NBKG,NINT,NCDS,NCSP,NODB,NOTH)=0
+ Set Rset=##class(%Library.ResultSet).%New("SYS.Process:SS")
+ Do Rset.Execute(1)
+ While Rset.Next() {
+ Set JobType=Rset.Get("JobType")
+ I (JobType=1)||(JobType=3) S NINT=NINT+1
+ E  I JobType=2 S NBKG=NBKG+1
+ E  I JobType=26 S NCDS=NCDS+1
+ E  I JobType=27 S NCSP=NCSP+1
+ E  I JobType=28 S NODB=NODB+1
+ E  S NOTH=NOTH+1
+ i '((JobType=2)||(JobType=27)||(JobType=28)||(JobType=26)||(JobType=23)||(JobType=25)||(JobType=48)||(JobType=47)||(JobType=42)||(JobType=59)||(JobType=60)!(JobType=1)||(JobType=3)) Set NSYS=$Get(NSYS)+1
+ }
+ W !,$$CC("Cache Shutdown Status: "_$$ZT($P($H,",",2))_" "_$ZDATE($H,2,,4),80)
+ W ! ;
+ ;
+ s:NINT'=0 NINT=NINT-1
+ W !,$j(NINT,8)," interactive job" W:NINT'=1 "s" W " (Telnet/Lat)"
+ W !,$j(NBKG,8)," background job" W:NBKG'=1 "s" W " (from job command)"
+ W !,$j(NCDS,8)," Cache Direct server job" W:NCDS'=1 "s"
+ W !,$j(NCSP,8)," CSP server job" W:NCSP'=1 "s"
+ W !,$j(NODB,8)," ODBC server job" W:NODB'=1 "s"
+ W !,$j(NSYS,8)," system job" W:NSYS'=1 "s"
+ W ! Q
+}
+INT() Quit $$INTold()
+OLD ;new entry point for old utility
+ N PAGES,Dir,ans S PAGES=1,Dir="" 
+ D SYSP Q
+1old G ALLold ; ALternative to ALL^%SS 
+ALLold D SYSold("") Q  ;system status, all directories
+THIS D SYSold($ZU(5)) Q  ;system status, THIS directory only
+MGR D SYSold("^^"_$ZU(12)) Q  ;system status, manager's namespace only
+INTold() N NSYS,NJOB,NUSR,NLIC,NGLO,NROU,IO  ; NGA031+
+ i ($zversion(1)=1) S IO="NL:" O IO U IO
+ i ($zversion(1)=2) S IO="//./nul" O IO U IO
+ i ($zversion(1)=3) S IO="/dev/null" O IO U IO
+ D SYSold(1) C IO Q NJOB_"^"_NSYS_"^"_NUSR_"^"_NGLO_"^"_NROU_"^"_NLIC
+ ; NGA031- 
+SYSold(Dir) ;system status for a specific directory (or all if none)
+ ;VGG195 parameter accepted now is a namespace
+  N PAGES S PAGES=0
+SYSP ;entry for pagination
+ I Dir=1 S Dir="" N MSYS,BS,FF,RM,SL,SUB,XY,JOB,SORT
+ E  N MSYS,BS,FF,RM,SL,SUB,XY,NSYS,NJOB,NUSR,NLIC,NGLO,NROU,JOB,SORT
+ N TAB,WID,J,MGR,SW10,SWJOB,pid1,pid2,POP,swval
+ s POP=0
+ n i,WIDDirsave
+ S MGR=$$Dir("^^"_$ZU(12)),Dir=$G(Dir) I Dir]"" S Dir=$$Dir(Dir)
+ s swval=$SYSTEM.Util.GetSwitch(10)
+ s SW10=+swval,SWJOB=$S('SW10:"",1:$P(swval,",",2))
+ D:'SW10 CURRENTold
+ S:SW10 RM=80     
+ D Init
+ ;
+ w #
+ W !,$$CCold("Cache System Status: "_$$ZTold($P($H,",",2))_" "_$ZDATE($H,2,,4),RM)
+ I SW10 d
+ . W !,$$CCold("*** Switch 10 Set by Process: "_$s(($zversion(1)=1):$ZH(+SWJOB),1:SWJOB)_" ***",RM)
+ W ! I Dir]"" W $$CCold("For Namespace: "_Dir,RM),!
+ ;
+ S (NSYS,NJOB)=0 ;# of SYSTEM jobs and # of jobs                  
+ n maxpid
+ d BUILDold,HEADold ; build JOB(i,j)=pid
+ s pid1="",pid2=""
+ f  s pid1=$o(JOB(pid1)) q:pid1=""  d  q:POP=1
+ . f  s pid2=$o(JOB(pid1,pid2)) q:pid2=""  d Printold(JOB(pid1,pid2)) q:POP=1
+ W ! ;
+ s NGLO=0
+ f i=0:1:5 s NGLO=NGLO+($v($ZU(40,2,135)+(i*$ZU(40,0,1)),-2,$ZU(40,0,1))*(2**(11+i))/(1024*1024))
+ s NGLO=$FN(NGLO,"",0)
+ S NROU=$V($ZU(40,2,26),-2,$ZU(40,0,1))*32767/(1024*1024)
+ s NROU=$FN(NROU,"",0)
+ S NUSR=NJOB-NSYS ;number of user processes
+ S NLIC=$$JOBS
+ ;
+ W !,NUSR_" user, "_NSYS_" system, "
+ W NGLO_" mb global/"_NROU_" mb routine cache"
+ W ! Q
+Init ;initialize some values
+ S:'RM!(RM>100) RM=80 K WID
+ S WID(1)=7,WID(2)=2,WID(3)=12
+ S WID(4)=4,WID(5)=15,WID(6)=10
+ S WID(7)=12,WID(8)=3,WID(9)=7
+ s WIDDirsave=WID(5)
+ Q
+Dir(dir) I dir=" " Q "" ;no such directory
+ i dir'?1"^^".e q dir  ; it's a defined namespace so leave it unchanged
+ n realdir s realdir=$e(dir,3,$l(dir))
+ s realdir=$zu(12,realdir)
+ q "^^"_realdir
+BUILDold ;build JOB()=job information
+ n base,i,pid
+ s base=$v($zu(40,2,47),-2,"S")
+ s maxpid=$v($zu(40,2,118),-2,4)
+ f i=1:1:maxpid-1 s pid=$View($View($ZU(40,2,47)+((i\$zu(40,0,102))*$zu(40,0,25)),-2,$zu(40,0,25))+((i#$zu(40,0,102))*$s($ZBITGET($ZVERSION(0),40):$zu(40,28,79)*2,1:4)),-2,4) s:pid JOB(i\1000,i#1000)=pid
+ Q
+BldJob(J,JOB) ;build the JOB(J) entry for one job
+ N Info,X,SYS
+ S JOB(J)="" ;always set to SOMETHING
+ D JobInfo(J,.Info) ;get job information
+ I $G(Info)="" Q  ;no information on job
+ ;
+ S Info(5)=$$Dir(Info(5)) ;'normalize' directory
+ I $G(Dir)]"",Info(5)'=Dir Q  ;not an interesting job
+ ;
+ I ($ZU(67,10,J)>3),($ZU(67,10,J)'=15) S SYS=1 Set:(Info(5)=("^^"_$Zutil(12))) Info(5)="%SYS"   ;system job
+ E  S SYS=0
+ ;
+ ;
+ S Info(11)=SYS
+ I SYS,$D(NSYS) S NSYS=NSYS+1 ;count of system jobs
+ ;
+ I '$G(SW10),Info(10)="",Info("P")]"" DO  ;possible substitute?
+ . S Info(10)=$G(^%IS(Info("P"),0)) ;location information
+ i $ZU(67,10,J)=21 S Info(10)="RCVDMN"
+ ;Use client name for ECP dmns in the info field
+ n jtype s jtype=$ZU(67,10,J) i (jtype>=32)&(jtype<=35) s Info(10)=$zu(67,12,J)
+ ;
+ ;
+ I $D(NJOB) S NJOB=NJOB+1 ;count of total jobs
+ S JOB(J)=Info F X=1:1:11,"P","D" S JOB(J,X)=Info(X)
+ ;
+ I $D(WID(5)) DO
+ . N X S X=$L(Info(5)) I X>WID(5) S WID(5)=X ;width
+ Q
+JobInfo(job,Info) ;place job information into Info()
+ N L,X,ii,pdev,odev,pm,dev,par,dir,rou,glo,pri,uic,loc K Info
+ S L=$$JobVw(job) I L="" Q  ;try twice for each job
+ S (pdev,odev)="",dev=$P(L,"^",3) F ii=1:1:$L(dev,",") DO
+ . S X=$P(dev,",",ii) 
+ . i X["TCP" d
+ . . i X["*" s X=$p($e(X,1,$l(X)-1),"|",1,4)_"*"
+ . . i X'["*" s X=$p(X,"|",1,4)
+ . I pdev="",X?.E1"*" S pdev=$E(X,1,$L(X)-1) Q
+ . ;otherwise build a list of 'other' devices, not including null device
+ . i "/dev/null,_NLA0:,//./nul"'[X S odev=odev_","_X 
+ ;
+ S Info=L,Info("P")=pdev,Info("D")=$E(odev,2,$L(odev))
+ F ii=1:1:10 S Info(ii)=$P(L,"^",ii)
+ s Info(13)=$tr($p(L,"^",14),$c(0),"^")
+ s Info(5)=Info(13)
+ Q
+NOJOB S $ZT="",Info=" " F ii=1:1:10 S Info(ii)=" " ;ghost!
+ S Info("D")="",Info("P")="******"
+ Q
+JobVw(J) S $ZT="JobE1" 
+ i SW10,($ZU(67,0,J)'=2) D NOJOB Q "" 
+ Q $V(-1,J)
+JobE1 S $ZT="JobE2" Q $V(-1,J)
+JobE2 S $ZT="" D NOJOB Q ""
+HEADold ;print header, first compute tab columns
+ N ii
+ s WID(5)=WIDDirsave
+ K TAB F ii=1:1:10 S TAB(ii)=$G(TAB(ii-1))+$G(WID(ii-1))
+ W !,"Process",?TAB(3),"Devices",?TAB(4)," KB"
+ W ?TAB(5),"Namespace",?TAB(6),"Routine"
+ W ?TAB(7),"  CPU,Glob",?TAB(8),"Pri"
+ W ?TAB(10),"Location"
+ Q
+Printold(job,hasjob) ;print one job's information
+ N pm,dev,pdev,odev,par,dir,pro,glo,pri,uic,loc,ii,X,info
+ i '$g(hasjob) n JOB D BldJob(job,.JOB) ;build the JOB(J) entry 
+ Q:'$D(JOB(job,2))
+ S pm=JOB(job,2),pdev=JOB(job,"P"),odev=JOB(job,"D")
+ S par=JOB(job,4),dir=JOB(job,5),pro=JOB(job,6)
+ S glo=JOB(job,7),pri=JOB(job,8),uic=JOB(job,9)
+ S loc=JOB(job,10)
+ i pdev["TCP" s pdev=$p(pdev,"|",1,3)_$s(pdev["*":"*",1:"")
+ ;
+ I $L(pdev)'<WID(3) S odev=pdev_$E(",",odev]"")_odev,pdev="-"
+ ;
+ i (PAGES=1)&(($Y+$L(odev,",")+(job=SWJOB))>20) d promptold q:POP=1
+ W !,$J($s(($zversion(1)=1):$ZH(+job),1:job),6)_pm,?TAB(3),pdev_" "
+ W ?TAB(4),$J(par,3)
+ W ?TAB(5),dir_" "
+ I pro]"" W:$X>TAB(6) ! W ?TAB(6),pro_" "
+ W ?TAB(7)+5-$L($P(glo,",")),glo_" "
+ W ?TAB(8),$J(pri,2)_" "
+ W ?TAB(10) S ii=RM-$X W $S($L(loc)>ii:$E(loc,1,ii-1)_"*",1:loc)
+ ;
+ I odev]"" F ii=1:1:$L(odev,",") S dev=$P(odev,",",ii) I dev]"" DO
+ . W !?TAB(3),dev
+ I SW10,job=SWJOB W !?TAB(3),"*** Has Switch 10 Set ***"
+ Q
+ZTold(t) ; return formatted time string given 't' seconds
+ N h,m,a S h=t\3600,m=$TR($J(t\60#60,2)," ",0),a=" am"
+ S:h>11 a=" pm",h=h-12 S:'h h=12 Q ($J(h,2)_":"_m_a) ;hh:mm am
+CCold(str,rm) ; Center a string within 'rm' margin
+ Q $J(str,$L(str)+rm\2)
+ ; Copied from ^%IS
+CURRENTold ; INTERNAL ENTRY TO SET PARAMETERS FOR CURRENT DEVICE
+ N (MSYS,FF,SL,BS,RM,SUB,XY)
+ S MSYS=$$MSYS() ;get platform type
+ ;
+SFF N ZFF,ZBS,%A,%E S %E=$G(^%IS($I,1)) D VTRMCKold:%E=""
+ S FF="#",SL=24,BS="*8",RM=80,SUB="",XY="",ZFF=$C(12),ZBS=$C(8,32,8)
+ S %A=$P(%E,"^",3) I %A]"",$G(^%IS(0,"SUB",%A))]"" DO  ;
+ . S SUB=%A,%A=^%IS(0,"SUB",SUB),FF=$P(%A,"^",2),RM=+%A,SL=$P(%A,"^",3)
+ . S BS=$P(%A,"^",4),XY=$P(%A,"^",5),ZFF=$P(%A,"^",8),ZBS=$P(%A,"^",9)
+ . I ZFF]"" S ZFF=$$VALUEold(ZFF)
+ . I ZBS]"" S ZBS=$$VALUEold(ZBS)
+ I $ZU(22,0,ZFF,ZBS) ;set the new value
+ O $I:RM Q
+VALUEold(x) N X S $ZT="VALERRold^"_$ZN X ("S X="_x) Q X
+VALERRold Q $G(X)
+VTRMCKold ;Check for virtual terminal, if $I is not in %IS table.
+ I $$MSYS()="M/UX" DO  Q  ;unix default terminal type
+ . ;no longer limited to /dev/tty or /dev/pt
+ . S %X="TERM",%E=$G(^%IS(%X,1)) ;default terminal type
+ ; If the tty is not in the %IS table, it's probably a network device.
+ ; It should probably just be put in the table, but for now we will
+ ; just do what M/VX does, in case anything out there depends on this.
+ ;
+ S %X="TERM" I $$UC($I)?1"VT".E,$D(^%IS("VT0:")) S %X="VT0:"
+ E  I $$UC($I)?1"RTA".E,$D(^%IS("RT0:")) S %X="RT0:"
+ E  I $$UC($I)?1"LTA".E,$D(^%IS("LT0:")) S %X="LT0:"
+ E  I $$UC($I)?1"|TNT|".E,$D(^%IS("|TNT|")) s %X="|TNT|"
+ E  I $$UC($I)?1"|TRM|".E,$D(^%IS("|TRM|")) s %X="|TRM|"
+ S %E=$G(^%IS(%X,1)) Q  ;default terminal types
+MSYS() Q $Case($zversion(1),1:"M/AV",2:"M/WNT",3:"M/UX",:"UNKNOWN") ;what platform is this?
+JOBS() ;
+ q $$nlicenses^%SYS.LICENSE
+promptold ; ask for prompt when pagination in effect
+ r !,!,"Press Q or q to quit, any other character to continue. ",ans#1:20
+ I "Qq"'[$E(ans_"X") W # d HEADold q
+ s POP=1
+ q
+GFLS ; Display Free License Slot info
+ N gflsflg S gflsflg=0 g gflscom
+gfls() ; Return Free License Slot info
+ N gflsflg S gflsflg=1
+gflscom w !,"Please use Control Panel for license display"
+ q
+ ;
+SHUTDOWNold N MSYS,NSYS,NBKG,NINT,NCDS,NCSP,NODB,NJOB,NOTH,pid1,pid2,maxpid,JOB,J
+ S (NSYS,NJOB,NBKG,NINT,NCDS,NCSP,NODB,NOTH)=0
+ d BUILDold ; build JOB(i,j)=pid
+ s pid1="",pid2=""
+ f  s pid1=$o(JOB(pid1)) q:pid1=""  d
+ . f  s pid2=$o(JOB(pid1,pid2)) q:pid2=""  d Count(JOB(pid1,pid2))
+ w #
+ W !,$$CCold("Cache Shutdown Status: "_$$ZTold($P($H,",",2))_" "_$ZDATE($H,2,,4),80)
+ W ! ;
+ ;
+ W !,$j(NINT,8)," interactive job" W:NINT'=1 "s" W " (Telnet/Lat)"
+ W !,$j(NBKG,8)," background job" W:NBKG'=1 "s" W " (from job command)"
+ W !,$j(NCDS,8)," Cache Direct server job" W:NCDS'=1 "s"
+ W !,$j(NCSP,8)," CSP server job" W:NCSP'=1 "s"
+ W !,$j(NODB,8)," ODBC server job" W:NODB'=1 "s"
+ W !,$j(NSYS,8)," system job" W:NSYS'=1 "s"
+ W ! Q
+ ;
+Count(pid) N jtype S jtype=$ZU(67,10,pid)
+ I (jtype=1)!(jtype=3) Q:pid=$j  S NINT=NINT+1
+ E  I jtype=2 S NBKG=NBKG+1
+ E  I jtype=26 S NCDS=NCDS+1
+ E  I jtype=27 S NCSP=NCSP+1
+ E  I jtype=28 S NODB=NODB+1
+ E  I jtype'=15 S NSYS=NSYS+1
+ E  S NOTH=NOTH+1
+ Q

@@ -1,0 +1,185 @@
+ROUTINE lookup2
+lookup2 ; display an ordered list of matches
+ ; user can enter full or partial name, full or partial phone, or a valid date
+ ; pick from a list of matches, and edit their choice
+ 
+main ; main section
+ ; start looping
+ for  {
+     do getsubmit() ; let user submit a string for lookup
+     quit:(submit = "")
+    }
+ quit
+ 
+getsubmit() [submit] ; ask user what to search for, and take appropriate action    
+ {
+ set id = 0
+ read !, "Lookup: ", submit
+ quit:(submit = "")  ; user entered nothing
+ ; figure out what user entered
+ if (submit = "?") { ; display help
+     do help()
+     quit
+    }
+ elseif submit?3n.1(1"-"3n.1(1"-"4n)) { ; allow full or partial phone numbers
+     write "...finding phone number"
+     do phone( .id ) quit:(id = 0)
+     do display(id, "table") ; display the chosen person
+    }
+ elseif $$NameFormat( .submit )?1u.l.1(1","1u.l) { ; verify the name
+     write "...finding name"
+     do name( .id ) quit:(id = 0)
+     do display(id, "table") ; display the chosen person
+    }
+ elseif $$validDOB^datent( submit ) { ; use validDOB^datent to verify the DOB
+     write "...finding birthday"
+     do dob( .id ) quit:(id = 0)
+     do display(id, "table") ; display the chosen person
+     quit
+    }
+ else { ; else it's an error
+     write ", name, or phone" }
+ }
+ 
+help()  ; display different types of lookups
+ {
+ write !, "You can enter:"
+ write !?10, "* full name: Smith,John", !?10, "* last name: Smith"
+ write !?10, "* partial name: Sm,J or Smith,J or Sm,John"
+ write !?10, "* phone number with area code: 617-621-0600"
+ write !?10, "* partial phone numbers: 617 or 617-621"
+ write !?10, "* date of birth", !!
+ }
+ 
+dob(id) [submit, list]  ; perform dob lookup
+ ; no partial matches
+ ; if user picks a name from the list, id is returned to the caller
+ {
+ kill list
+ set intdob = $$validDOB^datent( submit ) ; convert dob
+ ; is the date of birth in the index?
+ if '$data( ^PersonI("DOB", intdob) ) { ; determine if there are any matches
+     write "...no matches"
+     quit
+    }
+ set loopid = ""
+ ; loop through ids, and number them
+ for count = 1 : 1 {
+     set loopid = $order( ^PersonI("DOB", intdob, loopid) )
+     quit:(loopid = "")
+     set list( count ) = loopid
+     write !, count, ") "
+     do display(loopid, "line")
+    }
+ do select( .id )
+ }
+ 
+phone(id) [submit, list]  ; perform phone lookup
+ ; if user picks a name from the list, id is returned to the caller
+ {
+ kill list
+ set count = 0 ; assume no matches
+ set origph = submit
+ set:( origph?3n ) origph = origph _ "-" ; change to a string instead of a number
+ ; origph may be an exact match, so find preceding phone
+ set ph = $order( ^PersonI("Phone", origph), -1)
+ /* loop through phone numbers, and number them, quit as soon as phone doesn't match original
+    loopid holds the ONE id per phone number */
+ for count = 1 : 1 {
+     set ph = $order( ^PersonI("Phone", ph), 1, loopid)
+     quit:( $extract(ph, 1, $length(origph)) '= origph )
+     set list( count ) = loopid
+     write !, count, ") "
+     do display(loopid, "line")
+    }
+ if '$data( list ) { ; were there matches?
+     write "...no matches"
+     quit
+    }
+ do select( .id )
+ }
+ 
+name(id) [submit, list]  ; perform name lookup
+ ; if user picks a name from the list, id is returned to the caller
+ {
+ kill list
+ set count = 0 ; assume no matches
+ set origln = $piece(submit, ",", 1), origfn = $piece(submit, ",", 2)
+ ; origln may be an exact match, so find preceding last name
+ set ln = $order( ^PersonI("Name", origln), -1)
+ ; loop through last names, quit as soon as last name doesn't match original
+ for  {
+     set ln = $order( ^PersonI("Name", ln))
+     quit:($extract(ln, 1, $length(origln)) '= origln)
+     ; origfn may be "". Otherwise, it may be an exact match, so find preceding first name
+     if (origfn = "") { set fn = "" }
+     else { set fn = $order( ^PersonI("Name", ln, origfn), -1) }
+     ; loop through first names, quit as soon as first name doesn't match original, or is ""
+     for  {
+         set fn = $order( ^PersonI("Name", ln, fn))
+         quit:(($extract(fn, 1, $length(origfn)) '= origfn) || (fn = ""))
+         set loopid = ""
+         ; loop through ids
+         for  {
+             set loopid = $order( ^PersonI("Name", ln, fn, loopid))
+             quit:( loopid = "" )
+             set count = count + 1
+             set list( count ) = loopid
+             write !, count, ") "
+             do display(loopid, "line")
+            }
+        }
+     }
+ if '$data( list ) { ; were there matches?
+     write "...no matches"
+     quit
+    }
+ do select( .id )
+ }
+ 
+select(id) [list]  ; choose from the displayed items, and set up id
+ ; id is 0 if no choice is made, id is >0 when user makes a choice
+ {
+ for  {
+     read !!, "Choose by number: ", choice
+     quit:(choice = "")
+     set id = $get( list( choice ), 0)
+     quit:(id '= 0)  ; valid choice
+     write !,"Invalid choice"
+    }
+ }
+ 
+display(id, style)       [name, phone, intdob]  ; given an id, get data and write it
+ {
+ set rec = ^PersonD( id )
+ set name = $piece(rec, "^", 1)
+ set phone = $piece(rec, "^", 2)
+ set intdob = $piece(rec, "^", 3)
+ if style = "line" {
+     write name, ?20, phone, ?35, $zdate(intdob, 2) }
+ else {
+     write # ; clear screen
+     do display^datent()
+    }
+ }
+ 
+NameFormat(name) ; change user's entry into proper name format
+ ; SMITH,JOHN and smith,john -> Smith,John
+ ; if name is passed-by-reference, it will be changed
+ {
+ set ln = $piece(name, ",", 1), fn = $piece(name, ",", 2)
+ set ln = $$up($extract(ln)) _ $$low($extract(ln, 2, $length(ln)))
+ if fn = "" { ; return last name only
+     set name = ln
+     quit name
+    }
+ set fn = $$up($extract(fn)) _ $$low($extract(fn, 2, $length(fn)))
+ set name=ln _ "," _ fn ; return full name
+ quit name
+ }
+ 
+up(text)  ; translate text to upper case
+ { quit $translate(text, "abcdefghijklmnopqrstuvwxyz", "ABCDEFGHIJKLMNOPQRSTUVWXYZ") }
+ 
+low(text)  ; translate text to lower case
+ { quit $translate(text, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz") }

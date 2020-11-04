@@ -1,0 +1,123 @@
+ROUTINE JRNRESTCHELP [Type=INT]
+JRNRESTCHELP ;Cluster Restore Journal HELP ON MENUS, ;JVM003 01/10/2006
+ ;
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;
+SetupmainHelp() ; Help for Main SetUp Menu in JRNRESTC
+ n rc,resp
+ w !!,"Information on the Main menu options:"
+ w !,"Option 1: Selecting this option will allow the user to specify a different start"
+ w !,?5,"and stop combination other than what is currently displayed."
+ w !,"Option 2: This option allows the user to Identify a list of journals to be"
+ w !,?5,"dejournaled other than the list contained in the default CACHEJRN.LOG."
+ w !,?5,"It also allows the user to Redirect the journal files in a specific list if"
+ w !,?5,"those files are not in their original locations, as specified in the"
+ w !,?5,"cluster journal log. And finally option 4 allows the user to Create a new"
+ w !,?5,"log and specify the journal files that will be used by selecting the"
+ w !,?5,"journal file directories.  The user will be allowed to edit this list."
+ r !!,"Press <enter> continue",resp
+ q 0
+ ;
+SetdejrnstartHelp() ; Help for Start SetUp Menu in JRNRESTC
+ n rc,resp
+ w !!,"Information on the Start menu options:"
+ w !,"Option 1: System will search for cluster session ID's in the journal files for"
+ w !,?5,"cluster session begin. It displays choices of where to start journal"
+ w !,?5,"restore from which the user can select."
+ w !,"Option 2: User is prompted to enter a journal file and its directory path.  The"
+ w !,?5,"system will check to see if the file is in the CACHEJRN.LOG. If it is, the"
+ w !,?5,"user will be prompted to enter a specific journal marker offset from which"
+ w !,?5,"to start the restore."
+ w !,"Option 3: If a Backup restore has occurred (stored in ^SYS(""RESTORE"")) the"
+ w !,?5,"system will display the backup and the specific journal marker from which"
+ w !,?5,"it will start the restore.  Selection of this option then will only confirm"
+ w !,?5,"the user's choice of what the system has displayed."
+ w !,"Option 5: Will display the date and time of the most recent backup and give the"
+ w !,?5,"user the option to select that backup.  If the user wants a different"
+ w !,?5,"backup, then the selection of which backup to start the restore can be"
+ w !,?5,"made by date or by a list of available backups."
+ r !!,"Press <enter> continue",resp
+ q 0 
+ ;
+SetdejrnstopHelp() ; Help for Stop SetUp Menu in JRNRESTC
+ n rc,resp
+ w !!,"Information on the Stop menu options:"
+ w !,"Option 1: System will search for cluster session ID's in the journal files for"
+ w !,?5,"cluster session end. It displays choices of where to stop journal restore"
+ w !,?5,"from which the user can select."
+ w !,"Option 2: Two options can occur.  First if the user is using the CACHEJRN.LOG"
+ w !,?5,"and the Restore Stop is at the current journal location in that log then"
+ w !,?5,"no changes can be made.  In this case the option will read"
+ w !,?5,"""At current journal location"".  If the user has selected a different"
+ w !,?5,"list of journal files and is not using CACHEJRN.LOG,then the option will"
+ w !,?5,"read ""At the end of <directory path /log file name>""."
+ w !,"Option 3: User is prompted to enter a journal file and its directory path.  The"
+ w !,?5,"system will check to see if the file is in the CACHEJRN.LOG. If it is, the"
+ w !,?5,"user will be prompted to enter a specific journal marker offset from which"
+ w !,?5,"to stop the restore"
+ w !,"Option 4: Will display the date and time of the most recent backup and give the"
+ w !,?5,"user the option to select that backup.  If the user wants a different"
+ w !,?5,"backup, then the selection of which backup to stop the restore can be"
+ w !,?5,"made by date or by a list of available backups."
+ r !!,"Press <enter> continue",resp
+ q 0 
+ ;
+SetjrnlogHelp() ; Help for SetUp Journal Log Menu in JRNRESTC
+ n rc,resp
+ w !!,"Information on the Setup - Journal File Info menu options:"
+ w !,"[I]dentify Option: User is prompted to enter a cluster journal log that is"
+ w !,?5,"different than the one displayed.  Note: a full directory reference"
+ w !,?5,"may be necessary. If the CACHEJRNMARK.LOG is not in that directory"
+ w !,?5,"and therefore cannot be found, then Start/End restore at backup will"
+ w !,?5,"not be available."
+ w !,?5,"A warning will also be issued that if a different cluster journal log from"
+ w !,?5,"the current one is specified, the user may need to re-enter information on"
+ w !,?5,"journal redirection, restore, and range."
+ w !,"[R]edirect Option: This option is only available if a different journal log is"
+ w !,?5,"being used other than the one originally displayed in the [I]dentify"
+ w !,?5,"Option.  If selected the user will be asked for the original location"
+ w !,?5,"of journal files and the new location of journal files."
+ w !,"[C]reate Option: The user will be asked to create a new cluster journal log or"
+ w !,?5,"write over an existing one.  The user must then specify how many cluster"
+ w !,?5,"members are involved. The next section is critical.  The user must enter"
+ w !,?5,"a Prefix (if used) and directory location(s) for each cluster member."
+ w !,?5,"There is no way to back out during this section other than an abort of the"
+ w !,?5,"dejournal process. It is important that the user use caution."
+ w !,?5,"At the end of this process, all of the journal files will be displayed and"
+ w !,?5,"the cluster member to which they belong. It is at this time that the user"
+ w !,?5,"may EXCLUDE some of the journal files from the list by selecting their"
+ w !,?5,"number(s). This section will accept an undo or quit without requiring an"
+ w !,?5,"abort of the dejournal process."
+ w !,?5,"The create option also issues the warning that if a different cluster"
+ w !,?5,"journal log from the current one is specified, the user may need to"
+ w !,?5,"re-enter information on journal redirection, restore, and range."
+ r !!,"Press <enter> continue",resp
+ q 0 
+ ;
+SetJrnlogRedirHelp ;
+ w !
+ w !,"	Redirecting journal files is necessary if journal files to be"
+ w !,"	restored are not in their original locations, as specified in"
+ w !,"	the cluster journal log. To redirect journal files, provide"
+ w !,"	their original and current locations when prompted. You may"
+ w !,"	give a full or partial directory name as an original location."
+ w !,"	If a partial name is given, then all original locations whose"
+ w !,"	*leading* characters match the partial name will have the"
+ w !,"	partial name replaced with the new location you specified."
+ w !
+ q

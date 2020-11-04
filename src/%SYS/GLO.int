@@ -1,0 +1,25 @@
+ROUTINE %SYS.GLO [Type=INT]
+%SYSGLO ; Save global directory information ; LRS1009 12/12/05
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+    Do ^|"%SYS"|%GLO Quit
+BEG   Do BEG^|"%SYS"|%GLO Quit
+INT   Do INT^|"%SYS"|%GLO Quit
+isrem() Quit $$isrem^|"%SYS"|%GLO
+RemJob Do RemJob^|"%SYS"|%GLO Quit
+defdir(ns) PUBLIC { Quit $$defdir^|"%SYS"|%GLO(ns) }
+defsys(ns) PUBLIC { Quit $$defsys^|"%SYS"|%GLO(ns) }

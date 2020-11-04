@@ -1,0 +1,23 @@
+ROUTINE nameloop
+nameloop ; loop through the name index
+ set ln = ""
+ For  {
+     set ln = $order( ^PersonI("Name", ln) )
+     quit:(ln = "")
+     set fn = ""
+     for  {
+         set fn = $order( ^PersonI("Name", ln, fn) )
+         quit:(fn = "")
+         set id = ""
+         for  {
+             set id = $order( ^PersonI("Name", ln, fn, id) )
+             quit:(id = "")
+             set rec = ^PersonD(id)
+             write !, $piece( rec, "^", 1), ?15, $piece( rec, "^", 2),
+                 ?30, $zdate( $piece( rec, "^", 3) )
+            }
+        }
+    }
+ 
+ 
+ 

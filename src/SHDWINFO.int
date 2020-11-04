@@ -1,0 +1,343 @@
+ROUTINE SHDWINFO [Type=INT]
+SHDWINFO ;exchange information between source and shadow ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/shdwinfo.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+	Quit
+Request1(host,port,req,ans,timeout) 
+	Set $zt="RequestErr"
+	Set cliver="SHADOW.5"
+	Set dev="|TCP|"_port 
+	s ssl="",shdwid="" f  {
+		s shdwid=$o(^SYS("shdwcli",shdwid)) q:shdwid=""
+		i host=$g(^SYS("shdwcli",shdwid,"ip")),port=$g(^SYS("shdwcli",shdwid,"port")) {
+			Set ssl=$g(^SYS("shdwcli",$P(shdwid,"~"),"ssl"))
+			q
+		}
+	}
+	Goto connect
+Request(shdw,req,ans,timeout) 
+	Set $zt="RequestErr"
+	Set cliver="SHADOW.5"
+	Set host=$g(^SYS("shdwcli",shdw,"ip"))
+	Set port=$g(^SYS("shdwcli",shdw,"port"))
+	Set ssl=$g(^SYS("shdwcli",$p(shdw,"~"),"ssl"))
+	Set dev="|TCP|"_port
+connect 
+	Close dev
+	If ssl="" {
+		Open dev:(host:port:/KEEPALIVE=30):5
+	} else {
+		Open dev:(host:port:/SSL=ssl:/KEEPALIVE=30):5
+	}
+	Quit:'$T $$Error^%apiOBJ(1070,host,port)  
+	use dev 
+	Do SetIO^%SYS.NLS("UnicodeLittle") ;packet mode + UnicodeLittle
+	Use dev 
+	Write cliver,!
+	Use dev 
+	Read srcver:10 
+	If '$T {
+		Close dev
+		Quit $$Error^%apiOBJ(1071)
+	}
+	If srcver=0 {
+		Close dev
+		Quit $$Error^%apiOBJ(1022,host)
+	} 
+	If srcver=-1 {
+		Close dev
+		Quit $$Error^%apiOBJ(1023,cliver)
+	}
+	Set okver=$$OKVersion^SHDWUTIL(srcver) 
+	If okver'=srcver {
+		Close dev
+		Quit $$Error^%apiOBJ(1020,srcver,cliver)
+	}
+	Set srcSendQueryRaw=($p(okver,".",2)>4)
+	Use dev
+	Write -16,!
+	d GetAnswer(dev)
+	Set status=1
+	If $g(req)'="" {
+		Use dev
+		Write req,! 
+		Set status=$$GetAnswer(dev,ans)
+		If 'status {
+			Close dev
+			Quit status
+		}
+	}
+	Set i=""
+	For {
+		Set i=$o(req(i),1,req)
+		Quit:i=""
+		Set ans=ans(i)
+		Use dev
+		Write req,! 
+		Set status=$$GetAnswer(dev,ans,1) ;'ans' passed by indirection
+		Quit:'status
+	}
+	Close dev
+	Quit status
+RequestErr 
+	Set $zt=""
+	Close dev 
+	If $ze'["<OPEN>",$ze'["<READ>",$ze'["<WRITE>" Do BACK^%ETN
+	Quit $$Error^%apiOBJ(5002,$ze)
+GetAnswer(dev,ans,indirection)
+	Set $zt="GetAnswerErr"
+	Use dev
+	read status:10 
+	Quit:'$T $$Error^%apiOBJ(1071)
+	If status'>0 {
+		If $g(indirection) Set @ans=status
+		Quit status
+	}
+	If +status=1 {
+		If $g(indirection) Set @ans=$p(status,",",2,$l(status)) 
+		Else  Set ans=$p(status,",",2,$l(status))
+		Quit status
+	}
+	Set end=$p(status,",",2)
+	Set:end="" end=0
+	Use dev
+	Write status,! 
+	Use dev:(::"s") 
+	If $g(srcSendQueryRaw) u dev i $$SetIO^%SYS.NLS("RAW") 
+	For {
+		Use dev
+		Read cnt#1
+		Quit:'cnt
+		Read len#4
+		Set len=$zla(len)
+		Read msg#len
+		Set @ans@($i(@ans))=msg
+	}
+	If $g(srcSendQueryRaw) u dev i $$SetIO^%SYS.NLS("UnicodeLittle") 
+	Use dev:(::"-s") 
+	Quit status
+GetAnswerErr 
+	Set $zt="" 
+	Do:$ze'["<READ>" BACK^%ETN 
+	Ztrap $ze
+SendAnswer(dev,msg) 
+	Set $zt="SendAnswerErr"
+	Use dev:(::"-s")
+	Do SetIO^%SYS.NLS("UnicodeLittle") 
+	If +msg=-1 Do SendDatabaseList(dev) Quit
+	If +msg=-2 Do SendDatabaseInfo(dev,$p(msg,",",2)) Quit
+	If +msg=-3 Do SendClusterJournalMarkers(dev) Quit
+	If +msg=-4 Do SendClusterJournalFiles(dev) Quit
+	If +msg=-5 Do SendJournalMarkers(dev,$p(msg,",",2)) Quit
+	If +msg=-6 Do SendJournalFiles(dev) Quit
+	If +msg=-7 Do SendJournalVersion(dev) Quit
+	If +msg=-8 Do SendClusterSequence(dev,$p(msg,",",2,3)) Quit
+	If +msg=-9 Do SendIsClusterSystem(dev) Quit
+	If +msg=-14 Do SendMirrorJournalFiles(dev,$p(msg,",",2)) Quit
+	If +msg=-15 Do SendMirrorDatabaseInfo(dev,$p(msg,",",2)) Quit
+	If +msg=-10 Do SendFeatures(dev) Quit
+	If +msg=-11 Do SendJournalGUID(dev,$p(msg,",",2)) Quit
+	If +msg=-12 Do SendChallenge(dev,$p(msg,",",2)) Quit
+	If +msg=-16 Set IsRequestSession=1 Use dev Write 1,! Quit
+	Use dev 
+	Write "0,Unknown Request <",msg,">",!
+	Quit
+SendAnswerErr 
+	Set $zt=""
+	If $ze'["<WRITE>" {
+		Do BACK^%ETN
+		ztrap $ze
+	}
+	Quit
+SendDatabaseList(dev) 
+	Use dev 
+	Write 2,! 
+	New x
+	Use dev
+	Read x
+	Use dev:(::"s") 
+	If $g(SendQueryRaw) u dev i $$SetIO^%SYS.NLS("RAW") 
+	Set db="" 
+	For {
+		Set db=$o(^SYS("UCI",db))
+		Quit:db=""
+		Set dbinfo=$zu(49,db)
+		If +dbinfo'<0,+dbinfo<15999 {
+			Set info=$lb($zu(12,db),$zu(49,db),$zu(49,db,1))
+			Use dev
+			Write 4,$zlc($l(info)),info
+		}
+	}
+	Use dev
+	Write 0,!
+	If $g(SendQueryRaw) u dev i $$SetIO^%SYS.NLS("UnicodeLittle") 
+	Use dev:(::"-s") 
+	Quit
+SendDatabaseInfo(dev,db) 
+	Set dbinfo=$zu(49,db)
+	Use dev 
+	Write 1,",",$lb($zu(12,db),$p(dbinfo,",",1,24),$zu(49,db,1),$zb(+$p(dbinfo,",",17),$zu(40,8,28),1)),! 
+	Quit
+SendJournalGUID(dev,jrnf) 
+	Use dev 
+	Write 1,",",$p($zu(78,22,jrnf,7),",",2),!
+	Quit
+SendChallenge(dev,ShadowID) 
+	Use dev 
+	If $g(ShadowID)="" {
+		Write 1,!
+	} Else {
+		Write 1,",",$g(^SYS("shdwcli",ShadowID,"fingerprint")),!
+	}
+	Quit
+SendJournalVersion(dev) ;
+	Use dev
+	Write 1,",",$zu(40,0,28),!
+	Quit
+SendIsClusterSystem(dev) ;
+	Use dev
+	Set isMirrorMember=$System.Mirror.IsMember()
+	If isMirrorMember=1 { ;a failover member (1^<mirror name>^isPrimary)
+	  Set isMirrorMember="1^"_$o(^MIRROR(""))_"^"_$System.Mirror.IsPrimary()
+	}
+	Write 1,",",$s($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0):''$zu(59,0),1:0),",",isMirrorMember,!
+	Quit
+SendMirrorJournalFiles(dev,mirname) ;
+	Quit $$SendQueryResult(dev,"SYS.Mirror","JournalList",mirname)
+SendMirrorDatabaseInfo(dev,db) 
+	Use dev 
+	If '$zb(+$p($zu(49,db),",",17),$zu(40,8,28),1) Write 1,! Quit  ;not a mirrored database
+	s mibinfo=$SYSTEM.Mirror.DBGetInfoByName(0,db)
+	s mirname=$p(mibinfo,"^",8)
+	s mdbname=$p(mibinfo,"^",2)
+	s mdbguid=$p(mibinfo,"^",6)
+	Write 1,",",mirname,":",mdbname,":",mdbguid,! 
+	Quit
+SendFeatures(dev) ;
+	Use dev
+	Write 1,",",$$Features^SHDWUTIL(),!
+	Quit
+SendClusterSequence(dev,jrnloc) ;
+	new jrnf,chan,cst,seq,curcst,curseq
+	Set $zt="SendClusterSequenceErr"
+	Set jrnf=$p(jrnloc,",",2)
+	Set chan=$zu(78,5,jrnf,0)
+	If chan<0 {
+		Use dev
+		Write $$Error^%apiOBJ(1100,jrnf),!
+		Quit
+	}
+	Do $zu(78,6,chan)
+	New cst0
+	Set cst0=$ZU(78,30,0)
+	Set cst=$zdt($zu(78,30,1),3) 
+	Set addr=+jrnloc
+	Set:'addr addr=$zu(78,17,0)
+	If addr>0 {
+		For {
+			Set seq=$zu(78,11,addr)
+			Quit:seq>0
+			Set addr=$zu(78,17,addr)
+			Quit:addr'>0
+		}
+	}
+	Do $zu(78,7,chan)
+	Set chan=-1
+	If $g(seq)'>0 {
+		Set curcst=$ZU(78,30,0)
+		If 'curcst ztrap "CST"
+		Set curseq=$zu(78,41,1)
+		Set rs=##class(%Library.ResultSet).%New("%SYS.Journal.File:ClusterList")
+		Set rc=rs.Execute(jrnf,1)
+		If 'rc {
+			Use dev
+			Write rc,!
+			Quit
+		}
+		for {
+			If 'rs.Next() {
+				Set cst=$zdt($zdth(curcst,-2),3)
+				Set cst0=curcst
+				Set seq=curseq
+				Quit
+			}
+			Set cst=rs.Data("Cluster Start Time")
+			Set seq=rs.Data("First Sequence") 
+			Set cst0=rs.Data("Cluster Start Time UTC")
+			Quit:seq>0
+		}
+	}
+	use dev
+	Write 1,",",cst,",",seq,",",cst0,!
+	Quit
+SendClusterSequenceErr
+	Set $zt=""
+	If $g(chan)]"",chan'<0 {
+		Do $zu(78,7,chan)
+	}
+	Use dev
+	Write $$Error^%apiOBJ(5002,$ze)
+	Do BACK^%ETN
+	Quit
+SendClusterJournalMarkers(dev) ;
+	Quit $$SendQueryResult(dev,"SYS.Cluster","JournalMarkers")
+SendClusterJournalFiles(dev) ;
+	Quit $$SendQueryResult(dev,"%SYS.Journal.File","ClusterList")
+SendJournalMarkers(dev,jrnf,addr) ;
+	Quit $$SendQueryResult(dev,"%SYS.Journal.Marker","MarkerList",jrnf)
+SendJournalFiles(dev) ;
+	Quit $$SendQueryResult(dev,"%SYS.Journal.File","ByTimeReverseOrder")
+SendQueryResult(dev,class,query,P1) ;
+	New q,row,end
+	Set $zt="SendErr"
+	If $d(P1) {
+		Set rc=$zobjclassmethod(class,query_"Execute",.q,.P1)
+	} else {
+		Set rc=$zobjclassmethod(class,query_"Execute",.q)
+	}
+	If 'rc {
+		Use dev
+		Write rc,!
+		Quit rc
+	}
+	Use dev
+	Write 2,!
+	Use dev 
+	Read rc 
+	Use dev:(::"s")
+	If $g(SendQueryRaw) u dev i $$SetIO^%SYS.NLS("RAW") 
+	For {
+		Set rc=$zobjclassmethod(class,query_"Fetch",.q,.row,.end)
+		Quit:'rc
+		Quit:end
+		Use dev
+		Write 4,$zlc($l(row)),row,!
+	}
+	Use dev
+	Write 0,!
+	If $g(SendQueryRaw) u dev i $$SetIO^%SYS.NLS("UnicodeLittle") 
+	Use dev:(::"-s") 
+	Do $zobjclassmethod(class,query_"Close",.q)
+	Quit rc
+SendErr
+	Set $zt=""
+	Do BACK^%ETN
+	Quit "-1,"_$ze
+VersionHasFeature(ver,feature)
+	Quit 1

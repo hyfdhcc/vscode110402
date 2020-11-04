@@ -1,0 +1,95 @@
+ROUTINE BLKCHANG [Type=INT]
+BLKCHANG ;Octal block edit.  FLH ; LFT1320 11/01/04
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;
+ S $ZT="EXIT^"_$ZN,$ZE=""
+ n DIRNAM,blksiz,dirinfo,BLK,LOC,DEND,EDIT,DEC,NEW,OLD,max,POP,%A,mtemp1,GD
+ D ASK^%SYS.FILE Q:DIRNAM=""  S $ZE="" O 63:"^^"_DIRNAM
+ if $zbitget($zversion(0),21) {
+    n blksiz,dirinfo
+    s dirinfo=$zu(49,DIRNAM)
+    if dirinfo<0 {u 0 w !,"Directory ",DIRNAM," is not mounted" q  }
+    else {
+       s blksiz=$p(dirinfo,",",2)
+    }
+ } else {
+    s blksiz=2048
+ }
+ s max=blksiz-2
+BLOCK R !,"Block: ",BLK,! G EXIT:BLK=""
+ I BLK["?" W ! DO  W ! G BLOCK
+ . W !?4,"Enter a block number to examine; this should be a number"
+ . W !?4,"between 1 and "_DEND_"."
+ I BLK<1 W *7," no negative block numbers, please.",! G BLOCK
+ I BLK>DEND W *7,"  block number too large.",! G BLOCK
+ S EDIT=0
+ V BLK
+LOC R !,"Location: ",LOC S LOC=$$UC(LOC) G END:LOC=""
+ I LOC["?" W ! DO  W ! G LOC
+ . W !?4,"Enter a location within this block to examine/change."
+ . W !?4,"Enter a location either as a decimal number (with a"
+ . W !?4,"trailing '.'), or as a hexadecimal number.  Valid location"
+ . W !?4,"values are even numbers between 0 and "_max_" inclusive."
+ ;
+ I LOC["." S DEC=LOC,LOC=$$Hex(+LOC) ;DEC is decimal, LOC is hex
+ E  S DEC=$$Dec(LOC) ;convert hex to dec
+ ;
+ I DEC="" W " invalid number" G LOC ;not a good hex number
+ I LOC="" W " invalid number" G LOC ;not a good dec number
+ ;
+ I DEC#2 W " ???  even locations only, please" G LOC
+ I LOC<0 W " ???  no negative locations" G LOC
+ I DEC>max W " ???  maximum location is "_max G LOC
+ W ?20,LOC,?26,"/" S OLD=$V(DEC,0,2) W $$Hex(OLD),?38,"("_OLD_".)"
+ R ?50," => ",NEW S NEW=$$UC(NEW) G LOC:NEW=""
+ ;
+ I NEW["?" W ! DO  W ! G LOC
+ . W !?4,"Enter a new value for this location.  Enter as either a"
+ . W !?4,"decimal number (with a trailing '.'), or as a hexidecimal"
+ . W !?4,"number.  Valid values are in the range 0 to 65535 inclusive"
+ ;
+ I NEW'["." S NEW=$$Dec(NEW) I 1  ;convert to dec
+ E  S NEW=$$Dec($$Hex(+NEW)) ;convert to hex + back -- make sure!
+ ;
+ I NEW="" W "  invalid value" G LOC ;not a good hex/dec number
+ I NEW<0 W "  negative numbers are not allowed" G LOC
+ I NEW>65535 W "  value too large" G LOC
+ ;
+ V DEC:0:2:NEW W " *set" S EDIT=1 G LOC
+END I 'EDIT W !,"(no changes to this block)",! G BLOCK
+ I $$YN("Write block to disk","N")'="Y" W "  Not written.",! G BLOCK
+ I BLK'=0 V -BLK W "  Written.",! G BLOCK
+ W " ??? non-positive block number???",! G BLOCK
+EXIT S $ZT="" C 63 I $ZE]"" W !,$ZE
+ Q
+Hex(x) ;return hex value of 'x'
+ I (x="")!(x'?1.N) Q "" ;not a valid decimal
+ N b,z S b=x,z="" F  S z=$E("0123456789ABCDEF",b#16+1)_z,b=b\16 Q:'b
+ Q z
+Dec(x) ;return the decimal value of hex 'x'
+ S x=$TR(x,"abcdef","ABCDEF") ;make sure it is uppercase hex digits
+ I (x="")!($TR(x,"ABCDEF")'?.N) Q "" ;not a valid hex
+ N b,z,f,c S z="",b=x F  S c=$E(b),b=$E(b,2,$L(b)) Q:c=""  DO  Q:'f
+ . S f=$F("0123456789ABCDEF",c) I f S z=z*16+(f-2#16)
+ Q z
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R
+UC(x) q $zcvt(x,"u")

@@ -1,0 +1,49 @@
+ROUTINE NETDATA [Type=INT]
+NETDATA ;compile ^dsclient into ^NET (like STUCNFG) ;CFL1332 06/01/05
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ q
+NetDirectorySets(Config,Computer,Alias) Public {
+ s ^NET(2,Config,"CO",Computer,"NA",Alias)=""
+}
+NetServers(Config,Device,Computer,Address,Port,Index,ReqVersion,DefVersion,Peer,Mir) Public {
+ s ^NET(2,Config,"CO",Computer,"AC")="P"
+ s numservers=^NET(2,Config,"DV",Device,"TO",0)+1
+ s ^NET(2,Config,"DV",Device,"TO",0)=numservers ; Add this server
+ s ^NET(2,Config,"DV",Device,"TO",numservers,"CP")=Computer
+ s ^NET(2,Config,"DV",Device,"TO",numservers,"DEFVERSION")=$s($d(DefVersion):DefVersion,1:0)
+ s ^NET(2,Config,"DV",Device,"TO",numservers,"NOTPEER")=$s($d(Peer):Peer,1:0)
+ s ^NET(2,Config,"DV",Device,"TO",numservers,"PA")="P"
+ s ^NET(2,Config,"DV",Device,"TO",numservers,"RE")=Address
+ s ^NET(2,Config,"DV",Device,"TO",numservers,"REQVERSION")=$s($d(ReqVersion):ReqVersion,1:0)
+ s ^NET(2,Config,"DV",Device,"TO",numservers,"RP")=Port
+ s ^NET(2,Config,"DV",Device,"TO",numservers,"MIR")=$s($d(Mir):Mir,1:0)
+}
+NetPorts(Config,Device,Type,Addr,Decnet,Port) Public {
+ s ^NET(2,Config,"DV",Device,"BPS")=Port
+ s ^NET(2,Config,"DV",Device,"DV")=Device
+ s ^NET(2,Config,"DV",Device,"EA")=Addr
+ s ^NET(2,Config,"DV",Device,"NON")=Decnet
+ s ^NET(2,Config,"DV",Device,"TO",0)=+$g(^NET(2,Config,"DV",Device,"TO",0))        
+ s ^NET(2,Config,"DV",Device,"TY")=Type
+}
+Configuration(Config,Desc) Public {
+ s:'$d(Desc) Desc=Config_" Configuration"
+ s ^NET(2,Config,"DES")=Desc
+ s ^NET(2,Config,"DCR")=$p($h,",",1)
+ s ^NET(2,Config,"DED")=$p($h,",",1)
+}

@@ -1,0 +1,227 @@
+ROUTINE JRNCLUREST2 [Type=INT]
+JRNCLUREST2 ;Cluster Restore Journal from a File continued ;JFP069 10/4/00
+ ;
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ ; BITWISE.INC, DPB139 07/09/93
+ ;
+ ; This is a continuation of JRNCLUREST and contains (mostly) the code
+ ; to handle journal files from times the system was not part of a
+ ; cluster. nonclurestore is invoked by the main restore loop in
+ ; JRNCLUREST.
+ ;
+nonclurestore ;
+ ; This routine is called in the restore loop before we start
+ ; to restore the journal files for a given cluster "timestamp".
+ n id,index,syscnt,filecnt,filelist,restlist,restcnt,origlist
+ n tstamp,line,ok,i,resp,header
+ ;
+ ; Check to see if there's anything to do and if so, build a list
+ ; of the journal files that are candidates for restoration. When we
+ ; find a journal file from outside of the cluster we scan it to
+ ; see if it includes any of the databases being restored before we
+ ; "count" it
+ s syscnt=0,filecnt=0
+ f id=0:1:numclu d
+ . s index=$O(clumember(id,"files","")) q:index=""
+ . i '$P(clumember(id,"files",index),"^",9) d
+ . . s ok=0  ; ok gets set if we find one journal file for this system
+ . . f  d  q:index=""  q:$P(clumember(id,"files",index),"^",9)
+ . . . i $$testjrn(id,index) d  ; need to restore this journal
+ . . . . s ok=1  ; we found something for this system to restore
+ . . . . s filecnt=filecnt+1,filelist(filecnt)=id_"^"_index
+ . . . s index=$O(clumember(id,"files",index))
+ . . i ok s syscnt=syscnt+1,index(syscnt)=id
+ ;
+ q:'syscnt  ; nothing to do
+ ; If we only have journal files from one cluster member, and if that
+ ; cluster member was part of the next cluster (or there is no next
+ ; cluster) then we know we should restore these journal files now.
+ ; This is a special case but it is probably very common so we deal
+ ; with it because we can avoid asking the user what to do.
+ ;
+ s id=index(1)
+ s tstamp=$O(clumstart(""))  ; next cluster mstart time
+ i syscnt=1 d  q:ok
+ . i tstamp'="",'$D(clumstart(tstamp,id)) s ok=0 q
+ . s ok=1  ; we restored these files so we're done
+ . f i=1:1:filecnt d
+ . . s index=$P(filelist(i),"^",2) 
+ . . d restoreone^JRNRESTB(id,index)
+ ;
+ ; We don't know what to do so display the information we have and
+ ; ask the user what to do.
+ ;
+ merge origlist=filelist  ; make a copy of this for later
+ k restlist
+restart ;
+ i $D(restlist) k restlist,filelist merge filelist=origlist 
+ s restcnt=0
+ ;
+ w !,"There are a set of ",filecnt," journal files from ",syscnt
+ w !,"cluster member(s) and it isn't clear whether to restore them"
+ w !,"now or later. You will be given the option to restore all, some"
+ w !,"or none of these files at this time. Any files not restored now"
+ w !,"will be retained and this dialogue will be repeated after the next"
+ w !,"set of cluster files are restored. All of the journal files "
+ w !,"displayed have data from the clustered databases being restored."
+ i syscnt>1 d
+ . w !,"Since there are journal files from multiple systems that could"
+ . w !,"potentially be restored, if you choose to restore files from "
+ . w !,"more than one system at this time you must specify the order "
+ . w !,"that they should be restored in."
+ w !
+ d displist("filelist")
+ r !,"Restore (A)ll, (S)ome or (N)one of these files now? ",resp
+ i "ASNasn"'[$E(resp_"X") f  d  q:"ASNasn"[$E(resp_"X")
+ . w !,"...invalid response - ",resp
+ . r !,"Restore (A)ll, (S)ome or (N)one of these files now? ",resp
+ q:"Nn"[$E(resp)
+ i "Aa"[$E(resp)&(syscnt=1) d
+ . s restcnt=filecnt
+ . merge restlist=filelist
+ . k filelist
+ i "Ss"[resp!(syscnt>1) d
+ . w !,"Specify by 'File #' which files you want to restore"
+ . i syscnt>1 w !,"     in the order you want them restored"
+ . f  d  q:"RrDd"[$E(resp_"X")!(restcnt=filecnt)
+ . . r !,"File # or (r)estart/(d)one/(s)how selections? ",resp
+ . . q:"RrDd"[$E(resp_"X")
+ . . i "Ss"[$E(resp_"X") d  q
+ . . . i $D(restlist) w !!,"Current selections" d displist("restlist")
+ . . . w !!,"Remaining choices" d displist("filelist")
+ . . i +resp'=resp w !,"Invalid response: ",resp q
+ . . i '$D(filelist(resp)) w !,"Already selected file #",resp q
+ . . s restcnt=restcnt+1
+ . . i syscnt=1 s restlist(resp)=filelist(resp)  ; maintain orig order
+ . . e  s restlist(restcnt)=filelist(resp)
+ . . k filelist(resp)
+ i "Rr"[$E(resp_"X") g restart
+ i 'restcnt q  ; nothing to restore at this time
+ w !!,"You have selected the following files to be restored in the"
+ w !,"     following order:"
+ d displist("restlist")
+ i $d(filelist) d
+ . w !!,"And the following files will retained for next time"
+ . d displist("filelist")
+ ; 
+ ; Check to see that if one file from an mstart was selected that
+ ; all files from that mstart were also selected. If not, warn the
+ ; user because they really may want to do this because a directory
+ ; may have been privately mounted to multiple systems, one of which
+ ; might be part of the subsequent cluster (eg. we need to delay the
+ ; restoration of part of the journal files until after the next set
+ ; of clustered files).
+ ;
+ ; We do this by going through the journal files not being
+ ; restored and wherever there is a gap in the journal files, we checking
+ ; whether the preceeding journal file was from the same mstart or not
+ ;
+ s header=0
+ i $D(filelist) s i="" f  s i=$O(filelist(i)) q:i=""   d
+ . q:$D(filelist(i-1))!'$D(origlist(i-1))
+ . s id=filelist(i),index=$P(id,"^",2),id=+id
+ . q:id'=+origlist(i-1)  ; prior journal is from a different system
+ . s jrnfile=$P(clumember(id,"files",index),"^",2)
+ . q:jrnfile=""  ; no prior journal file
+ . s jrnfile=$case($ZBITGET($ZVERSION(0),46),0:$case($f(jrnfile,";"),0:$e(jrnfile,*-8-$l($p(jrnfile,".",$l(jrnfile,"."))),*),:$e(jrnfile,*-8-$l($p(jrnfile,".",$l(jrnfile,"."))),$f(jrnfile,";")-2)),:jrnfile)
+ . s index=$P(origlist(i-1),"^",2)  ; short name of prior journal file
+ . i jrnfile'=index d
+ . . i 'header d
+ . . . s header=1
+ . . . w !,"It appears that your selection of journal files to restore"
+ . . . w !,"now does not include all of the files from one or more of"
+ . . . w !,"the mstarts. This may be unintentional as normally if one"
+ . . . w !,"journal file from a given mstart is being restored, all"
+ . . . w !,"of them probably should be restored as a set."
+ . . . w !,"Following are the pairs of files:"
+ . . . w !,"     Cluster Member   To be restored      Being skipped"
+ . . . w !,"     --------------   --------------      -------------"
+ . . w !,"           ",$J(id,2),"         ",index,"        ",jrnfile
+ . w !
+ i $$YN("Is this correct")="N" w !,"Restarting selection",!! g restart
+ ;
+ ; Ok, restore the files
+ ;
+ s i="" f  s i=$O(restlist(i)) q:i=""  d
+ . s id=restlist(i),index=$P(id,"^",2),id=+id 
+ . d restoreone^JRNRESTB(id,index)       
+ q
+ ;        
+testjrn(id,index) ;
+ ; Open the journal for clumember(id,"files",index) and examine the
+ ; list of directories to see if any of them are being restored. This
+ ; is used when we encounter a journal file from a point in time where
+ ; the system was not part of a cluster to determine if we can ignore
+ ; the file or not.
+ ;    Returns:   1 - journal file contains databases to be restored
+ ;               0 - journal does not contain databases to be restored
+ ;                   and clumember(id,"files",index) has been removed.
+ ;
+ n chan,n,restflg,i,d,line
+ ;
+ s line=clumember(id,"files",index)
+ q:'$P(line,"^",6) 0 ; if last addr is 0, file is empty
+ s chan=$zu(78,5,$P(line,"^",1),0)
+ i chan=-1 d openerr^JRNCLUREST q 0  ; don't restore if error
+ s n=$zu(78,6,chan)
+ s restflg=0
+ ; run through all the databases in this journal and see if any
+ ; are part of this restore
+ f i=0:1 s d=$ZU(78,31,i) q:d=""  i $D(clujrn(d)) s restflg=1 q
+ s n=$zu(78,7,chan),chan=-1
+ i 'restflg k clumember(id,"files",index)  ; no dirs to restore in here
+ q restflg  ; 0 = don't restore, 1 = restore
+ ;
+displist(list) ;
+ ;
+ ; Displays the contents of one of the lists (restlist or filelist)
+ ; of journal files 
+ ;
+ n i,id,index,line,fname,jrntime
+ w !,"                                           "
+ w "Date/Time for      Date/Time for"
+ w !,"File #  CluMem   JrnFile                   "
+ w "First Record       Last Record"
+ w !
+ w "------  ------   -----------------------   " 
+ w "----------------   ----------------"
+ s i=""
+ f  s i=$O(@list@(i)) q:i=""  d
+ . s id=@list@(i),index=$P(id,"^",2),id=+id
+ . s line=clumember(id,"files",index)
+ . w !,"  ",$J(i,2),"     ",$J(id,2),"      "
+ . s fname=$P(line,"^")
+ . i ($zversion(1)=1) s x=$F(fname,";") s:x fname=$E(fname,1,x-2) ; trim off version #
+ . s fname=$E(fname,$L(fname)-22,$L(fname))
+ . i $L(fname)<23 s fname=fname_$E("                      ",$L(fname),99)
+ . w fname,"   "
+ . s jrntime=$P(line,"^",5)
+ . w $ZDATE(jrntime)," ",$ZTIME($P(jrntime,",",2),4),"   "
+ . s jrntime=$P(line,"^",8)
+ . w $ZDATE(jrntime)," ",$ZTIME($P(jrntime,",",2),4)
+ i tstamp'="" d
+ . w !,"The timestamp for when the cluster was next started is:"
+ . w !,"        ",$ZDATE(tstamp)," ",$ZTIME($P(tstamp,",",2),4)
+ q
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R

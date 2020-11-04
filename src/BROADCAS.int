@@ -1,0 +1,116 @@
+ROUTINE BROADCAS [Type=INT]
+BROADCAS ;Message to possibly busy terminals. ; JLC1903 8/21/15
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ i ($zversion(1)=2) g PIDBCAST
+ ;HYY016+: decide how to broadcast
+ R !,"Broadcasting via (T)erminal Device or (P)rocess ID?",MESS#1,!
+ Q:MESS=""!("TPtp"'[MESS)
+ I "Pp"[MESS D PIDBCAST Q  
+ ;HYY016-: below we broadcast via terminal device
+ N MESS,TERM,TLIST,TT,I,%D
+ W !,"Send a message to other terminals"
+MESSAGE R !!,"Message => ",MESS Q:MESS=""
+ S MESS=$C(7,13,10)_"***"_MESS_"***"_$C(13,10)
+ ;
+ K TLIST D GETRM,BRDCAS:$D(TLIST) G MESSAGE
+GETRM R !,"Terminal => ",TERM Q:TERM=""
+ i ($zversion(1)=3) I TERM["?" W !,"Enter a terminal name such as '/dev/tty02'." G GETRM
+ ; If terminal is a numeric mnemonic change to device. RWR014.
+ I TERM?1N.N S TERM=$P($G(^%IS(TERM,1)),"^")  ; get actual device.
+ E  i ($zversion(1)=3) S:$E(TERM)'="/" TERM="/"_TERM
+ I TERM="" w !,"Bad or undefined device mnemonic" G GETRM
+ I $P($G(^%IS(TERM,1)),"^",2)="TRM" S TLIST(TERM)="" G GETRM
+ I $D(^%IS(TERM)) W !,"Device ",TERM," is not a terminal" G GETRM
+ W *7,"  device '"_TERM_"' is not in the %IS tables."
+ I $$YN("Use device '"_TERM_"' anyway","N")="Y" S TLIST(TERM)=""
+ G GETRM
+BRDCAS S TT="" F  S TT=$O(TLIST(TT)) Q:TT=""  S %D=$ZU(9,TT,MESS) DO:%D>1
+ . D INT^%DX W !,$$LJ(TT,10)_" Broadcast error #"_%X
+ Q
+LJ(x,n) Q ($E(x_$J("",n),1,n)_$E(x,n+1,$L(x))) ;left justify text to n chars
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R
+PIDBCAST ;HYY016: broadcast via process IDs (only label added) 
+ N
+ W !,"Send a message to other users"
+MESSAG2 R !!,"Message => ",MESS Q:MESS=""  ;HYY016: only label changed
+GETPID R !,"Process ID (*=ALL) => ",PID Q:PID=""
+ I PID["?" D ALL^SS G GETPID
+ I PID="*" S RESULT=$$ALL^BROADCAS(MESS,0) G MESSAG2 ;HYY016
+ S PID=+PID I PID=0 w !,"Invalid process ID, please re-enter" g GETPID
+ W $$PID^BROADCAS(PID,MESS)
+ G GETPID
+ ;#endif   ;YJH001 ;HYY016: moved to right before PIDBCAST
+PID(PID,MESS) 
+ N (PID,MESS)
+ S MESS=$C(7,13,10)_"***"_MESS_"***"_$C(13,10)
+ S $ZT="PIDE"
+ I PID=+$J q " Cannot broadcast to yourself"
+ I $P($V(-1,PID),"^",10)'="" q " Cannot broadcast to a system job" 
+ ; $P($V(-1,+PID),"^",16) (aka. pjbstat) = high,low
+ ; where the bit 7 of high means jobs started via M (application mode)
+ ; and bit 0 of low means jobs started in programmer mode
+ ; we broadcast to either jobs
+ S jbstat=$P($V(-1,+PID),"^",16)
+ I +jbstat\128#2!($P(jbstat,",",2)#2) D  Q MSG
+ . I $ZU(94,+PID,MESS,2) S MSG=" Message sent"
+ . E  S MSG=" Message NOT sent"
+ q " Can only send to a user's foreground process"
+PIDE  
+ Q " No such job"
+ALL(MESS,QUIET) 
+ N (MESS,QUIET)
+ S MESS=$C(7,13,10)_"***"_MESS_"***"_$C(13,10)
+ S $ZT="ALLE"
+ S BASE=$v($zu(40,2,47),-2,"S")
+ S MAXPID=$v($zu(40,2,118),-2,4)
+ S NOSEND=""
+ I 'QUIET W !,"Message sent to: "
+ F I=1:1:MAXPID S PID=$View($View($ZU(40,2,47)+((I\$zu(40,0,102))*$zu(40,0,25)),-2,$zu(40,0,25))+((I#$zu(40,0,102))*$s($ZBITGET($ZVERSION(0),40):$zu(40,28,79)*2,1:4)),-2,4) I PID D
+ . Q:PID=+$J
+ . D GETINFO
+ . Q:JOBINFO=""
+ . Q:$P(JOBINFO,"^",10)'=""
+ . S jbstat=$P($V(-1,+PID),"^",16)
+ . Q:'(+jbstat\128#2!($P(jbstat,",",2)#2))
+ . S RESULT=$ZU(94,+PID,MESS,2)
+ . Q:QUIET
+ . I $X>72 w !
+ . I RESULT W PID_" "
+ . E  s NOSEND=NOSEND_PID_" " 
+ I NOSEND'="" W !,"Mesage NOT sent to: "_NOSEND
+ Q 1
+ALLE  
+ Q 1
+GETINFO s $ZT="GETINFOE"
+ s JOBINFO=$v(-1,PID)
+ q
+GETINFOE s JOBINFO=""
+ q      
+SHUT ;
+ s MSG="System shutting down, please log off"
+ s x=$zu(12)
+ w !!,"Broadcasting shutdown message to all terminals"
+ o x_"BRD.LOG"::2 i $t u x_"BRD.LOG" r MSG c x_"BRD.LOG"
+ u 0
+ s x=$$ALL(MSG,0)
+ h 3
+ q

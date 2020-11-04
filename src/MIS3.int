@@ -1,0 +1,51 @@
+ROUTINE MIS3 [Type=INT]
+MIS3 ;(?,PK) ADD/EDIT SECURITY CODES ; 10 Dec 92  5:43 PM
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+A W !,"SECURITY CODES ARE USED BY THE %IS & SEC UTILITIES TO SPECIFY SIGNON AND",!
+ W "SECURITY CHARACTERISTICS FOR EACH TERMINAL.  THIS UTILITY IS USED TO ADD NEW",!
+ W "NEW SECURITY CODES AND EDIT EXISTING ONES.",!
+ W "ALL PARTITION SIZES ARE IN K BYTES WITH INCREMENTS OF .5K",!,"SPECIFY 0 TO SELECT THE DEFAULT SIZE.",!!
+B W !
+C R !,"SECURITY CODE: ",CODE Q:CODE=""  S AUTO="",PAC="" I $D(^%IS(0,"SEC",CODE)) S AUTO=^(CODE),PAC=^(CODE,0)
+ E  W "  REGISTER NEW CODE? NO=>" R X I X'?1"Y".E W ! G C
+ W ! I AUTO]"" W "AUTOMATIC SIGNON TO ROUTINE: ",$P(AUTO,"_",2),"  IN DIRECTORY: ",^SYS("UCI",+AUTO) W:$P(AUTO,"_",3) "  IN PARTITION SIZE: ",+$P(AUTO,"_",3) W !
+ I  R "DO YOU WANT TO CHANGE IT? NO=> ",A,! I A?1"Y".E S AUTO=""
+ I AUTO="" R "DO YOU WANT AUTOMATIC SIGNON? NO=> ",X,! I X?1"Y".E D AUTO
+ S ^%IS(0,"SEC",CODE)=AUTO I AUTO]"" S ^(CODE,0)="" W ! G C
+D W "PROGRAMMER ACCESS CODE (TYPE CODE, 'NONE', OR '*' FOR STANDARD DEFAULT CODE)",!
+ W "CODE: ",$S(PAC]"":PAC,1:"NONE"),"=> " R X I X]"" S PAC=$S(X="NONE":"",1:X)
+ S ^%IS(0,"SEC",CODE,0)=PAC W !,"NOW SPECIFY THE DIRECTORIES THAT CAN BE ACCESSED,",!,"& THE ROUTINES THAT CAN BE STARTED UNDER EACH DIRECTORY",!
+NEXUCI D UCI S X="" W ! S J=0 K Y G B:'U,ADD:'$D(^%IS(0,"SEC",CODE,U)) S X=^(U) G ADD:$P(X,"_",1)=""
+ W "CURRENTLY ALLOWED ROUTINES:",! F J=1:1 S Y(J)=$P(X,"_",J) Q:Y(J)=""  W J,")",?4,$P(Y(J),":",1) W:$P(Y(J),":",2) ?20," SIZE: ",$P(Y(J),":",2)/2 W !
+N1 R "DELETE ROUTINE #: ",A,! I A K Y(A) G N1
+ADD W "ADD " D RT I R]"" S J=J+1,Y(J)=R_":"_SIZE G ADD
+ S X="",A=-1 F I=1:1 S A=$N(Y(A)) Q:A<0  I Y(A)]"" S X=X_Y(A)_"_"
+ S ^%IS(0,"SEC",CODE,U)=X
+ W ! G NEXUCI
+ ;
+AUTO D UCI Q:'U  W ! D RT Q:R=""  S AUTO=U_"_"_R_"_"_SIZE Q
+UCI S U=0 R "DIRECTORY NAME: ",A Q:A=""
+ F U=1:1:^SYS("UCI") G U1:^SYS("UCI",U)=A
+ S U=0 W " ???",! G UCI
+U1 Q
+RT R "ROUTINE: ",R I R="" W ! Q
+ I R'["^" S R="^"_R
+ I R'?.AN1"^"1AN.AN,R'?.AN1"^%".AN,R'?1"%".AN1"^"1AN.AN,R'?1"%".AN1"^%".AN W " ???",! G RT
+A2 R "    PARTITION SIZE IN K BYTES (.5K INCREMENTS): ",SIZE I SIZE S SIZE=SIZE*2
+ I SIZE'?.N!(SIZE>32) W " ???" G A2
+ W ! Q

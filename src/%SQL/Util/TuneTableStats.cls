@@ -1,0 +1,17 @@
+Class %SQL.Util.TuneTableStats Extends (%XML.Adaptor, %Library.RegisteredObject) [ System = 4 ]
+{
+
+/// Name of the schema
+Property schema As %String(MAXLEN = 127);
+
+/// Name of the base table
+Property table As %String(MAXLEN = 127);
+
+/// EXTENTSIZE base table
+Property extentsize As %Library.BigInt;
+
+Relationship fields As %SQL.Util.TuneTableStatsFields [ Cardinality = children, Inverse = table ];
+
+Relationship maps As %SQL.Util.TuneTableStatsMaps [ Cardinality = children, Inverse = table ];
+
+}

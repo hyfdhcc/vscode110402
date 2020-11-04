@@ -1,0 +1,1076 @@
+ROUTINE NLS [Type=INT]
+NLS	; Manage NLS properties (Locales)
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ If '$SYSTEM.Security.Check("%Admin_Manage","USE") {
+	 Write !,"This utility requires %Admin_Manage:USE privilege",!
+	 Quit
+ }
+ If $ZV["Apple" {
+	 Set oDev=##class(%SYS.NLS.Device).%New()
+	 Set xTab=oDev.XLTTable,oDev.XLTTable="UTF8"
+ }
+ Try { Do Main() }
+ Catch { Do Error() }
+ If $D(oDev),$D(xTab) Set oDev.XLTTable=xTab Kill xTab,oDev
+ Kill LocProps,TabProps,SubProps,nLines,oLoc,sLoc,oMod,sMod,oSub,sSub,oTab,sTab
+ Quit
+Main() [oLoc,sLoc] {
+ Set options(1)="Display current locale"
+ Set options(2)="Select defaults"_$$EMSEditText()
+ Set options(3)="Change locale"_$$EMSEditText()
+ Set options(4)="Display loaded settings"
+ Set options(5)="Advanced"_$$EMSEditText()
+ While (1) {
+	Set op="",st=##Class(%Library.Prompt).GetMenu("NLS option?",.op,.options,,128+4)
+	If (st=2)||(st=3) Quit
+ 	Set oLoc=##class(Config.NLS.Locales).OpenCurrent(),sLoc=oLoc.Name
+ 	If op]"","235"[op,$$EMSManaged() continue
+	If op=1 { Do DisplayLocale() }
+	ElseIf op=2 { Do SelectDefs() }
+	ElseIf op=3 { Do ChangeLocale() }
+	ElseIf op=4 { Do Current^NLS2() }
+	ElseIf op=5 { Do Advanced() }
+	Else { Quit }
+ }
+}
+SelectDefs() [oLoc,sLoc,LocProps,Reload] PUBLIC {
+ Set options(1)="Internal tables"
+ Set options(2)="I/O tables"
+ Set options(3)="CSP files"
+ Set options(4)="Date, time and number formats"
+ Set Reload=0
+ While (1) {
+	Set op="",st=##Class(%Library.Prompt).GetMenu("Category of defaults?",.op,.options,,128+4)
+	If (st=2)||(st=3) Quit
+	If op>0,op<5 { Do SelCfgDefs(options(op)) }
+	Else { Quit }
+ }
+ If Reload {
+	 Write !!,"Reloading locale ",sLoc," to activate changes... "
+	 Do Locale^NLSLOAD(sLoc) Write "done!"
+ }
+}
+SelCfgDefs(option) [oLoc,LocProps,Reload] PUBLIC {
+ Set cfgr=$Name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","Config")),option=$E(option,1,$L(option)-1)
+ Set categ=$S(option["I/O":"IODefaults",option["Internal":"InternalDefaults",option["CSP":"OtherDefaults",1:"FormatsDefaults")
+ Merge config=@cfgr Set config=0
+ If categ="FormatsDefaults" {
+	Write ! Set def=$G(config("LocaleFormat"),0)
+	Set fmt=$$YN("Use locale date/time/number formats?",def)="y"
+	If fmt'=def {
+		If fmt Set @cfgr@("LocaleFormat")=1
+		Else  Kill @cfgr@("LocaleFormat")
+		Set Reload=1
+	}
+	Quit
+ }
+ If $$GetProperties(oLoc,.LocProps)'=1 Quit
+ Do GetFields(.Defaults,categ)
+ Write !!,"Items marked with (*) represent the locale's original default"
+ While 1 {
+	Set op=1
+	If Defaults>1 {
+		Kill options
+ 		For i=1:1:Defaults {
+			Set z=Defaults(i),fld=$P(z,"^",1),tag=$P(z,"^",2),pty=$P(z,"^",5)
+			Set ldef=$S(categ="OtherDefaults":"UTF8",1:LocProps(fld))_" (*)",def=$G(config(pty),ldef)
+			Set options(i)=$$Justify(tag,20)_def
+ 		}
+ 		Write !!,option,?23,"Current default"
+ 		Write !,"---------------------  --------------------"
+ 		Set op="",st=##Class(%Library.Prompt).GetMenu(option_":",.op,.options,,128+4)
+ 		If (st=2)||(st=3) Quit
+	}
+	Kill options
+ 	Set z=Defaults(op),fld=$P(z,"^",1),tag=$P(z,"^",2),avl=$P(z,"^",4),pty=$P(z,"^",5)
+ 	Set:avl="*" avl="XLTTables" Set:avl="s" avl=fld_"s"
+ 	Set ldef=$G(LocProps(fld)),cfg=$G(config(pty),ldef),op="",i=1
+ 	If fld="CSP",ldef="" Set ldef="UTF8" Set:cfg="" cfg=ldef
+ 	If avl="XLTTables" {
+		Set x="RAW"
+		While x'="" { Set:x=cfg op=i Set:x=ldef x=x_" (*)" Set options(i)=x,i=i+1,x=$P("RAW,UTF8,UnicodeLittle,UnicodeBig",",",i) }
+ 	}
+ 	Set x=$O(LocProps(avl,""))
+ 	While x'="" { Set:x=cfg op=i Set:x=ldef x=x_" (*)" Set options(i)=x,i=i+1,x=$O(LocProps(avl,x)) }
+ 	Set st=##Class(%Library.Prompt).GetMenu("Selection for "_tag_":",.op,.options,,128+4)
+ 	If (st=2)||(st=3) Quit:Defaults=1  Continue
+ 	If $D(config(pty)) {
+	 	If options(op)["(*)" { Kill config(pty) Set config=config+1 }
+	 	ElseIf config(pty)'=options(op) { Set config(pty)=options(op),config=config+1 }
+ 	} ElseIf options(op)'["(*)" { Set config(pty)=options(op),config=config+1 }
+ 	If Defaults=1 Quit
+ }
+ If config Do SaveCfgChanges(categ,.config)
+}
+EditTabDefs(fields,option) [oLoc,LocProps,Reload] PUBLIC {
+ Set option=option_" table"
+ While 1 {
+	Set op=1
+	Kill options
+ 	For i=1:1:fields {
+		Set z=fields(i),fld=$P(z,"^",1),tag=$P(z,"^",2)
+		Set def=$G(LocProps(fld)) Set:def="" def="Built-in"
+		Set options(i)=$$Justify(tag,20)_def
+ 	}
+ 	Write !!,option,?23,"Current default"
+ 	Write !,"---------------------  --------------------"
+ 	Set op="",st=##Class(%Library.Prompt).GetMenu(option_":",.op,.options,,128+4)
+ 	If (st=2)||(st=3) Quit
+	Kill options
+ 	Set z=fields(op),fld=$P(z,"^",1),tag=$P(z,"^",2),avl=$P(z,"^",4)
+ 	Set:avl="*" avl="XLTTables" Set:avl="s" avl=fld_"s"
+ 	Set ldef=$G(LocProps(fld)),op="",i=1 Set:ldef="" ldef="Built-in"
+ 	If avl="XLTTables" {
+		Set x="RAW"
+		While x'="" { Set:x=ldef op=i Set options(i)=x,i=i+1,x=$P("RAW,UTF8,UnicodeLittle,UnicodeBig",",",i) }
+ 	} ElseIf fld["Case" {
+	 	Set:ldef="Built-in" op=i Set options(i)="Built-in",i=i+1
+ 	}
+ 	Set x=$O(LocProps(avl,""))
+ 	While x'="" { Set:x=ldef op=i Set options(i)=x,i=i+1,x=$O(LocProps(avl,x)) }
+ 	Set old=op
+ 	Set st=##Class(%Library.Prompt).GetMenu("Default for "_tag_":",.op,.options,,128+4)
+	If op'=old {
+		Set new=options(op) If new="Built-in" Set new=""
+		Set LocProps(fld)=new,LocProps=LocProps+1
+	}
+ }
+ If LocProps { Do SaveLocChanges() }
+ Else { Write !!,"No changes!" }
+}
+ChangeLocale() [sLoc,oLoc] {
+ Write !!,"Current locale is: ",sLoc," (",oLoc.Description,")",!
+ If $$YN("Would you like to install a new locale?")'="y" Quit
+ If $$SelectLocale()="NEXT" Set ok=$$InstallLocale()
+}
+ISC Set @($Name(^||SYS("NLS")))@("System")=1
+	Do NLS
+	Kill @($Name(^||SYS("NLS")))@("System")
+	Quit
+Advanced() {
+ Set options(1)="Locale definitions"
+ Set options(2)="Table definitions"
+ Set options(3)="Import Locales/Tables"
+ While (1) {
+ 	Set op="",st=##Class(%Library.Prompt).GetMenu("Advanced option?",.op,.options,,128+4)
+ 	If (st=2)||(st=3) Quit
+ 	If op=1 { Do Locales() }
+ 	ElseIf op=2 { Do Tables^NLS1() }
+ 	ElseIf op=3 { Do ImportLocale() }
+ 	Else { Quit }
+ }
+}
+Locales() [sLoc] {
+ If $$SelectLocale()'="NEXT" Quit
+ While (1) {
+	Kill options Set op=1
+	Set options(op)="Display locale",op=op+1
+	If $E(sLoc)="y"||($D(@($Name(^||SYS("NLS")))@("System"))) {
+		Set options(op)="Edit locale",op=op+1
+		Set options(op)="Delete locale",op=op+1
+	}
+	Set options(op)="Install locale",op=op+1
+	Set options(op)="Export locale",op=op+1
+	Set options(op)="Validate locale",op=op+1
+	Set options(op)="Copy locale",op=op+1
+	Set options(op)="Load locale table",op=op+1
+	Set options(op)="Select another locale"
+	Write !!,"Selected locale: ",sLoc
+	Set op="",st=##Class(%Library.Prompt).GetMenu("Locale option?",.op,.options,,128+4)
+	If (st=2)||(st=3) Quit
+	If options(op)["Display" { Do DisplayLocale() }
+	ElseIf options(op)["Edit" { Do EditLocale() }
+	ElseIf options(op)["Install" { Do InstallLocale() }
+	ElseIf options(op)["Export" { Do ExportLocale() }
+	ElseIf options(op)["Validate" { Do ValidateLocale() }
+	ElseIf options(op)["Copy" { Do CopyLocale() }
+	ElseIf options(op)["Delete" { Do DeleteLocale() }
+	ElseIf options(op)["Load" { Do LoadLocaleTable() }
+	ElseIf options(op)["Select" { Do SelectLocale() }
+	Else { Quit }
+ }
+}
+DisplayLocale() [nLines,oLoc,sLoc] {
+ If '$D(nLines) Do GetLines()
+ Write #,$$Justify(" Locale "_oLoc.Name_" ",78,2,"-")
+ Set t1=3,t2=45
+ Write !?t1,"      Country: ",oLoc.Country," (",oLoc.CountryAbbr,")"
+ Write ?t2,"Language: ",oLoc.Language," (",oLoc.LanguageAbbr,")"
+ Write !?t1,"Character set: ",oLoc.CharacterSet,?t2,"Currency: ",oLoc.Currency
+ Set w1=20,w2=18,w3=78-(w1+w2)
+ Write !!,$$Justify("Internal tables ",w1-2,1,"-")_"  "_$$Justify("Default ",w2-2,1,"-")_"  "_$$Justify("Additional ",w3,1,"-")
+ Do DisplayTables("Pattern match",w1,oLoc.PatternTable,oLoc.PatternTables,w2)
+ Do DisplayTables("Identifier",w1,oLoc.IdentifierTable,oLoc.IdentifierTables,w2)
+ Do DisplayTables("Uppercase",w1,oLoc.UpperCaseTable,oLoc.UpperCaseTables,w2)
+ Do DisplayTables("Lowercase",w1,oLoc.LowerCaseTable,oLoc.LowerCaseTables,w2)
+ Do DisplayTables("Titlecase",w1,oLoc.TitleCaseTable,oLoc.TitleCaseTables,w2)
+ Do DisplayTables("Collation",w1,oLoc.CollationTable,oLoc.CollationTables,w2)
+ Do DisplayTables("$X/$Y action",w1,oLoc.XYTable,oLoc.XYTables,w2)
+ Set t1=15,t2=50,ps=$$Page(7)
+ If ps="QUIT" Quit
+ If ps="NEXT" Write !!
+ Write $$Justify("Input/output tables ",78,,"-") 
+ Set tab="",r=oLoc.XLTTables.GetNext(.tab),n=0
+ while (tab'="") {
+	Write:'(n#6) ! Write ?n#6*12+5,tab
+ 	Set r=oLoc.XLTTables.GetNext(.tab),n=n+1
+ }
+ Set t1=8,t2=38,ps=$$Page(8)
+ If ps="QUIT" Quit
+ If ps="NEXT" Write !!
+ Write $$Justify("I/O defaults ",78,,"-")
+ Write !?t1,"          Process: ",oLoc.TranZCVT
+ Write ?t2,"           TCP/IP: ",oLoc.TranTCP
+ Write !?t1,"   Cache Terminal: ",oLoc.TranProgrammer
+ Write ?t2,"   Other terminal: ",oLoc.TranTerminal
+ Write !?t1,"             File: ",oLoc.TranSequential
+ Write ?t2,"      System call: ",oLoc.TranSystemCall
+ Write !?t1,"          Magtape: ",oLoc.TranMagTape
+ Write ?t2,"          Printer: ",oLoc.TranPrinter
+ Set t1=2,t2=20,t3=30,t4=57,ps=$$Page(8)
+ If ps="QUIT" Quit
+ If ps="NEXT" Write !!
+ Write "------ Date ------------- Time --------------------- Numbers -----------------"
+ Write !?t1,"   Format: ",oLoc.DateFormat
+ Write ?t2,"    Format: ",oLoc.TimeFormat
+ Write ?t3,"       Minus sign: ",oLoc.MinusSign
+ Write ?t4," Decimal separator: ",oLoc.DecimalSeparator
+ Write !?t1,"Separator: ",oLoc.DateSeparator
+ Write ?t2," Separator: ",oLoc.TimeSeparator
+ Write ?t3,"        Plus sign: ",oLoc.PlusSign
+ Write ?t4,"   Group separator: ",oLoc.NumericGroupSeparator
+ Write !?t2," Precision: ",oLoc.TimePrecision
+ Write ?t4,"        Group size: ",oLoc.NumericGroupSize
+ Set ps=$$Page(6)
+ If ps="QUIT" Quit
+ If ps="NEXT" Write !!
+ Write $$Justify("Strings ",78,,"-")
+ Set t1=2,t2=7,t3=35
+ Write !!?t1,$$Justify("Time ",78-t1,,"-")
+ Write !?t2,"AM: ",oLoc.AM,?t3,"    Noon: ",oLoc.Noon
+ Write !?t2,"PM: ",oLoc.PM,?t3,"Midnight: ",oLoc.Midnight
+ Set w2=64,ps=$$Page(4)
+ If ps="QUIT" Quit
+ If ps="NEXT" Write !!
+ Write ?t1,$$Justify("Week days ",78-t1,,"-")
+ Write !?t2,"Names: ",$$Trunc(oLoc.WeekdayName,w2)
+ Write !?t2,"Abbrv: ",$$Trunc(oLoc.WeekdayAbbr,w2)
+ Set ps=$$Page(5)
+ If ps="QUIT" Quit
+ If ps="NEXT" Write !!
+ Write ?t1,$$Justify("Months ",78-t1,,"-")
+ Write !?t2,"Names: ",$$Trunc(oLoc.MonthName,w2)
+ Write !?t2,"Abbrv: ",$$Trunc(oLoc.MonthAbbr,w2)
+ Write !,$$Justify("",78,,"-")
+ Set ps=$$Page(12)
+}
+DisplayTables(tag,tab,def,oArr,wid) {
+ If def="" Set def="Built-in"
+ Write !,tag,?tab,$$Justify(def,wid,1)
+ Set tab=tab+wid,wid=wid-5
+ For i=1:1:oArr.Count() {
+	 Set table=oArr.GetAt(i)
+	 If table'=def,table'="Cache standard" {
+		 If $X+wid>78 Write !,?tab
+		 Write $$Justify(table,wid,1)
+	 }
+ }
+}
+EditLocale() [sLoc] {
+ If '$SYSTEM.Security.Check("%Admin_Manage","USE") {
+	Write !,"Sorry, you have no permission to edit locales."
+	Quit
+ }
+ If $E(sLoc)'="y" {
+	 Write !!,"You are about to edit a system locale."
+	 Write !,"Any changes will be discarded during a system upgrade."
+	 If $$YN("Are you sure you want to continue?")'="y" Quit
+ }
+ Set options(1)="Basic properties"
+ Set options(2)="Date, time and number formats"
+ Set options(3)="Loadable internal tables"
+ Set options(4)="Loadable input/output tables"
+ Set options(5)="Defaults for internal tables"
+ Set options(6)="Defaults for input/output"
+ Set options(7)="Strings"
+ While (1) {
+	Set op="",st=##Class(%Library.Prompt).GetMenu("Edit locale option?",.op,.options,,128+4)
+	If (st=2)||(st=3) Quit
+	If op=1 { Do EditBasics() }
+	ElseIf op=2 { Do EditFormats() }
+	ElseIf op=3 { Do EditIntTables() }
+	ElseIf op=4 { Do EditIOTables() }
+	ElseIf op=5 { Do EditIntDefs() }
+	ElseIf op=6 { Do EditIODefs() }
+	ElseIf op=7 { Do EditStrings() }
+	Else { Quit }
+ }
+}
+InstallLocale() [sLoc] {
+ Set ok=##class(Config.NLS.Locales).IsInstallable(sLoc,.Errors,.Warns)
+ Set Errors=$G(Errors),Warns=$G(Warns)
+ If Errors {
+	Write !!,"Cannot install locale ",sLoc
+	For i=1:1:Errors Write !?5,Errors(i)
+	Quit 0
+ }
+ If Warns {
+ 	Write !!,"Warning",$E("s",Warns>1)
+	For i=1:1:Warns Write !?5,Warns(i)
+	If $$Proceed()'="y" Quit 0
+ }
+ If 'ok Quit 0
+ Set cfgr=$Name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","Config"))
+ If $D(@cfgr) {
+	 Write !!,"There are configuration defaults for the current locale."
+	 If $$YN("Would you like to delete them?")="y" {
+		 Kill @cfgr Write !,"Configuration defaults deleted."
+	 } Else { Write !,"Defaults compatible with ",sLoc," will be preserved." }
+ }
+ Set st=##class(Config.NLS.Locales).Install(sLoc)
+ If st=1 { Write !!,"New locale set to ",sLoc }
+ Else { Write !!,"Could not load locale ",sLoc,! Do $System.OBJ.DisplayError(st) }
+ Quit st
+}
+ExportLocale() [oLoc,sLoc] {
+ Set file="loc_"_sLoc_".xml",prompt="Export to file:",ans=file
+ Set help(1)="Name of file to where locale "_sLoc_" will be exported in XML format."
+ Set st=##Class(%Library.Prompt).GetString(prompt,.ans,,,.help,128+4)
+ If st=3   ZTrap "QUIT"
+ If st=2 Quit
+ Set file=ans
+ If $$YN("Include tables?")="y" {
+	Set Locales(sLoc)=""
+	Set st=##class(Config.NLS.Locales).ExportList(file,.NumExported,.Locales)
+ } Else {
+	Set st=##class(Config.NLS.Locales).Export(file,.NumExported,sLoc)
+ }
+ If st'=1 { Write !!,"Error exporting locale" Do $System.OBJ.DisplayError(st) Quit }
+ Write !,"Successfully exported: "
+ For t="Locales","Tables","SubTables" {
+ 	Set n=+$G(NumExported(t))
+ 	Write ?24,$J(n,2)," ",$ZCVT($E(t,1,$L(t)-(n=1)),"L"),!
+ }
+}
+ImportLocale() [NumImported] {
+ Kill NumImported
+ If $$YN("Include locales?",1)="y" {
+	Set implocs=1,imptabs=$$YN("Include tables?",1)="y"
+ } Else {
+	Set implocs=0,imptabs=1
+ }
+ Set selbits=implocs*2+imptabs*2+imptabs
+ Write " (importing ",$Case(selbits,7:"locales and tables/subtables",4:"locales only",3:"tables/subtables only"),")"
+ Set prompt="Import from file:"
+ Set help(1)="Name of file from which to import locale or table definition."
+ Set help(2)="Usually with extension .xml as exported by this utility or the"
+ Set help(3)="portal, but .goq from earlier versions also accepted." 
+filename ;
+ Set ans=""
+ Set st=##Class(%Library.Prompt).GetString(prompt,.ans,,,.help,128+4)
+ If st=3 ZTrap "QUIT"
+ If st=2||(ans="") Quit
+ Set file=ans
+ Set ext=$ZCVT($P(file,".",$L(file,".")),"L")
+ If ext="goq" {
+	If $ZCVT($E(file,$L(file)-7,*),"L")="_obj.goq" { Write !,"Object files not accepted",!,"Please select a source file" Goto filename }
+	Set st=##class(Config.NLS.Locales).ImportLegacy(file,.NumImported,selbits,.warns)
+	If $D(warns) {
+		Write !!,"Warnings:" Set w=$O(warns(""))
+		While w'="" { Write !?5,warns(w) Set w=$O(warns(w)) }
+	}
+ } ElseIf ext="xml" {
+	Set st=##class(Config.NLS.Locales).ImportAll(file,.NumImported,selbits)
+ } Else { Write " <Only .xml or .goq files>" Goto filename }
+ If st'=1 Do $System.OBJ.DisplayError(st) Quit
+ If ($G(NumImported("Locales"))+$G(NumImported("Tables"))+$G(NumImported("SubTables"))) {
+	Write !,"Successfully imported: "
+	For t="Locales","Tables","SubTables" {
+		Set n=+$G(NumImported(t))
+		Write ?24,$J(n,2)," ",$ZCVT($E(t,1,$L(t)-(n=1)),"L"),!
+	}
+ } Else { Write !,"No custom locale or table to import." }
+ Kill NumImported
+}
+ValidateLocale() [sLoc] {
+ Write ! Set dbg=$G(^%nlsmisc("DEBUG")),^%nlsmisc("DEBUG")=1
+ Set st=##class(Config.NLS.Locales).Compile(sLoc)
+ If st'=1 {
+	Write !,"Error compiling locale ",sLoc
+	Do $System.OBJ.DisplayError(st)
+ }
+ If 'dbg Kill ^%nlsmisc("DEBUG") 
+ If ##class(Config.NLS.Locales).IsLoadable(sLoc,,.Errors) {
+	Write !,"Locale ",sLoc," successfully validated."
+ } Else {
+	Write !,"Error",$E("s",Errors>1)," validating locale ",sLoc,":"
+	For i=1:1:Errors Write !?5,Errors(i)
+ }
+}
+CopyLocale() [sLoc,LocProps] {
+as Write !,"Copy locale ",sLoc," as: " Read sNew Quit:sNew=""	
+ If sNew="?" {
+	 Write !?5,"Enter code for new locale"
+	 Write !?5,"Must start with 'y' and end with '8' or 'w'"
+	 Goto as
+ }
+ Set sNew=$ZCVT(sNew,"L")
+ If $E(sNew)'="y" Write " <Must start with 'y'>" Goto as
+ If $L(sNew)'=4 Write " <Must have 4 characters>" Goto as
+ If $E(sNew,4)'="8",$E(sNew,4)'="w" Write " <Must end with '8' or 'w'>" Goto as
+ If ##class(Config.NLS.Locales).Exists(sNew,.oNew) {
+	 Write " <Already exists>" Kill oNew Goto as
+ }
+ Set def="Copy of "_sLoc
+ Write !,"Description: <",def,"> " Read ans If ans="" Set ans=def
+ Merge NewProps=LocProps
+ Set NewProps("Name")=sNew,NewProps("Description")=ans
+ Set st=##class(Config.NLS.Locales).Create(sNew,.NewProps)
+ If st'=1 { Write !,"Error creating locale ",sNew Do $System.OBJ.DisplayError(st) }
+ Else { Write !,"Locale ",sNew," created with success" }
+}
+DeleteLocale() [sLoc,oLoc,LocProps] {
+ If '$SYSTEM.Security.Check("%Admin_Manage","USE") {
+	Write !,"Sorry, you have no permission to delete locales."
+	Quit
+ }
+ If $E(sLoc)'="y" {
+	 Write !!,"You are about to delete a system locale."
+	 If $$YN("Are you sure you want to continue?")'="y" Quit
+ }
+ If $G(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,5))@("LOCALE","CURRENT"))=sLoc Write !,"Cannot delete current locale!" Quit
+ Set ans=$$YN("Delete locale "_sLoc_" ?")
+ If ans'="y" Write " <NOT deleted>" Quit
+ Kill oLoc,LocProps
+ Set st=##class(Config.NLS.Locales).Delete(sLoc) Kill sLoc
+ Write $S(st=1:" Deleted",1:" Error!")
+ Do SelectLocale()
+}
+LoadLocaleTable() [sLoc,LocProps] {
+ Set oCur=##class(Config.NLS.Locales).OpenCurrent()
+ If LocProps("CharacterSet")'=oCur.CharacterSet {
+	 Write !!,"Locale ",sLoc," is based on ",LocProps("CharacterSet")
+	 Write " but current locale (",oCur.Name,") is based on ",oCur.CharacterSet,"."
+	 Write !,"Can only load tables from the same character set."
+	 Quit
+ }
+ Kill oCur
+ Write !!,"Select table to load"
+ Do GetOptions(.types,"TableTypes")
+seltyp Set ityp=""
+ Set st=##Class(%Library.Prompt).GetMenu(types,.ityp,.types,,128+4)
+ If st=2 Quit
+ If st=3 ZTrap "QUIT"
+ Set typ=types(ityp,1)
+ Do ##class(Config.NLS.Locales).TablesExecute(.tabs,sLoc,typ)
+ Set num=$LL(tabs)-1 If 'num Write !!,"No loadable ",typ," table." Goto seltyp
+ For i=1:1:num Set names(i)=$LI(tabs,i+1)
+ Set inam=""
+ Set st=##Class(%Library.Prompt).GetMenu("Table name?",.inam,.names,,128+4)
+ If st=2 Quit
+ If st=3 ZTrap "QUIT"
+ Set nam=names(inam)
+ Write !!,"Loading table ",nam,"... "
+ Set st=##class(Config.NLS.Tables).Load(sLoc,typ,nam)
+ If st'=1 { Write "Error" Do $System.OBJ.DisplayError(st) }
+ Else { Write "Success" }
+ Write !
+}
+SelectLocale() [oLoc,sLoc,LocProps] {
+selloc	;
+ Kill obj,null
+ If $D(sLoc),$D(oLoc) { Set def=sLoc }
+ Else { Set def=$G(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,5))@("LOCALE","CURRENT"),"enu8") }
+ Write !!,"Select a locale: ",def, " => " Read ans
+ Set ans=$ZCVT(ans,"L") If ans="" Set ans=def,null=1
+ If ans'?1A2AN1"8",ans'?1A2AN1"w" {
+	If ans="^" Quit "QUIT"
+	Set up=$ZCVT(ans,"U")
+	If "EXIT,STOP,QUIT,HALT,Q,"[(up_",") ZTrap "QUIT"
+	If $E($ZCVT("Quit","U"),1,$L(up))=up ZTrap "QUIT"
+	Do ShowLocales()
+	Goto selloc
+ }
+ If '##class(Config.NLS.Locales).Exists(ans,.obj) Write " <Not available>",! Goto selloc
+ If $$GetProperties(obj,.props)'=1 Goto selloc
+ Kill LocProps Set sLoc=ans,oLoc=obj,LocProps=0
+ Merge LocProps=props
+ Write:'$D(null) " - " Write oLoc.Description
+ Quit "NEXT"
+}
+ShowLocales() [nLines] {
+ Set hdr=$$Justify(" Available locales ",78,2,"-")
+ If '$D(nLines) Do GetLines()
+ Write #,hdr
+ Set rset=##class(%Library.ResultSet).%New("Config.NLS.Locales:List")
+ If '$IsObject(rset) Quit
+ Set rset.RuntimeMode=1
+ Do rset.Execute("*")
+ While rset.Next() {
+	If nLines,$Y+3>nLines {
+		Set st=##class(%Library.Prompt).GetMore()
+		If st=3 ZTrap "QUIT"
+		If st=2 Quit
+		Write #,hdr,!
+	} Else { Write ! }
+	Write rset.Data("Name")," - ",rset.Data("Description")
+ }
+}
+EditBasics() {
+ Do GetFields(.Basics,"Basics")
+ Do EditFields(.Basics)
+}
+EditFormats() {
+ Do GetFields(.Formats,"Formats")
+ Do EditFields(.Formats)
+}
+EditIntTables() {
+ Write !!,"For each category, type the name of a table from the"
+ Write !?5,"Locale list --> to remove it from the locale"
+ Write !?5,"Choose list --> to include it in the locale"
+ Do GetFields(.Tables,"IntTables")
+ Do EditTables(.Tables)
+}
+EditIOTables() [LocProps] {
+ Merge Tables=LocProps("XLTTables")
+ Set chs=LocProps("CharacterSet"),new=0
+rt Read !,"Table name: ",tab
+ If tab="" {
+	If LocProps { Do SaveLocChanges() }
+	Else { Write !!,"No changes!" }
+	Quit
+ }
+ If tab="?" {
+	 Set tab=$O(Tables(""),1,lst)
+	 While (tab'="") {
+		 Write !?5,tab
+		 Write ?20,"Output=(",$LI(lst,3),"->",$LI(lst,4),")"
+		 Write ?50,"Input=(",$LI(lst,1),"->",$LI(lst,2),")"
+		 Set tab=$O(Tables(tab),1,lst)
+	 }
+	 Write !!?5,"Enter an existing table name to edit/remove it from the locale"
+	 Write !?5,"  or" 
+	 Write !?5,"A new table to include it in the locale",! 
+	 Goto rt
+ }
+ If $D(Tables(tab),lst) {
+et	Write " Output=(",$LI(lst,3),"->",$LI(lst,4),")"
+	Write " Input=(",$LI(lst,1),"->",$LI(lst,2),") ? "
+	Read ans Set ans=$ZCVT(ans,"L") If ans="" Goto rt
+	If ans'="^",ans'="r",ans'="e" {
+		Write !?5,"ENTER - to select another table"
+		Write !?5,"^     - to quit this level"
+		Write !?5,"R     - to remove this table from the locale"
+		Write !?5,"E     - to edit this table"
+		Write !!,"Table name: ",tab
+		Goto et
+	}
+	If ans="^" Quit
+	If ans="r" {
+		Write $E("removed",$L(ans)+1,99)
+		Kill LocProps("XLTTables",tab),Tables(tab)
+		Set LocProps=LocProps+1
+		Goto rt
+	}
+	Write $E("edit",$L(ans)+1,99) Set new=0
+ } Else {
+	 Set ans=$$YN(" New?",1)
+	 If ans'="y" Write " <Not available>" Goto rt
+	 Set lst=$LB("",chs,chs,""),new=1
+ }
+ Write !,"Output from: ",chs 
+out	Write !,?9,"to: " Set def=$LI(lst,4) Write:def'="" def," => " Read ans
+ If ans="" {
+	If def="" Write "<Invalid>" Goto out
+	Set ans=def
+ }
+ If ans="^" Goto rt
+ If ##class(Config.NLS.Tables).Exists("XLT",chs,ans) { Set $LI(lst,4)=ans }
+ Else { Write " Table(XLT,",chs,",",ans,") is not available" Goto out }
+inp Write !,"Input  from: " Set def=$LI(lst,1) Set:def="" def=ans Write def," => " Read ans
+ If ans="" {
+	If def="" Write "<Invalid>" Goto inp
+	Set ans=def
+ }
+ If ans="^" Goto rt
+ If ##class(Config.NLS.Tables).Exists("XLT",ans,chs) { Set $LI(lst,1)=ans }
+ Else { Write " Table(XLT,",ans,",",chs,") is not available" Goto out }
+ Write !?9,"to: ",chs,!
+ If new||(Tables(tab)'=lst) Set Tables(tab)=lst,LocProps("XLTTables",tab)=lst,LocProps=LocProps+1
+ Goto rt
+}
+EditIntDefs() {
+ Do GetFields(.Defaults,"InternalDefaults")
+ Do EditTabDefs(.Defaults,"Internal")
+}
+EditIODefs() {
+ Do GetFields(.Defaults,"IODefaults")
+ Do EditTabDefs(.Defaults,"I/O")
+}
+EditStrings() {
+ Do GetFields(.Strings,"Strings")
+ Do EditFields(.Strings)
+ Do EditNames("Month")
+ Do EditNames("Weekday")
+}
+EditTables(tables)[LocProps] {
+ Set tab=1
+ed1	Set seq=$$EditTable(tables(tab))
+ If seq="PREV" { Set:tab>1 tab=tab-1 Goto ed1 }
+ If seq="NEXT",tab<tables { Set tab=tab+1 Goto ed1 }
+ If LocProps { Do SaveLocChanges() }
+ Else { Write !!,"No changes!" }
+}
+EditTable(class) [LocProps] {
+ Set tag=$P(class,"^",2),class=$P(class,"^",1),chs=LocProps("CharacterSet")
+ Set ty=$E(class,1,$L(class)-6)
+ Set:ty="Collation" ty="COL" Set:ty="Identifier" ty="Ident"
+ Merge Tables=LocProps(class)
+ Do GetTables^NLS1(.Tabs,ty,chs)
+ For i=1:1:Tabs Set NewTables(Tabs(i))=""
+ Kill Tabs
+tb Write !!,$$Justify(tag_" ",75,1,"-")
+ Write !?5,"Locale list: "
+ Set tab=$O(Tables(""))
+ While (tab'="") { Write:$X>65 !?10 Write tab," " Set tab=$O(Tables(tab)) }
+ Write !?5,"Choose list: "
+ Set tab=$O(NewTables(""))
+ While (tab'="") { Write:$X>65 !?10 Write tab," " Set tab=$O(NewTables(tab)) }
+ Read !!?5,"Table: ",tab
+ If tab=""||(tab="^") {
+	 If $O(Tables(""))'=""||(class["Case") Quit $S(tab="":"NEXT",1:"PREV")
+	 Write !!?5,"The Locale list cannot be empty."
+	 Write !?5,"Select a table from the ""Choose list""."
+	 Goto tb
+ }
+ If tab="?" {
+	 Write !!?5,"Enter a table from the ""Locale list"" to remove it"
+	 Write !?5,"  or"
+	 Write !?5,"A table from the ""Choose list"" to add it"
+	 Write !
+	 Write !?5,"^ - to go back to the previous class of tables"
+	 Write !?5,"Q - to quit this program",!
+	 Goto tb
+ }
+ If tab="Q"||(tab="q") ZTrap "QUIT"
+ If $D(Tables(tab)) {
+	 If ty="COL",tab="Cache standard" Write " <Cannot remove Cache standard>" Goto tb
+	 Set ans=$$YN(" Remove?")
+	 If ans="y" {
+		 Kill Tables(tab),LocProps(class,tab) Set LocProps=LocProps+1
+		 If '$D(LocProps(class)) Set LocProps(class)=""
+	 }
+	 Goto tb
+ }
+ If $D(NewTables(tab)) {
+	Set Tables(tab)="",LocProps(class,tab)="",LocProps=LocProps+1
+	Write " <Added to locale>"
+ } Else { Write " <Not available>" }
+ Goto tb
+}
+EditFields(fields) [LocProps] {
+ Set fld=1
+ed1	Set seq=$$EditField(.fields,fld)
+ If seq="PREV" { Set:fld>1 fld=fld-1 Goto ed1 }
+ If seq="NEXT",fld<fields { Set fld=fld+1 Goto ed1 }
+ If LocProps { Do SaveLocChanges() }
+ Else { Write !!,"No changes!" }
+}
+EditField(fields,fld) [LocProps,ans] {
+ New ans
+ Set z=fields(fld),fld=$P(z,"^",1),tag=$P(z,"^",2)_":",pat=$P(z,"^",3)
+ Set def=$G(LocProps(fld))
+ For i=1:1 Set x=$T(@(fld_"+"_i)),x=$P(x,";;",2,99) Quit:x=""  Set help(i)=x
+getfield Set ans=def
+ Set st=##Class(%Library.Prompt).GetString(tag,.ans,,,.help,128+4)
+ If st=3   Quit "QUIT"
+ If st=2 Quit "PREV"
+ If pat'="*",@("ans'?"_pat) Write " <Wrong format (",pat,")>" Goto getfield
+ If ans'=def Set LocProps(fld)=ans,LocProps=LocProps+1
+ Quit "NEXT"
+}
+EditNames(type) [LocProps] {
+ Set tnum=type_" # ",t1=$L(tnum)\2-2,t2=$L(tnum)+4,t3=t2+32,LocProps=0
+ Set names=type_"Name",abbrs=type_"Abbr"
+ Write !!,tnum," -- Name -------------------------- Abbreviation ----"
+ For i=1:1:$L(LocProps(names)," ")-1 {
+	Write !,?t1,$J(i,2)
+	Set nxt=$$GetName(names,i,t2) If nxt Set i=nxt-1 Continue
+	Set nxt=$$GetName(abbrs,i,t3) If nxt Set i=nxt-1 Continue
+ }
+ If LocProps { Do SaveLocChanges() }
+ Else { Write !!,"No changes!" } 
+} 
+GetName(typ,itm,tab) [LocProps] {
+ Set names=LocProps(typ),items=$L(names," ")-1,name=$P(names," ",itm+1)
+ Set nxt=itm
+ While (nxt=itm) {
+	Write ?tab,name," ==> " Read ans If ans="" Set ans=name
+	Set up=$ZCVT(ans,"U")
+	If "EXIT,STOP,QUIT,HALT,Q,"[(up_",") ZTrap "QUIT"
+	If $E($ZCVT("Quit","U"),1,$L(up))=up ZTrap "QUIT"
+	If $E(ans)="^" {
+		Set nxt=+$E(ans,2,*) Set:'nxt nxt=itm-1
+		If nxt>0,nxt'>items Quit
+		Else  Write " <1 to ",items,">",! Set nxt=itm
+	} ElseIf ans="?" {
+		Write !!?5,"Enter QUIT to quit the program"
+		Write !?5,"      ^ to go back to be previous line"
+		Write !?5,"      ^n to go to line #n",!!
+	} Else {
+		If ans'=name { Set $P(LocProps(typ)," ",itm+1)=ans,LocProps=LocProps+1 }
+		Set nxt=0
+	}
+ }
+ Quit nxt
+}
+SaveLocChanges() [oLoc,LocProps] {
+ Write ! Set ans=$$YN(LocProps_" changed propert"_$S(LocProps=1:"y",1:"ies")_". Save?",1)
+ If ans="y" {
+	Set st1=oLoc.SetProperties(.LocProps)
+	Set st2=oLoc.%Save()
+	If st1'=1||(st2'=1) { Write " <Error saving locale>",!! Do $System.OBJ.DisplayError($S(st1'=1:st1,1:st2)) }
+	Else { Write " <Saved>" }
+ } Else {
+	Write " <Discarded>" Set st=$$GetProperties(oLoc,.LocProps)
+ }
+ Set LocProps=0
+}
+SaveCfgChanges(categ,config) [Reload] {
+ Set cfgr=$Name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","Config"))
+ Write ! Set ans=$$YN(config_" changed propert"_$S(config=1:"y",1:"ies")_". Save?",1)
+ Set props=$Case(categ,"InternalDefaults":"PatternMatch,Identifier,Uppercase,Lowercase,Titlecase,PatternMatch,Uppercase"_",Collation,XYAction","IODefaults":"Process,CacheTerminal,OtherTerminal,File,Magtape,TCPIP,DSMDDP,DTMDCP,SystemCall,Printer",:"CSP")
+ If ans="y" {
+	For i=1:1:$L(props,",") {
+		Set p=$P(props,",",i),old=$G(@cfgr@(p))
+		If '$D(config(p),new) { Kill @cfgr@(p) }
+		ElseIf old'=new { Set @cfgr@(p)=new }
+	}
+	Write " <Saved>" Set Reload=1
+ }
+}
+GetFields(fields,class) PUBLIC {
+ Kill fields Set fld=1,end=class_"End"
+ For i=1:1 {
+	Set t=$T(@(class_"+"_i)) Quit:t=""
+	Set t1=$P(t," ",1) Quit:t1=end
+	If t1'="" Set fields(fld)=t1_"^"_$P(t,";;",2,99),fld=fld+1
+ }
+ Set fields=fld-1
+}
+GetOptions(options,class) PUBLIC {
+ Kill options
+ Set opt=1,end=class_"End",t=$T(@class),prompt=$P(t,";;",2,99)
+ For i=1:1 {
+	Set t=$T(@(class_"+"_i)) Quit:t=""
+	Set t1=$P(t," ",1) Quit:t1=end
+	If t1'="" Set options(opt)=$P(t,";;",2,99),options(opt,1)=t1,opt=opt+1
+ }
+ Set options=prompt
+}
+GetProperties(loc,props) PUBLIC {
+ Kill props Set st=loc.GetProperties(.props)
+ If st=1 {
+ 	Set props=0
+ } Else { Write " <Error accessing locale>" Do $System.OBJ.DisplayError(st) }
+ Quit st
+}
+UsesTable(loc,ty,fr,to) PUBLIC {
+ Set uses=0
+ If ty="XLT" {
+	Set tab="",r=loc.XLTTables.GetNext(.tab)
+	while (tab'="") {
+		If $LI(r,1)=fr,$LI(r,2)=to { Set uses=1 Quit }
+		If $LI(r,3)=fr,$LI(r,4)=to { Set uses=1 Quit }
+ 		Set r=loc.XLTTables.GetNext(.tab)
+	}
+	Quit uses
+ }
+ Quit uses
+}
+Trunc(str,max) {
+ If $L(str)'>max Quit str
+ Quit $E(str,1,max-3)_"..."	
+}
+Page(need) [nLines] {
+ If nLines,$Y+$G(need,0)+2>nLines {
+	While ($Y+2<nLines) { Write ! }
+	Set st=##class(%Library.Prompt).GetMore()
+	If st=3 ZTrap "QUIT"
+	If st=2 Quit "PREV"
+	Write # Quit "PAGE"
+ }
+ Quit "NEXT"
+}
+Proceed() {
+ Quit $$YN("Proceed anyway?")
+}
+YN(prompt,def) {
+ Set ans=$G(def,0)	
+ Set st=##Class(%Library.Prompt).GetYesNo(prompt,.ans,,128)
+ If (st=2) Quit "n"
+ If ans=1 Quit "y"
+ Quit "n"
+}
+Justify(Str,Wid,Whr=1,Chr=" ") {
+ Set len=$L(Str)
+ If len=Wid Quit Str
+ If len>Wid Quit $E(Str,1,Wid)
+ Set $P(blnks,Chr,Wid+1)=""
+ If Whr=1 {
+	Set Str=Str_$E(blnks,len+1,Wid)
+ } ElseIf Whr=2 {
+	Set n=Wid-len\2,Str=$E(blnks,1,n)_Str_$E(blnks,1,n)
+	If $L(Str)<Wid Set Str=Chr_Str
+ } Else {
+	Set Str=$E(blnks,len+1,Wid)_Str
+ }
+ Quit Str
+}
+GetLines() [nLines] {
+ Set nLines=24
+ Set st=##class(%Library.Prompt).GetNumber("Number of lines for paging (0=don't page): ",.nLines,0,200)
+}
+EMSManaged()	PRIVATE {
+	Q ##class(EMS.Instance).Restricted("Config.NLS.Locales")
+	Quit 0  ;;
+}
+EMSEditText()	PRIVATE {
+	i ##class(EMS.Instance).Restricted("Config.NLS.Locales") q " (restricted)"
+	q ""
+}
+Error() [oDev,xTab] {
+ If $ZE'["<INTERRUPT>",$ZE'["<ZQUIT>" {
+	If $G(%objlasterror)'="" {
+		Write !
+		Do $System.OBJ.DisplayError()
+	} Else {
+		Write !!,"An error occurred:"
+		Write !?5,"$ZE=",$ZE
+		Write !?5,"$ZU(56,2)=",$ZU(56,2)
+	}
+ }
+ If $D(oDev),$D(xTab) Set oDev.XLTTable=xTab Kill xTab,oDev
+}
+Basics	;;
+Description	;;Description^*
+	;;Brief description for this locale
+	;;Suggested format: <Language>, <Country>, <Character set> or
+	;;                  <Comment>, <Character set>
+	;;Example: English with mainframe compatibility, Latin1 (ISO 8859-1)
+	;;
+Currency	;;Currency sign^.10E
+	;;The currency sign used in this geographical locale.
+	;;Examples: $, R$
+	;;
+BasicsEnd	;;
+Formats	;;
+DateFormat	;;$ZDate format^1.2N
+	;;The DateFormat code used whenever a $ZDATE, $ZDATEH,
+	;;$ZDATETIME or $ZDATETIMEH function call omits its second
+	;;parameter, or specifies a second parameter value of -1.
+	;; 
+	;;Value   Meaning         Example
+	;;-----   --------------  ------------
+	;;  0     DD Mmm [YY]YY   27 Mar 2002
+	;;  1     MM/DD/[YY]      03/27/2002
+	;;  2     DD Mmm [YY]YY   27 Mar 2002
+	;;  3     YYYY-MM-DD      2002-03-27
+	;;  4     DD/MM/[YY]YY    27/03/2002
+	;;  5     Mmm D, YYYY     Mar 27, 2002
+	;;  6     Mmm D YYYY      Mar 27 2002
+	;;  7     Mmm DD [YY]YY   Mar 27 2002
+	;;  8     YYYYMMDD        20020327
+	;;  9     Mmmmmm D, YYYY  March 27, 2002
+	;; 10     W               2 (day number for the week)
+	;; 11     Www             Tue (abbreviated day name)
+	;; 12     Wwwwww          Tuesday (full day name)
+	;; 13     [D]D/[M]M/YYYY  27/11/2549 (Thai format)
+	;; 14     nnn             354 (day numbe for the year)
+	;;
+DateSeparator	;;Date separator^1E
+	;;The character used to delimit the months, days, and years
+	;;of those dates which are otherwise entirely numeric.
+	;;Example: "/"
+	;;
+TimeFormat	;;Time format^1N
+	;;The TimeFormat code used whenever a $ZDATETIME, $ZDATETIMEH,
+	;;$ZTIME or $ZTIMEH function call omits its TimeFormat parameter,
+	;;or specifies a TimeFormat parameter value of -1.
+	;; 
+	;;Value   Meaning                    Example
+	;;-----   -------------------------  ------------
+	;;  1     hh:mm:ss (24-hour)         23:10:37
+	;;  2     hh:mm (24-hour)            23:10
+	;;  3     hh:mm:ss[AM/PM] (12-hour)  11:10 PM
+	;;  4     hh:mm[AM/PM] (12-hour)     11:10     
+	;;
+TimeSeparator	;;Time separator^1E
+	;;The character used to delimit the hours, minutes and seconds
+	;;in a time value.
+	;;Example: ":"
+	;;
+TimePrecision	;;Time precision^1N
+	;;The number of fractional digits displayed in a time value
+	;;whenever a $ZDATETIME or $ZTIME function call omits its
+	;;Precision parameter, or specifies a Precision parameter
+	;;value of -1.
+	;;Example: 0
+	;;
+MinusSign	;;Minus sign^1E
+	;;The character which may precede or follow a negative
+	;;numeric quantity formatted by the $FNUMBER function.
+	;;Example: "-"
+	;;
+PlusSign	;;Plus sign^1E
+	;;The character which may optionally precede or follow a
+	;;non-negative numeric quantity formatted by the $FNUMBER
+	;;function.
+	;;Example: "+"
+	;;
+DecimalSeparator	;;Decimal separator^1E
+	;;The character used by the $FNUMBER function to separate
+	;;the whole part of a number from the fractional part of
+	;;the number. Also used by $ZDATETIME, $ZDATETIMEH, $ZTIME
+	;;and $ZTIMEH to separate the whole part of the seconds from
+	;;the optional fractional part of the seconds, if any.
+	;;Example: "."
+	;;
+NumericGroupSeparator	;;Numeric group separator^1E
+	;;The character used to separate groups of numeric digits
+	;;within the whole number portion of a number formatted by
+	;;the $FNUMBER function.
+	;;Example: ","
+	;;
+NumericGroupSize	;;Numeric group size^1N
+	;;The number of digits in a numeric group formatted by the
+	;;$FNUMBER function.
+	;;Example: 3
+	;;
+FormatsEnd	;;
+IODefaults ;Prompt^Format^Available(s/*)^%SYS.NLS.Table
+TranZCVT	;;Process^*^*^Process
+	;;Default translation used for callin, callout and  $ZCVT()
+	;;Example: RAW
+	;;
+TranProgrammer	;;Cache Terminal^*^*^CacheTerminal
+	;;Default translation for Cache Terminal
+	;;Example: UTF8
+	;;
+TranTerminal	;;Other terminal^*^*^OtherTerminal
+	;;Default translation for terminals other than Cache Terminal
+	;;Example: RAW
+	;;
+TranSequential	;;File^*^*^File
+	;;Default translation for files and other sequential devices
+	;;Example: RAW
+	;;
+TranMagTape	;;Magtape^*^*^Magtape
+	;;Default translation for magnetic tapes
+	;;Example: RAW
+	;;
+TranTCP	;;TCP/IP^*^*^TCPIP
+	;;Default translation for TCP/IP socket
+	;;Example: Unicode
+	;;
+TranSystemCall	;;System call^*^*^SystemCall
+	;;Default translation used in OS system calls
+	;;Example: RAW
+	;;
+TranPrinter	;;Printer^*^*^Printer
+	;;Default translation for printers
+	;;Example: RAW
+	;;
+IODefaultsEnd ;;
+OtherDefaults ;Prompt^Format^Available(s/*)^%SYS.NLS.Table
+CSP	;;CSP files^*^*^CSP
+	;;Default encoding for CSP files
+	;;Example: UTF8
+	;;
+OtherDefaultsEnd ;;
+Strings	;;
+AM	;;AM suffix^*
+	;;Sufix which may optionally be appended to time values
+	;;prior to 12 noon.
+	;;Example: "AM"
+	;;
+PM	;;PM suffix^*
+	;;The suffix which may optionally be appended to time values
+	;;at or after 12 noon.
+	;;Example: "PM"
+	;;
+Noon	;;Noon suffix^*
+	;;The suffix which may optionally be appended to time values
+	;;corresponding to exactly 12 noon.
+	;;Example: "NOON"
+	;;
+Midnight	;;Midnight suffix^*
+	;;The suffix which may optionally be appended to time
+	;;values corresponding to exactly 12 midnight.
+	;;Example: "MIDNIGHT"
+	;;
+StringsEnd	;;
+InternalDefaults ;Prompt^Format^Available(s/*)^%SYS.NLS.Table
+PatternTable	;;Pattern match^*^s^PatternMatch
+	;;Default pattern match table
+	;;Example: Latin2
+	;;
+IdentifierTable ;;Identifier^*^s^Identifier
+	;;Default identifier table
+	;;Example: Latin1
+	;;
+UpperCaseTable	;;Uppercase^*^s^Uppercase
+	;;Default uppercase table
+	;;Example: Latin1
+	;;
+LowerCaseTable	;;Lowercase^*^s^Lowercase
+	;;Default lowercase table
+	;;Example: Latin1
+	;;
+TitleCaseTable	;;Titlecase^*^s^Titlecase
+	;;Default title case table
+	;;Example: Latin1
+	;;
+CollationTable	;;Collation^*^s^Collation
+	;;Default collation table
+	;;Examples: Cache standard, Portuguese2, Greek3
+	;;
+XYTable	;;$X/$Y action^*^s^XYAction
+	;;Default $X/$Y table
+	;;Example: LatinC
+	;;
+InternalDefaultsEnd ;;
+IntTables	;;Loadable tables
+PatternTables	;;Pattern match tables
+IdentifierTables	;;Identifier tables
+UpperCaseTables	;;Uppercase tables
+LowerCaseTables	;;Lowercase tables
+TitleCaseTables	;;Titlecase tables
+CollationTables	;;Collation tables
+XYTables	;;$X/$Y action tables
+IntTablesEnd	;;
+TableTypes	;;Table type?
+XLT	;;I/O
+LowerCase	;;Lower case
+UpperCase	;;Upper case
+TitleCase	;;Title case
+Pattern	;;Pattern match
+Ident	;;Identifier
+COL	;;Collation
+XY	;;$X/$Y action
+TableTypesEnd	;;

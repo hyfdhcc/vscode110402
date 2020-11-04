@@ -1,0 +1,11 @@
+"intersystems.servers": {
+		"local": {
+			"webServer": {
+				"scheme": "http",
+				"host": "127.0.0.1",
+				"port": 57772
+			},
+      		"description": "My local Ensemble2016",
+      		"username": "_system"
+		}
+  }

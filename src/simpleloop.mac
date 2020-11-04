@@ -1,0 +1,14 @@
+ROUTINE simpleloop
+simpleloop ; loop through last names
+ set ln = ""
+ for  {
+     set ln = $order( ^PersonI("Name", ln) )
+     quit:(ln = "")
+     write !, ln
+    }
+     
+ 
+ 
+ 
+ 
+ 

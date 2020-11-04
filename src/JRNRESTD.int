@@ -1,0 +1,480 @@
+ROUTINE JRNRESTD [Type=INT]
+JRNRESTD ; define journal restoration params ; HYY1421 12/08/08
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+   ; $$what()   determine what should be restored
+   ; input: fromrest
+   ;        fromrest=1  => use directories listed in yesdir(dir)=1
+   ;                =2  => all directories
+   ;                =3  => ask which directories should be restored
+   ;                =8  => JCONVERT, dirs don't have to exis and don't
+   ;                       ask for redirection target [JO1726]
+   ; return: 1 => dejournaling should proceed, 0 => nothing selected
+   ;         ALL = 1 means restore all journaled globals in all dir
+   ;     else setups arrays 'global' and 'yesdir'
+   ; dejrn(directory) = ALL_GLOBALS_FLAG,new directory name
+   ;					ALL_GLOBALS_FLAG = 1 means restore all globals in this db, 0 means no.
+   ; dejrn(directory, global) = individual global to restore
+   ; clujrn(directory) = "Y" if directory was cluster-mounted 
+what()  
+ n zt s zt=$zt
+ i $g(QUIETMODE) g ZJRNERR  ;if called thro non-interactive restore
+                            ;don't use user-defined filter at all
+ s zt=$zt,$zt="ZJRNERR"
+ s ZJRNUSE=0 x "zl ZJRNFILT"
+ s ZJRNUSE=($$YN("Use current journal filter (ZJRNFILT)")="Y")
+ s ZJRNUSEMARK=($$YN("Use journal marker filter (MARKER^ZJRNFILT)")="Y")
+ i ZJRNUSE,$$YN("Apply filter to every selected file","Y")="Y" s ZJRNUSE=2
+ZJRNERR s $zt=zt,$ze=""
+ ;
+ ; Set up clujrn() based on CLSTATE
+ K clujrn
+ i $S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0),$D(CLSTATE) d
+ . n d s d=""
+ . f  s d=$O(dejrn(d)) q:d=""  i $G(CLSTATE(d))="C" s clujrn(d)="Y"
+ s private=1  ; Set to 0 if a cluster restore
+ ; DBREST puts the db's to dejournal in dejrn(). Just return
+ i fromrest=1 s ALL=0,Q="""" q 1
+ I fromrest=2 s ALL=1 Q 1 ;all directories
+ I fromrest=3 s ALL=0
+ i $g(QUIETMODE) d REVIEW
+ i $g(QUIETMODE),'$D(dejrn) w !,"***Journal Restore Canceled***",! q 0
+ i $g(QUIETMODE) q 1
+ i $S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0) do 
+ . if $g(CLURESTORE) s private=0 q
+ . s private=($$YN("Cluster journal operation")="N")
+ i 'private s ALL=0
+ e  S ALL=($$YN("Process all journaled globals in all directories")="Y")
+ I ALL Q 1 ;all directories
+ K dejrn
+ S xOS=($$YN("Are journal files imported from a different operating system","N")="Y")
+ D GETDIR ;get a list of directories to restore
+ D REVIEW ;make sure it is what you want
+ I '$D(dejrn) W !,"*** Journal Restore Cancelled***",! Q 0
+ Q 1 ;dejrn() now contains journal restoration directives
+ ;-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+GETDIR ;get dejrn() definitions
+ N DIR,redir,def,R,X,NEW,A,ALL,W
+DIR ;
+ ; $$$GetDir(x,y,-1) means don't check director for valid or exists.
+ ;                0) means its ok if it doesn't exist
+ ;                1) means its not ok if it doesn't exist
+ i $zversion(1)=1 d  
+ . W !!,*7,"If restoring from a different Cache system please review HELP before proceeding"
+ W ! S R=$$GetDir("Directory to restore [? for help]","",$S(fromrest=8:-1,(+$g(xOS)):-1,1:0))
+ Q:R=""  I $E(R)="^" K dejrn Q
+ I R="?" W ! DO  G DIR
+ . W !?4,"Enter a directory which is in the journal; you will"
+ . W !?4,"then be given the option to process all or some of the"
+ . W !?4,"globals which were journaled from that directory.",!
+ . if fromrest'=8 d
+ . . W !?4,"Note that you will also be given the chance to re-direct"
+ . . W !?4,"the contents of this directory to another directory."
+ . i $zversion(1)=1 d  
+ . . w !!,"Note: If you are restoring from a different Cache system use the following as a" 
+ . . w !,?6,"guide when entering the original directory path:"
+ . . w !,?6,"1. Make sure that no logicals are used in the path name."
+ . . w !,?6,"2. You must specify the full canonized path - including VMS underscore (_)"
+ . . w !,?9,"(i.e.) _$1$dga1:[cachesystem.xxxa01]",!
+ I $E(R)="?" W ! DO  G DIR
+ . I $O(dejrn(""))="" W !?4,"no directories selected" Q
+ . W !?4,"Directory                      All?"
+ . w:fromrest'=8 "     Redirected to:"
+ . S DIR="" F  S DIR=$O(dejrn(DIR)) Q:DIR=""  DO
+ . . S X=dejrn(DIR) W !?4,$$LJ(DIR,30),$S(X:" Yes",1:"  No")
+ . . q:fromrest=8  ;no redirection for JCONVERT
+ . . S X=$P(X,",",2,$L(X)) I X]"",X'=DIR W ?43," "_X
+ S DIR=$$ChkDirOrSpecEXISTS(R) 
+ i DIR="" s DIR=$S(xOS:R,1:$ZU(12,R))  ; Allow invalid "source" directories
+ I DIR'=R W "  "_DIR ;resolve ref
+ I "^?"[$E(DIR) W *7 G DIR ;special case
+ ;
+ if fromrest=8 s NEW=DIR g GETGLOTOP ;skip redirect for JCONVERT 
+ S X=+$$STAT(DIR),redir=0 ;get some status information
+ I X<-1 DO  S redir=1 ;redirection is REQUIRED
+ . W "??",!,"No database exists in that directory."
+ . W !,"(you will be required to redirect to another directory)"
+NEW S W=$P($G(dejrn(DIR)),",",2,999) S:W="" W=DIR
+ W !,"Redirect to Directory: "_W,!," => " R R S:R="" R=W G DIR:$E(R)="^"
+ I $$UC(R)="*DEL" K dejrn(DIR) W "ETED" G DIR
+ I $E(R)="?" W ! DO  W ! G NEW
+ . W !?4,"Enter the name of the directory where the dejournaled"
+ . W !?4,"globals of this directory should be placed.  If this"
+ . W !?4,"should be the same directory, enter '.' here."
+ . W !?4,"Enter '^' to return to the prior prompt."
+ . I 'redir Q  ;redirection is not required
+ . W !?4,"Note that you MUST select another directory here because"
+ . W !?4,"the indicated directory is not currently mountable."
+ I R="." S R=DIR ;shorthand
+ i ($e(R,1,8)=":mirror:") s NEW=$$GetMirDBPath(R) i 1
+ e  S NEW=$$ChkDirOrSpecEXISTS(R) 
+ I NEW="" W *7," invalid directory!" G NEW
+ I redir,NEW=DIR W *7," *must* be a different directory" G NEW
+ ;
+ S X=+$$STAT(NEW) I X=-2 W *7," not a valid database!" G NEW
+ i (X<0)!(X=$zu(40,0,41)) do  i (X<0)!(X=$zu(40,0,41)) g NEW
+ . W *7,!,"        ...not mounted...mounting..."
+ . S X=+$$MOUNT(NEW) I X'<0 W " ok!" Q
+ . W "??",!,"Mounting ",NEW," failed."
+ . i NEW=DIR s redir=1 d
+ . . w !,"You must redirect the restore to another dataset."
+ if $Case($zb(+$p($ZU(49,NEW),",",17),$zu(40,8,28),1),0:0,:1) d  g NEW
+ . w !,NEW_" is a mirrored database. Journal restore is not allowed."
+ . w !,"You need to abort this operation and run MirrorCatchup^JRNRESTO"
+ . w !,"to restore journal records to mirrored databases."
+ ;
+ W:$X+$L(NEW)>74 !?70-$L(NEW) W "--> "_NEW
+ ;
+GETGLOTOP	;JO1726
+ i private s def="N"
+ e  s def="Y"
+ I $G(dejrn(DIR)) W !,"Currently set to process ALL globals" S def="Y"
+ S ALL=$$YN("Process all globals in "_DIR,def) G DIR:POP
+ ;
+ I ALL="Y" K dejrn(DIR) S dejrn(DIR)="1,"_NEW
+ I ALL="N" S dejrn(DIR)="0,"_NEW D GETGLO ;get a list of globals
+ i 'private s clujrn(DIR)="Y"
+ G DIR
+ ;-=-=-=-=
+GETGLO ;allow the specification of globals (and global patterns)
+ W ! I $D(dejrn(DIR))\10 DO  ;list existing globals
+ . N glo W !,"The following globals are currently selected:"
+ . S glo="" F  S glo=$O(dejrn(DIR,glo)) Q:glo=""   DO
+ . . W !?10,$$LJ(glo,10) I (glo["*")!(glo["?") W "  (pattern)"
+GLO R !,"Global ^",R I R="" Q
+ I R="?" W ! DO  W ! G GLO
+ . W !?4,"Select the name of a global which you specifically wish"
+ . W !?4,"to be processed."
+ . W !?4,"You may select patterns of globals by using the wild-card"
+ . W !?4,"characters '*' and '?' ('*' matches any number of characters"
+ . W !?4,"while '?' matches any single characters)."
+ . W !?4,"Enter ?L to list the currently selected list of globals"
+ I $E(R)="?" W ! DO  G GETGLO
+ . I $D(dejrn(DIR))\10=0 W !,"No globals selected.",!
+ I R="*" W *7," you may not select all globals this way!" G GLO
+ i $e(R)'="*",$e(R)'?1A,$e(R)'="%" W *7," that is not a valid global name!" g GLO
+ e  i $tr($e(R,2,$l(R)),"*?.","")'?.AN W *7," that is not a valid global name!"  g GLO
+ I $D(dejrn(DIR,R)) DO  G GLO
+ . W "  already exists -- rem" K dejrn(DIR,R) W "oved"
+ S dejrn(DIR,R)=$$PATRN(R)
+ i $tr(R,"*?&#")'=R s dejrn=1 ;selected globals with patterns
+ G GLO
+GLOLST ;list the selected globals/global patterns
+ W !,"The following globals are currently selected:"
+ S glo="" F  S glo=$O(dejrn(DIR,glo)) Q:glo=""   DO
+ . W !?10,$$LJ(glo,10) I (glo["*")!(glo["?") W "  (pattern)"
+ W ! Q
+ ;-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+REVIEW ;review the directories/globals selected and confirm
+ I '$D(dejrn) Q  ;no specs!
+ W !!,"Processing globals from the following"
+ i 'private w " clustered"
+ w " datasets:"
+ N dir,glo,x,a,cnt
+ S cnt=0,dir="" F  S dir=$O(dejrn(dir)) Q:dir=""  S cnt=cnt+1 DO
+ . S x=$G(dejrn(dir)),a=+x,x=$P(x,",",2,$L(x))
+ . W !,$J(cnt,2)_". "_$$LJ(dir,20)_"   "
+ . W $S(a:"All",1:"Selected")_" Globals"_$S(a:"",1:":")
+ . I x]"",x'=dir W !?4,"(Redirect to: "_x_")"
+ . I $O(dejrn(dir,""))="" DO:'a  Q  ;no globals selected
+ . . W !?4,"*** No globals selected for this directory! ***",!
+ . . K dejrn(dir) ;remove it!
+ . I a DO  S x=dejrn(dir) K dejrn(dir) S dejrn(dir)=x Q
+ . . W !?4,"*** globals specified for an inclusive directory? ***"
+ . S glo="" W !?10 F  S glo=$O(dejrn(dir,glo)) Q:glo=""  DO  ;globals
+ . . W:$X>65 !?10 W $$LJ("^"_glo,12)
+ W !
+ Q:$g(QUIETMODE)            ; Quit if quiet mode
+ I $$YN("Specifications correct","Y")="N" K dejrn
+ Q
+ ;-=-=-=-=
+GetMirDBPath(mdn) ;
+ n sfn,jrnf,dev,path
+ s $zt="ErrGetMirDBPath"
+ s jrnf=$zu(78,3) i jrnf="" q ""
+ s dev=$zu(78,5,jrnf,0) i dev<0 q ""
+ try {
+   d $zu(78,6,dev)
+   s sfn=$zu(78,31,mdn_":",2) 
+   s path=$zu(78,31,sfn)
+ } catch {
+   s path=""
+ }
+ d $zu(78,7,dev)
+ q path
+ErrGetMirDBPath s $zt="",$ze="" q ""
+StatMirDBName(mdn) ;
+ n sfn,jrnf,dev 
+ S $ZT="STERR" 
+ s jrnf=$zu(78,3) i jrnf="" q -2
+ s dev=$zu(78,5,jrnf,0) i dev<0 q -2
+ try {
+   d $zu(78,6,dev)
+   s sfn=$zu(78,31,mdn_":",2) 
+   i sfn<0 s sfn=-2
+ } catch {
+   s sfn=-2
+ }
+ d $zu(78,7,dev)
+ q sfn
+STAT(DIR) I (DIR<0)!(DIR="") Q -2 ;handle special case; bad directory name...
+ i ($e(DIR,1,8)=":mirror:") q $$StatMirDBName(DIR) 
+ S $ZT="STERR" Q $ZU(49,DIR) ;could fail, so...
+STERR S $ZT="",$ZE="" Q -2 ;return null: CACHE.DAT, but bad label
+MOUNT(DIR) ;remount it (if it was dismounted or not mounted)
+ N x,retmsg
+ s $ZT="MNTERR2^"_$ZN
+ s x=$$mount^JRNRESTB(DIR)
+ i 'x d  q retmsg
+ . s x=$P(x,",",2)  ; pick up $ZU(17) return code
+ . s retmsg="-1,Could not mount '"_DIR_"' because "_$$Error^%apiOBJ(-x)
+ q $$STAT(DIR)
+MNTERR2 S $ZT="" i $g(zjrnerr) zq 1 g @$zt
+ Q ("Could not mount '"_DIR_"'")
+CLUSETUP ;
+ ; Ask the user to tell us:
+ ;   a) how many cluster members there are
+ ;   b) the journal file prefix for each cluster member
+ ;   c) where to find the journal files for each cluster member
+ ; Once we have this information build a list of journal files for
+ ; each cluster member, including the primary system, and lookup
+ ; the starting/ending sequence number in each file. For each journal
+ ; file we also associate with it a cluster restart number. This number
+ ; starts at 1 and it increases each time we detect that the cluster
+ ; was restarted.
+ ;
+ ; Inputs (from SETUP^JRNRESTO):
+ ;    prefix = journal prefix for the primary system
+ ;    djfirst = 1st journal file to restore for the primary system
+ ;    djlast = last journal file to restore for the primary system
+ ;    lookpath() = list of directories to search for the primary system
+ ;    clujrn() = array of clustered databases
+ ;    %curfile = current journal file if journaling is enabled else
+ ;               null string (full file name)
+ ;    curfile = shortname of %curfile
+ ;
+ ; Returns the following:
+ ;    notresto - if defined and non-zero means abort the restore
+ ;    numclu = # of cluster members in addition to primary system
+ ;    minseq = lowest sequence # to be restored
+ ;    maxseq = highest sequence # to be restored
+ ;    maxclumstart = highest cluster mstart value. maxseq applies
+ ;        only to journal files that have this clumstart value
+ ;    clumember(id)=djfirst^djlast^prefix
+ ;    clumember(id,n)=<journal file name>^1st seq^last seq^clustartcnt
+ ;       where id = integer running from 0 to numclu
+ ;       n runs from 0 to the # of journal files
+ ;       clustartcnt is the cluster restart counter
+ ;    For each journal file we think we need to restore we set:
+ ;    clumember(id,"files",(<shortname>) =
+ ;           <fullfilename>^
+ ;           <prev jrnfile read from the journal file>^
+ ;           <journal offset of the 1st journal record>^
+ ;           <cluster sequence # of 1st journal offset>^
+ ;           <timestamp on block containing 1st journal record>^
+ ;           <journal offset of the last journal record>^
+ ;           <cluster sequence # of last journal offset>^
+ ;           <timestamp on block containing last journal record>^
+ ;           <clumstarttime in integer format (time(0))>
+ ;
+ s $ZT="CLUSETUPER^"_$ZN
+ k numclu,clumember
+ q:'$S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0)!'$D(clujrn)  ; not a cluster restore
+ n i,config,jfirst,jlast,x,dirlist,minclumstart,clumstart,id,index
+ n err
+ ;
+ ; store journal prefix and lookpath for primary system (id #0)
+ ; and then locate its journal files
+ d storejrnpath^JRNRESTC2(0)
+ d findfiles^JRNRESTC2(0,djfirst,djlast,$g(DEJRNSTART))  ; loads dirlist 
+ d elimfiles^JRNRESTC2(djfirst,djlast)   ;this is probably unnecessary
+ i $D(dirlist) merge clumember(0,"files")=dirlist
+ i $G(err),$$YN("Abort restore")="Y" s notresto=1 q
+ ;
+ w !!,"How many other cluster members are there to restore from? "
+ r numclu
+ f  q:-1<numclu&(numclu<14)  d  
+ . w !,"Invalid response. Must be between 0 and ",MAXCLUMEM-1
+ . w !,"How many other cluster members are there to restore from? "
+ . r numclu
+ i 'numclu s notresto=1 d  q
+ . w !!,?5,"If there are no other cluster members then do not specify"
+ . w !,?5,"that this is a restore of clustered datasets. Perform a "
+ . w !,?5,"simple journal restore for non-clustered systems"
+ . w !,"[Restore aborted]"
+ ;
+ w !,?5,"We need to know how to locate the journal files for the"
+ W !,?5,"other cluster members. This information can be stored in"
+ w !,?5,"a flat file, one file per cluster member, or it can be"
+ w !,?5,"entered by hand. If you wish to enter information from a "
+ w !,?5,"file enter the filename when asked for a parameter file."
+ w !,?5,"Otherwise, skip this question and you will be asked to "
+ w !,?5,"provide the journal file prefix and their location(s)"
+ w !
+ w !,?5,"Additionally for each system you may specify the first and"
+ w !,?5,"last journal file to be restored or you can allow the system"
+ w !,?5,"to calculate this for you. When specifying the first and last"
+ w !,?5,"journal files manually if you leave 'from:' blank that means"
+ w !,?5,"we will use the first journal file we can find and leaving"
+ w !,?5,"'last:' blank means we will use the last journal file we can "
+ w !,?5,"find. Leaving both blank means we'll use all the journal"
+ w !,?5,"files we can find. If you enter a ? for the 'from:' prompt the"
+ w !,?5,"system display the list of journal files that it can find for"
+ w !,?5,"that system."
+ w !
+ w !,?5,"When all the information has been gathered it will be "
+ w !,?5,"displayed and you will be asked to confirm it."
+ w !
+ s err=0
+ f id=1:1:numclu d  q:$G(notresto)
+ . w !,"Journal file attributes for cluster member #",id
+ . s config=""
+ . D ASKSET^JRNRESTO("     Parameter file? ",.config)
+ . i config'="" f  q:$$LOADCLUPARAM^JRNRESTC2(config)  d  q:config=""
+ . . s config=""
+ . . D ASKSET^JRNRESTO("     Parameter file? ",.config)
+ . i config="" d
+ . . D ASKSET^JRNRESTO("     Journal File Prefix:",.prefix)
+ . . d SETCLULOOKPATH^JRNRESTC2 ;ask where to find jrnl files
+ . d storejrnpath^JRNRESTC2(id)
+ . ; djfirst and djlast are the 1st and last journal files from the
+ . ; primary system. We use those dates as the default for the other
+ . ; systems but to start with we include all journal files from the
+ . ; other systems for those dates.
+ . s jfirst=djfirst,$P(jfirst,".",2)="001"
+ . i djlast=curfile s jlast=$ZD($H,8)_".999"
+ . e  s jlast=djlast,$P(jlast,".",2)="999"
+ . k dirlist
+ . n defjfirst,jrndir s defjfirst="" i $d(DEJRNSTART) d
+ . . s x="" f  s x=$o(clumember(id,"path",x)) q:x=""  s jrndir($zu(12,clumember(id,"path",x)))=""
+ . . s x=$$seldjstart^JRNRESTO(.jrndir) i x="" q  ;no suitable journal location to dejournal from
+ . . s defjfirst=x,jfirst=$case($ZBITGET($ZVERSION(0),46),0:$case($f($p(DEJRNSTART(x),",",2),";"),0:$e($p(DEJRNSTART(x),",",2),*-8-$l($p($p(DEJRNSTART(x),",",2),".",$l($p(DEJRNSTART(x),",",2),"."))),*),:$e($p(DEJRNSTART(x),",",2),*-8-$l($p($p(DEJRNSTART(x),",",2),".",$l($p(DEJRNSTART(x),",",2),"."))),$f($p(DEJRNSTART(x),",",2),";")-2)),:$p(DEJRNSTART(x),",",2))
+ . . d ASKSET^JRNRESTO("The last journal file (in YYYYMMDD.NNN form) to dejournal:",.jlast)
+ . i defjfirst="",$$YN("     Do you want to specify the first and last journal files")="Y" d 
+ . . d ASKSET^JRNRESTO("     from: ",.jfirst)
+ . . i jfirst="?" f  d  q:jfirst'="?"
+ . . . d findfiles^JRNRESTC2(id,"","")
+ . . . d showhead^JRNRESTC2
+ . . . d showfooter^JRNRESTC2($$showone^JRNRESTC2("dirlist"))
+ . . . s jfirst=djfirst,$P(jfirst,".",2)="001"
+ . . . d ASKSET^JRNRESTO("     from: ",.jfirst)
+ . . d ASKSET^JRNRESTO("       to: ",.jlast)
+ . ; generate the list of journal files for this cluster member
+ . ; if dirlist() is defined then the user entered ? to display the
+ . ; journal files for this system so we don't have to call
+ . ; findfiles(), we just eliminate the ones they don't want
+ . i defjfirst]"" d  i 1
+ . . d findfiles^JRNRESTC2(id,jfirst,jlast,$g(DEJRNSTART(defjfirst)))
+ . . k DEJRNSTART(defjfirst) ;prevent it from being reused by other systems
+ . e  i '$D(dirlist) d findfiles^JRNRESTC2(id,jfirst,jlast) i 1
+ . e  d elimfiles^JRNRESTC2(jfirst,jlast)
+ . i $D(dirlist) merge clumember(id,"files")=dirlist
+ . e  w !,"Warning, no files selected for cluster member #",id
+ . i err,$$YN("An error was encountered. Continue")="N" s notresto=1
+ ;
+ ; Now display the information we have and ask the user to
+ ; specify a starting/ending sequence # for the restore and to
+ ; confirm the operation.
+ ;
+ d showdata^JRNRESTC2
+ s x=$$YN("Is the above list correct (NO will abort the restore)")
+ i x="N" w !!," [Not restored]",! S notresto=1 q
+ ;
+ ; we could put code here to let them perform simple edits such
+ ; as specifying additional journal files or removing journal files
+ ; from the restore.
+ ;
+ ; Run through the list of journal files and calculate the minimum
+ ; and maximum cluster mstart times.
+ s minclumstart=$ZH("FFFFFFFF"),maxclumstart=0
+ f id=0:1:numclu d
+ . s index="" f  s index=$O(clumember(id,"files",index)) q:index=""  d
+ . . s clumstart=$P(clumember(id,"files",index),"^",9)
+ . . i clumstart d  ; ignore clumstart=0
+ . . . i clumstart<minclumstart s minclumstart=clumstart
+ . . . i clumstart>maxclumstart s maxclumstart=clumstart
+ w !!,"Specify the first and last sequence numbers to be used in "
+ w !,"selecting records to be restored (these are inclusive). Using "
+ w !,"the defaults will restore all sequence numbers in the journal "
+ w !,"file(s)." 
+ i minclumstart'=maxclumstart d
+ . w !,?5,"The journal files you have selected span a cluster shutdown"
+ . w !,?5,"and sequence numbers are reset to 0 following a shutdown"
+ . w !,?5,"If you specify an ending sequence number it will be applied"
+ . w !,?5,"only to journal files from the last time the cluster was"
+ . w !,?5,"started and if you specify a beginning sequence number it"
+ . w !,?5,"will only be applied to journal files from the first time"
+ . w !,?5,"the cluster was started."
+ ;
+ W !,"Starting sequence number to restore: First => "
+ R minseq S minseq=$TR(minseq," ,") s:minseq="" minseq=0
+ W !,"Ending sequence number to restore: Last => "
+ R maxseq S maxseq=$TR(maxseq," ,") s:maxseq="" maxseq=$ZH("FFFFFFFF")
+ ;
+ I $$YN("Perform the restore (no to abort)")="N" d
+ . w !!," [Not restored]",!
+ . S notresto=1
+ q
+CLUSETUPER ;  Handle unexpected errors and abort restore
+ s $ZT=""
+ u 0
+ s notresto=1  ; abort restore
+ w !,"Unexpected error occurred: ",$ZE,!,"[Restore aborted]",!
+ d BACK^%ETN ; log the error
+ q
+ ;-=-=-=-=
+GetDir(prompt,defdir,exists,quit) ;ask for a directory, allow defaults
+GetDirLoop ; Loop until we get something valid or exit
+ s $zt="GetDirE"
+ n exist,dir,x
+ s exist=+$g(exists,1) ; default is to check if exists
+ w !,prompt_": "_$s($g(defdir)'="":$g(defdir)_" => ",1:"") r dir s:dir="" dir=$g(defdir)
+ i $$STOP(dir) Set quit=1 Q ""
+ i $E(dir)="?" Q dir ;pass-on request for elaboration
+ q:exist<0 dir ;exist<0 means don't check valid or exists
+ s x=$S(exist:$$ChkDirOrSpecEXISTS(dir),1:$$ChkDirVALID(dir)) 
+ i x="" W *7,"  "_$s(exist:"Directory '"_dir_"' does not exist",1:"Invalid directory specification '"_dir_"'") G:exist GetDirLoop d  g:x="N" GetDirLoop
+ . s x=$$YN("Use this directory anyway","N")
+ i x="^" s quit=1 Quit ""
+ q dir
+GetDirE S $ZT=""
+ i $ze["<INTERRUPT>" q ""
+ w !,"Error: "_$ZE
+ zquit 1 i $ZT'="" G @$ZT
+ q ""
+Touch(D)
+ q
+ChkDirVALID(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,1)
+ChkDirEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkDirOrSpecEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,3)
+ChkDir(R) N N S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkBad S $ZT="" W !,"<"_$P($P($ZE,"<",2),">")_"> error -- invalid directory"
+ Q ""
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R
+STOP(x) S x=$$UC($E(x,1,4)) Q (x["EXIT")!(x["STOP")!(x["QUIT")!(x["HALT")!($E(x)="^")
+UC(x) q $zcvt(x,"u")
+LJ(x,n) Q ($E(x_$J("",n),1,n)_$E(x,n+1,$L(x))) ;left justify text to n chars
+PATRN(X) N q,i,x,c S q=0,x="" F i=1:1:$L(X) S c=$E(X,i) S:c="""" c=c_c DO
+ . I "*?&#"'[c S x=x_$S(q:c,1:"1"""_c),q=1 Q  ;simple text -- no pattern
+ . S x=x_$E("""",q)_$S(c="&":"1A",c="#":"1N",c="*":".E",1:"1E"),q=0 Q
+ S:q x=x_"""" S X=$P($P($P($P(X,"?"),"#"),"&"),"*") Q x ;return ?@x

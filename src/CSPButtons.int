@@ -1,0 +1,1644 @@
+ROUTINE CSPButtons [Type=INT]
+CSPButtons ;;;Collect CSP and CSP-Gateway Informations, Diagnostics and Logs;created:BM 2015-03-24;last changed:BM 2016-10-26
+ // CSPButtons initial version by Tomas Vaverka (tomas.vaverka@intersystems.com) in 2013
+ // picked up by Tomas and Bernd Mueller (bernd.mueller@intersystems.com) in 2015
+ // special thanks to Ernesto Fischer (ernesto.fischer@intersystems.com), author of 2009 zCSP.Util.Buttons
+ // Change-Notes:
+ // 2015-03-24 - BM - initial separated CSPButtons.mac (removed from CSPGWMGR.mac)
+ // 2015-03-27 - BM - add generation of LogDirectory and Main-LogFile creation in it and finally compress all the files in LogDirectory.
+ // 2015-03-27 - BM - removed some unused code, restructured and modernized some code
+ // 2015-03-31 - BM - added Security- and Audit-Log/Information Sections 
+ // 2015-04-03 - TV - added prompt & functionality to export of %cspSession and ^%ISCLOG globals
+ // 2015-04-08 - BM - added CSP-Applications Section
+ // 2015-04-08 - BM - added CSP Error Log Section
+ // 2015-04-08 - BM - minor bug fixes
+ // 2015-04-09 - BM - change file compressing under unix/linux to not include whole-directory-path in the tar-archive
+ // 2015-04-09 - BM - added *PWS* on the CSPGateway if it is the Private Webserver
+ // 2015-04-24 - BM - added processes and cconsole.log
+ // 2015-04-26 - BM - added SysLog
+ // 2015-04-27 - BM - added LockTab
+ // 2015-04-27 - BM - added httpd.conf and error.log from Apache Private Webserver (PWS)
+ // 2015-04-29 - TV - correct typo for LockTab query
+ // 2015-04-29 - BM - fix bug in CSPButtons version-check
+ // 2015-04-30 - BM - use NullDev to suppress output from CompressFiles OS commands.
+ // 2015-05-01 - BM - fix unicode chars
+ // 2015-05-01 - BM - some minor fixes and cosmetic enhancements
+ // 2015-11-19 - BM - fix file compressing bug under AIX, AIX does not support z flag
+ // 2016-10-26 - BM - added general CSPGWINFO entry to get CSP-Gateway Infos via http get generaly.
+ // 2016-10-26 - BM - fix bug in CSPGWINFO and added CSPSYS argument/support to get other CSPGW-page infos as well. 
+ // -----------------------------------------------------------------------------
+ //----------------------------------------------------------
+ Do Start(1)
+ Quit
+Start(display) //
+ New (display)
+ Set display=+$get(display)
+ If +$System.Version.GetNumber()<2012.2 {
+   Write:display !,"*** You are running on Cach?"_$System.Version.GetNumber()_" and "_"CSP Gateway Diagnostic Report and Evidence Logging Tool"_" is only for Cach?2012.2 and later ***"
+   Quit
+ }
+ If '($roles["%All") {
+   Write:display !,"*** You need %All privileges to run "_"CSP Gateway Diagnostic Report and Evidence Logging Tool"_" ***"
+   Quit
+ }
+ReadLogType
+ Write:display !!,"CSP Gateway Diagnostic Report and Evidence Logging Tool",", ","v1.0"
+ Write:display !!,"This reporting tool provides the information required for InterSystems"
+ Write:display !,"Technical Support to analyze CSP issues. "
+ Write:display !!,"This process will take some time to complete. Please be patient."
+ Write:display !
+ Set GlobalExport=1
+ If 'display goto Confirmed
+GlobalExportConfirm
+ Write !,"Export %cspSession and ^%ISCLOG globals (Y)? " Read LogType
+ Set LogType=$ZCONVERT(LogType,"U")
+ If LogType="NO"!(LogType="N") set GlobalExport=0 Goto ReadLogTypeConfirm
+ If LogType'=""&(LogType'="Y")&(LogType'="YES") Write !!,"<Please enter Y or N>" Goto GlobalExportConfirm
+ReadLogTypeConfirm	Write !,"Continue (Y)? " Read LogType
+ Set LogType=$ZCONVERT(LogType,"U")
+ If LogType="NO"!(LogType="N")!(LogType="Q")!(LogType="QUIT") Quit
+ If LogType'=""&(LogType'="Y")&(LogType'="YES") Write !!,"<Please enter Y or N>" Goto ReadLogTypeConfirm
+Confirmed
+ Set PDev=$Principal
+ do GetDirs
+ Set DirName="CSP_"_$Piece($Piece($ZUtil(86),"*",2)," ",1)_$zd($h,8)_$tr($zt($p($h,",",2),2),":","")
+ Set LogDirectory=##class(%SYS.System).TempDirectory()_DirDelim_DirName
+ If '##class(%Library.File).CreateNewDir(##class(%SYS.System).TempDirectory(),DirName) {
+   Write:display !,"Failed to create LogDirectory "_LogDirectory_"."
+   Quit
+ }
+ Set LogFilePrefix=$Piece($s($System.License.KeyCustomerName()'?1a.e:"Unknown",1:$System.License.KeyCustomerName())," ",1)
+ If LogFilePrefix'="",LogFilePrefix?1a.an,$Length(LogFilePrefix)<20
+ Else  Set LogFilePrefix="Cache"
+ Set LogFile=$$NewFile(LogFilePrefix,"html")
+ If GlobalExport Set GlobalExportFile=$$NewFile(LogFilePrefix,"xml")
+ if LogFile="" {
+   Write:display !,"Failed to create LogFile."
+   Quit
+ }
+ //create report
+ Do LogReportHead Write:display "."
+ Do LogHeadGateways Write:display "."
+ Do LogMain() Write:display "."  //this is where main data is fetched and processed into report
+ Do LogReportTrailer Write:display "."
+ Close LogFile
+ Use PDev Write:display "." Write:display !,"Log file saved to: ",LogFile_", "_$FNumber($ZUtil(140,1,LogFile),",")_" bytes.",!
+ do CompressFiles(LogDirectory,MgrDir,DirName,DirName,1,display)  //SourcePath, CabPath, CabName, CabDir, deleteSourcePath, display
+ Kill LogFile
+ Quit
+LogReportHead	//
+	Use LogFile
+	Write !,"<html>"
+	Write !,"<head>"
+	Write !,"<title>"
+	Write !,"CSPButtons Diagnostic Report, Log-Filename: ",LogFile
+	Write !,"</title>"
+	Write !,"<meta http-equiv=""Content-Type"" content=""text/html; charset=UTF-8"">"
+	Write !,"</head>"
+	Write !,"<body bgcolor=""#FFFFFF"" text=""#000000"">"
+	Write !,"<table align=""center"" width=""100%"" border=""1"" bordercolor=""#999999"">"
+	Write !,"  <tr bgcolor=""#FFFFFF"" bordercolor=""#CCCCCC"">"
+	Write !,"    <td colspan=12 height=""40"" align=""center"">"
+	Write !,"      <a name=""top""></a><font face=""Arial, Helvetica, sans-serif"" size=""5"" color="_"CadetBlue"_"><b>"_"CSP Gateway Diagnostic Report and Evidence Logging Tool"_", "_"v1.0"_"</b></font>"
+	Write !,"    </td>"
+	Write !,"  </tr>"
+	Write !,"  <tr><td colspan=""12"" nowrap align=""center""><i>Log created by User: &quot;"_$username_"&quot; on "_$zdatetime($horolog)_"</i></td></tr>"
+	Write !,"  <tr bgcolor=""#FFFFFF"" bordercolor=""#CCCCCC"">"
+	Do LogHeaderTagBasic("general","System-General")
+	Do LogHeaderTagBasic("key","Cach&eacute; Key")
+	Do LogHeaderTagBasic("dumplic","Dump License")
+	Do LogHeaderTagBasic("security","Security")
+	Do LogHeaderTagBasic("audit","Audit")
+	Do LogHeaderTagBasic("processes","Processes")
+	Do LogHeaderTagBasic("locktab","LockTab")
+	Do LogHeaderTagBasic("cspapps","CSP Applications")
+	Do LogHeaderTagBasic("cspsesdump","Dump CSP Sessions")
+	Do LogHeaderTagBasic("csperrorlog","CSP Error Log")
+	Do LogHeaderTagBasic("cconsole","cconsole.log")
+	Do LogHeaderTagBasic("syslog","SysLog")
+	Write !,"  </tr>"
+	Write !,"</table>"
+	Write !,"<p></p>"
+	Use PDev Write:display "."
+	Quit
+LogHeadGateways //
+	// CSP Gateways
+	Use LogFile
+	Write !,"<table align=""center"" width=""100%"" border=""1"" bordercolor=""#999999"" bgcolor=""#CCCCCC"">"
+	Write !,"  <tr bgcolor=""#FFFFFF"" bordercolor=""#CCCCCC"">"
+	Write !,"    <td colspan=""10"" height=""40"" align=""center"">"
+	Write !,"      <font face=""Arial, Helvetica, sans-serif"" size=""5"" color="_"SteelBlue"_"><b>CSP Gateway Servers</b></font>"
+	Write !,"    </td>"
+	Write !,"  </tr>"
+	Set CSPRegs=$system.CSP.GetGatewayRegistry()
+	Set CSPMgrs=CSPRegs.GetGatewayMgrs()
+	Set webserverport=$$GetConfigWebServerPort() 
+	For mgrid=1:1:CSPMgrs.Count() 
+	{
+		set CSPMgr=CSPMgrs.GetAt(mgrid)
+		Write !,"  <tr bgcolor=""#FFFFFF"" bordercolor=""#CCCCCC"">"
+		Do LogHeaderTagAdvanced("cspserver"_mgrid,"CSP Gateway on "_CSPMgr.Server_" : "_CSPMgr.Port_$s(CSPMgr.Port=webserverport:" *PWS*",1:""))
+		if CSPMgr.Port=webserverport {
+			Do LogHeaderTagBasic("httpdconfpws","httpd.conf")
+			Do LogHeaderTagBasic("errorlogpws","error.log")
+		}
+		else  {
+			Do LogHeaderTagBasic("","")
+			Do LogHeaderTagBasic("","")	
+		}
+		Do LogHeaderTagBasic("cspinfo"_mgrid,"Info")
+		Do LogHeaderTagBasic("cspini"_mgrid,"CSP.ini")
+		Do LogHeaderTagBasic("cspdefparams"_mgrid,"Default Params")
+		Do LogHeaderTagBasic("cspserversparams"_mgrid,"Servers Params")
+		Do LogHeaderTagBasic("cspapppathsparams"_mgrid,"Application Paths Params")
+		Do LogHeaderTagBasic("cspstatus"_mgrid,"Status")
+		Do LogHeaderTagBasic("csplog"_mgrid,"CSP.log")
+		Write !,"  </tr>"
+	}
+	Write !,"</table>"
+	Use PDev Write:display "."
+	Quit
+LogMain(syslog=1,gwheader=1,gwinfo=1,gwini=1,gwdefparams=1,gwserversparams=1,gwapppathsparams=1,gwstatus=1,gwcsplog=1)	//
+ Set PDev=$Principal
+ //SYS Logs
+ if syslog=1 {
+ 	do LogSYSGeneral(LogFile)
+ 	do LogSYSKey
+ 	do DumpLicense
+ 	do Security
+ 	do Audit
+ 	do Processes
+ 	do LockTab
+ 	do CSPapps
+ 	do DumpCSPSessions(LogFile)
+ 	do CSPErrorLog
+ 	do Cconsole
+ 	do SysLog
+ }
+ //Logs for every GW
+ Set CSPRegs=$system.CSP.GetGatewayRegistry()
+ Set CSPMgrs=CSPRegs.GetGatewayMgrs()
+ For mgrid=1:1:CSPMgrs.Count() 
+ {
+	 set CSPMgr=CSPMgrs.GetAt(mgrid)
+	 Do:gwheader LogGWHeader
+	 if gwheader,CSPMgr.Port=$g(webserverport) do HttpdConfPWS do ErrorLogPWS
+	 Do:gwinfo LogGWInfo
+	 Do:gwini LogGWIni
+	 Do:gwdefparams LogGWDefParams
+	 Do:gwserversparams LogGWServersParams
+	 Do:gwapppathsparams LogGWAppPathsParams
+	 Do:gwstatus LogGWStatus
+	 Do:gwcsplog LogGWCSPLog
+ }
+ Quit
+LogSYSGeneral(LogFile) //
+	Use LogFile
+ 	Write !,"<hr size=""2"" noshade>"
+ 	Write !,"<table border=0 width=""100%""><tr>"
+ 	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""general""></a>System-General</font></b></td>"
+ 	Write !,"<td align=right><a href=""#top"">top</a></td>"
+ 	Write !,"</tr></table>"
+	Write !,"<table border=0 style='font-size: 14px; font-family: Arial, Helvetica, sans-serif;' cellpadding=2 cellspacing=0>"
+	Write !,"<tr><td nowrap> Configuration Name:</td><td nowrap>&nbsp;"_$Piece($ZUtil(86),"*",2),"</td></tr>"
+	Write !,"<tr><td nowrap> Customer Name:</td><td nowrap>&nbsp;",$s($System.License.KeyCustomerName()'?1a.e:"Unknown",1:$System.License.KeyCustomerName()),"</td></tr>"
+	Write !,"<tr><td nowrap> Host Name:</td><td nowrap>&nbsp;",$Piece($ZUtil(54,13,$ZUtil(54,0)),",",2),"</td></tr>"
+	Write !,"<tr><td nowrap> IP Address:</td><td>&nbsp;",$Piece($ZUtil(54,13,$ZUtil(54,0)),",",1),"</td></tr>"
+	Write !,"<tr><td nowrap> Cach&eacute; Version String:</td><td nowrap>&nbsp;",$ZVERSION_"</td></tr>"
+	Write !,"<tr><td nowrap> Operating System Version:</td><td nowrap>&nbsp;",$zconvert($System.Version.GetBuildOS(),"U"),"</td></tr>"
+	Set oNLS=##class(%SYS.NLS.Locale).%New()
+	Write !,"<tr><td nowrap> Current Locale:</td><td nowrap>&nbsp;"_oNLS.Name_" - "_oNLS.Description_"</td></tr>"
+	Set oNLS=""
+	Write !,"<tr><td nowrap> Log created by User:</td><td nowrap>&nbsp;&quot;"_$username_"&quot; on "_$zdatetime($horolog)_"</td></tr>"
+	Write !,"</table>"
+	Use PDev Write:display "."
+	Quit
+LogSYSKey //
+	Use LogFile
+	Write !,"<hr size=""2"" noshade>"
+ 	Write !,"<table border=""0"" width=""100%""><tr>"
+ 	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""key""></a>Cach&eacute; Key</font></b></td>"
+ 	Write !,"<td align=right><a href=""#top"">top</a></td>"
+ 	Write !,"</tr></table>"
+	Write !,"<pre>"
+	Do $System.License.CKEY()
+	Write !,"</pre>"
+	Write !,"<br>"
+	Write !,"<pre>",!!,"Cach&eacute; License Usage:"
+	Do counts^%LICENSE
+	If $System.License.KeyServer()["Multi" Do ShowSummary^%LICENSE
+	Write !,"</pre>" 
+	Write !,"<br>"
+	Use PDev Write:display "."
+	Quit
+DumpLicense
+	Set $ZTrap="DumpLicenseErr"
+	New DumpFile,IO,x
+	Use LogFile
+	Write !,"<hr size=""2"" noshade>"
+ 	Write !,"<table border=""0"" width=""100%""><tr>"
+ 	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""dumplic""></a>Dump License</font></b></td>"
+ 	Write !,"<td align=right><a href=""#top"">top</a></td>"
+ 	Write !,"</tr></table>"
+	Write !,"<pre>"
+	Use PDev Write:display "."
+	Set IO=$IO
+	If display {
+	  Open NullDev::0
+	  If $Test Use NullDev
+	}
+	If display Use PDev Write:display "."
+	Use LogFile Do LicenseKeys(),LicenseInUse()
+	Use LogFile Write !,"</pre>" 
+	Use PDev Write:display "."
+	Quit
+DumpLicenseErr
+	Set $ZTrap=""
+	Do WriteLog("Error: "_$ZError)
+	Quit 
+LicenseKeys() PUBLIC {
+	Do $System.License.ShowSummary() Write !
+	; write keys in use
+	Set rset=##class(%Library.ResultSet).%New("%SYSTEM.License:LicenseServerKeyList")
+	If rset="" Write !,"Query failed" Do $System.Status.DisplayError(%objlasterror) Quit
+	Set status=rset.Execute()
+	If ('status) Write !,"Execute Query failed" Do $System.Status.DisplayError(.status) Quit
+	Set colcnt=rset.GetColumnCount()
+	For i=1:1:colcnt {
+	  Set colname(i)=rset.GetColumnName(i)
+	}
+	Set n=0
+	WHILE rset.Next() {
+	  Set n=n+1
+	  Write !,"License key number ",n
+	  For i=1:1:colcnt Write !,?2,colname(i),":",?20,rset.GetData(i)
+	}
+	; write key connections
+	Set rset=##class(%Library.ResultSet).%New("%SYSTEM.License:AllKeyConnectionList")
+	If rset="" Write !,"Create Query failed" Do $System.Status.DisplayError(%objlasterror) Quit
+	Set status=rset.Execute()
+	If ('status) Write !,"Execute Query failed" Do $System.Status.DisplayError(.status) Quit
+	Set colcnt=rset.GetColumnCount()
+	Set widths="15,6,6,15,15,10",colhead="UserId,LU,Connect,ServerIP,Instance,OrderNum"
+	Write !!,?4 For i=1:1:colcnt Write $Justify($Piece(colhead,",",i),$Piece(widths,",",i))," "
+	Set n=0
+	WHILE rset.Next() {
+	  Set n=n+1,c=4
+	  Write !,n," ",?4 For i=1:1:colcnt Write $Justify(rset.GetData(i),$Piece(widths,",",i))," " Set c=c+$Piece(widths,",",i)+1 If i=1,$X>c Write !,?c
+	}
+	Quit
+ }
+LicenseInUse() PUBLIC {
+	Write !!,"License usage summary: "
+	; write current license users
+	Set Rset=##class(%Library.ResultSet).%New("%SYSTEM.License.UserList")
+	if 'Rset Write !,"Could not form query %SYSTEM.License.UserList" Quit
+	Set r=Rset.Execute()
+	if r {
+		Set ncol=Rset.GetColumnCount()
+		For i=1:1:ncol Set hd(i)=Rset.GetColumnName(i)
+		Set cw=80\ncol
+		Write !!
+		For i=1:1:ncol Write hd(i) If i<ncol Write ?(cw*i)+1
+		Write !
+		Set nrec=0
+		WHILE (Rset.Next()) {
+			Set nrec=nrec+1
+			Write !
+			Set ncol=Rset.GetColumnCount()
+			For i=1:1:ncol Write Rset.GetData(i) If i<ncol Write:$X>(cw*i) ! Write ?((cw*i)+1)
+		}
+		Do Rset.Close()
+	}
+	If 'r Write !,"Could not execute query %SYSTEM.License.UserList",!
+ }
+DumpCSPSessions(LogFile) 
+	Set $ZTrap="DumpCSPSessionsErr"
+	Use LogFile
+	Write !,"<hr size=""2"" noshade>"
+ 	Write !,"<table border=""0"" width=""100%""><tr>"
+ 	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""cspsesdump""></a>CSP Sessions</font></b></td>"
+ 	Write !,"<td align=right><a href=""#top"">top</a></td>"
+ 	Write !,"</tr></table>"
+	Write !,"<pre>"
+	/* Get session info 
+	   ID, Username, Preserve, Application, Timeout, LicenseId, SesProcessId, AllowEndSession
+	*/
+	set tStatement = ##class(%SQL.Statement).%New()
+	If ##class(%Dictionary.CompiledQuery).%ExistsId("%ZCSPGTW.Session||CSPButtonsInfo") {
+		set tSQL = 1,tSQL(1)="CALL %ZCSPGTW.Session_CSPButtonsInfo()"
+	}
+	Else {
+		set tSQL = 1,tSQL(1)="CALL %CSP.Session_SessionInfo()"
+	}	
+	set tStatus = tStatement.%Prepare(.tSQL)
+	set tResult = tStatement.%Execute()
+	if 'tResult.%SQLCODE {
+		set tMeta= tResult.%GetMetadata()
+		Set ncol=tMeta.columns.Count()
+		For i=1:1:ncol Set hd(i)=tMeta.columns.GetAt(i).colName
+		Set cw=200\(ncol)
+		Write !!
+		For i=1:1:(ncol) Write hd(i) If i<ncol Write ?(cw*i)
+		Write !!
+		Set nrec=0
+		WHILE tResult.%Next() {
+			Set nrec=nrec+1
+			Set ncol=tResult.%ResultColumnCount
+			For i=1:1:(ncol) Write tResult.%GetData(i) If i<ncol Write:$X>(cw*i) ! Write ?((cw*i))
+	 		write !
+	 	}
+	}
+	kill tResult,tStatement
+	Use LogFile Write !,"</pre>" 
+	Use PDev Write:display "."
+	/// Export %cspSession and ^%ISCLOG globals to file
+	If GlobalExport {
+		M ^zcspSession=^%cspSession
+		Do $system.OBJ.Export("zcspSession.GBL,%ISCLOG.GBL",GlobalExportFile,$s('display:"-d",1:""))
+		k ^zcspSession
+	}
+	Quit
+DumpCSPSessionsErr
+	Set $ZTrap=""
+	kill tResult,tStatement
+	Do WriteLog("Error: "_$ZError)
+	Use PDev Write:display "."
+	Quit
+	/// CSP server side error logs in manager namespace and all local namespaces.
+CSPErrorLog
+	Use LogFile
+	Write !,"<hr size=""2"" noshade>"
+ 	Write !,"<table border=""0"" width=""100%""><tr>"
+ 	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""csperrorlog""></a>CSP Error Log (Server side)</font></b></td>"
+ 	Write !,"<td align=right><a href=""#top"">top</a></td>"
+ 	Write !,"</tr></table>"
+ 	Set currNsp=$namespace
+	Try {
+		Set LN=0
+		//%SYS log
+		If $Data(^%cspServer("LOG")) {
+			Write !,"<p><b style='color: #0000FF; font-size: 12px; line-height: 14px; font-family: Arial, Helvetica, sans-serif;'>Namespace: "_$namespace_"</b></p>"
+			Write "<table style='font-family: Arial, Helvetica, sans-serif;font-size: 12px;' class=sortable border id=syserr cellpadding=2 cellspacing=0>",!
+			Write "<tr title='Click to sort'><th>#</th><th>Date</th><th>Namespace</th><th>Error</th></tr>",!
+			Set N="" 
+			For id=1:1 {
+				Set N=$Order(^%cspServer("LOG",N)) Quit:N=""  
+				Set LN=LN+1,HEAD=$Get(^%cspServer("LOG",N,0)),TEXT=$Get(^%cspServer("LOG",N,1)) 
+				//Do DispLine(id,HEAD,TEXT)
+				Write "<tr><td>",id,"</td><td>",$Piece(HEAD,"~"),"</td><td>",$Piece(HEAD,"~",2),"</td><td>",$ZCvt(TEXT,"O","HTML"),"</td></tr>",!
+			}
+			Write "</table>",!
+		}
+		//each namespace log 
+		Write !
+		Set rsNsp=##class(%Library.ResultSet).%New("%SYS.Namespace:List")
+		Do rsNsp.Execute()
+		While rsNsp.Next() {
+			Set Nsp=rsNsp.Data("Nsp")
+			If Nsp["DOCBOOK" Continue
+			Try {
+				ZNspace Nsp
+			}
+			Catch {
+				ZNspace currNsp
+				Continue
+			}
+			If $Data(^cspServer("LOG")) {
+				Write !,"<p><b style='color: #0000FF; font-size: 12px; line-height: 14px; font-family: Arial, Helvetica, sans-serif;'>Namespace: "_Nsp_"</b></p>"
+				Write "<table style='font-family: Arial, Helvetica, sans-serif;font-size: 12px;' class=sortable border id=localerr cellpadding=2 cellspacing=0>",!
+				Write "<tr title='Click to sort'><th>#</th><th>Date</th><th>Namespace</th><th>Error</th><th>Line</th></tr>",!
+				Set N="" 
+				For id=1:1 {
+					Set N=$Order(^cspServer("LOG",N)) Quit:N=""  
+					Set LN=LN+1,HEAD=$Get(^cspServer("LOG",N,0)),TEXT=$Get(^cspServer("LOG",N,1)) 
+					//Do DispLine(id,HEAD,TEXT)
+					Write "<tr><td>",id,"</td><td>",$Piece(HEAD,"~"),"</td><td>",$Piece(HEAD,"~",2),"</td><td>",$ZCvt(TEXT,"O","HTML"),"</td></tr>",!
+				}
+				Write "</table><hr>",!
+			}
+		}
+		If 'LN { Write !,"<p><span style='font-size: 12px; line-height: 14px; font-family: Arial, Helvetica, sans-serif;'>The CSP Error Log (Server side) is empty</span></p>",! }
+		Write !,"<br>"
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	ZNspace currNsp
+	Use PDev Write:display "."
+	Quit
+	/// CSP apps and definitions
+CSPapps	
+	Use LogFile
+ 	Write !,"<hr size=""2"" noshade>"
+ 	Write !,"<table border=""0"" width=""100%""><tr>"
+ 	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""cspapps""></a>CSP Applications</font></b></td>"
+ 	Write !,"<td align=right><a href=""#top"">top</a></td>"
+ 	Write !,"</tr></table>"
+	Try {
+		Write !,"<br><b style='color: #0000FF; font-size: 12px; line-height: 14px; font-family: Arial, Helvetica, sans-serif;'>CSP Global Configuration parameters</b>"
+		Write !,"<table style='font-family: Arial, Helvetica, sans-serif; font-size: 11px; line-height: 14px; width: 45%' id='cspglobalparams' border cellpadding=2 cellspacing=0>"
+		Write "<tr><td>DebugErrorPage</td><td>",##class(%SYSTEM.CSP).GetConfig("DebugErrorPage"),"&nbsp;</td></tr>",!
+		Write "<tr><td>DefaultErrorPage</td><td>",##class(%SYSTEM.CSP).GetConfig("DefaultErrorPage"),"&nbsp;</td></tr>",!
+		Write "<tr><td>ClearSessionsOnRestart</td><td>",##class(%SYSTEM.CSP).GetConfig("ClearSessionsOnRestart"),"&nbsp;</td></tr>",!
+		Write "<tr><td>SessionLockTimeout</td><td>",##class(%SYSTEM.CSP).GetConfig("SessionLockTimeout"),"&nbsp;</td></tr>",!
+		Write "<tr><td>Expire</td><td>",##class(%SYSTEM.CSP).GetConfig("Expire"),"&nbsp;</td></tr>",!
+		Write "<tr><td>DefaultServerName</td><td>",##class(%SYSTEM.CSP).GetConfig("DefaultServerName"),"&nbsp;</td></tr>",!
+		Write "<tr><td>CSPConfigName</td><td>",##class(%SYSTEM.CSP).GetConfig("CSPConfigName"),"&nbsp;</td></tr>",!
+		Write "<tr><td>DefaultLoginPage</td><td>",##class(%SYSTEM.CSP).GetConfig("DefaultLoginPage"),"&nbsp;</td></tr>",!
+		Write "<tr><td>DefaultPasswordChangePage</td><td>",##class(%SYSTEM.CSP).GetConfig("DefaultPasswordChangePage"),"&nbsp;</td></tr>",!
+		Write "<tr><td>OptionalBrokerJS</td><td>",##class(%SYSTEM.CSP).GetConfig("OptionalBrokerJS"),"&nbsp;</td></tr>",!
+		Write "<tr><td>FileServerPage</td><td>",##class(%SYSTEM.CSP).GetConfig("FileServerPage"),"&nbsp;</td></tr>",!
+		Write "<tr><td>8BitLocaleCharset</td><td>",##class(%SYSTEM.CSP).GetConfig("8BitLocaleCharset"),"&nbsp;</td></tr>",!
+		Write "<tr><td>ProtectSessionCallback</td><td>",##class(%SYSTEM.CSP).GetConfig("ProtectSessionCallback"),"&nbsp;</td></tr>",!
+		Write "<tr><td>DisableGatewayCacheClear</td><td>",##class(%SYSTEM.CSP).GetConfig("DisableGatewayCacheClear"),"&nbsp;</td></tr>",!
+		Write "<tr><td>UseLegacySessionSharing</td><td>",##class(%SYSTEM.CSP).GetConfig("UseLegacySessionSharing"),"&nbsp;</td></tr>",!
+		Write "<tr><td>GatewayPingHTTPSConfig</td><td>",##class(%SYSTEM.CSP).GetConfig("GatewayPingHTTPSConfig"),"&nbsp;</td></tr>",!
+		Write "<tr><td>GatewayPingHTTPSPort</td><td>",##class(%SYSTEM.CSP).GetConfig("GatewayPingHTTPSPort"),"&nbsp;</td></tr>",!
+		Write "</table>",!
+		Write !,"<br>" 
+		Write !,"<hr size=""2"" noshade>"
+		Set rs=##class(%Library.ResultSet).%New("Security.Applications:Detail")  //Detail all Application records
+		Set sc=rs.Execute("*",2)  //"*" = All, 2 = Bit 1 = CSP Applications
+		If '(sc) Do $System.Status.DisplayError(sc) Quit
+		Write !,"<br>"
+		Write !,"<b style='color: #0000FF; font-size: 12px; line-height: 14px; font-family: Arial, Helvetica, sans-serif;'>Applications</b>"
+		Write !,"<table style='font-family: Arial, Helvetica, sans-serif; font-size: 11px; line-height: 14px;width: 100%;' class=sortable id='cspapp' border cellpadding=2 cellspacing=0>"
+		Write !,"<tr title='Click to sort'>"
+		For col=1:1:rs.GetColumnCount() Write !,"<th align='center'><b>",rs.GetColumnName(col),"</b></th>"
+		Write !,"</tr>"
+		While rs.Next() {
+			Write !,"<tr valign=""top"">"
+			For col=1:1:rs.GetColumnCount() Write !,"<td nowrap>",$ZConvert(rs.GetData(col),"O","HTML"),"&nbsp;</td>"
+			Write !,"</tr>"
+		}
+		Write !,"</table>"
+		Write !,"<br><br>"
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	Set rs=""
+	Use PDev Write:display "."
+	Quit
+	/// Security related informations. 
+Security //
+	Use LogFile
+ 	Write !,"<hr size=""2"" noshade>"
+ 	Write !,"<table border=""0"" width=""100%""><tr>"
+ 	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""security""></a>Security</font></b></td>"
+ 	Write !,"<td align=right><a href=""#top"">top</a></td>"
+ 	Write !,"</tr></table>"
+	Try {
+		Use LogFile
+		Write !,"<br><b style='color: #0000FF; font-size: 12px; line-height: 14px; font-family: Arial, Helvetica, sans-serif;'>Security Parameters</b>"
+		Set rs = ##class(%Library.ResultSet).%New("Security.System:List")
+		If 'rs Do $System.Status.DisplayError(%objlasterror) Quit
+		Set rs.RuntimeMode=1
+		Do rs.Execute()
+		Write !,"<table style='font-family: Arial, Helvetica, sans-serif; font-size: 12px;' id='secparams' border cellpadding=2 cellspacing=0>"
+		While rs.Next() {
+			Write !
+			For i=1:1:rs.GetColumnCount() Write "<tr><td>",rs.GetColumnName(i),"</td><td class='sortable_nosort'>",rs.GetData(i),"&nbsp;</td></tr>",!
+		}
+		Write "</table>",!
+		Write !,"<br>" 
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	//Security Services 
+	Try {
+		Write !,"<hr size=""2"" noshade>"
+		Write !,"<b style='color: #0000FF; font-size: 12px; line-height: 14px; font-family: Arial, Helvetica, sans-serif;'>Services</b>"
+		Set rs = ##class(%Library.ResultSet).%New("Security.Services:Detail")
+		If 'rs Do $System.Status.DisplayError(%objlasterror) Quit
+		Do rs.Execute("*")
+		Write !,"<br>"
+		Write !,"<table class=sortable id='secservice' border style='font-size: 12px; font-family: Arial, Helvetica, sans-serif; width: 100%' cellpadding=2 cellspacing=0>"
+		Write !,"<tr>"
+		For col=1:1:rs.GetColumnCount() Write !,"<th align='center' title='Click to sort'><b>",(rs.GetColumnName(col)),"</b></th>"
+		Write !,"</tr>"
+		While rs.Next() {
+			Write !,"<tr valign=""top"">"
+			For col=1:1:rs.GetColumnCount() Write !,"<td>",($ZConvert(rs.GetData(col),"O","HTML")),"&nbsp;</td>"
+			Write !,"</tr>"
+		}
+		Write !,"</table>"
+		Write !,"<br>"
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	//Security Resources
+	Try {
+		Write !,"<hr size=2 noshade>"
+		Write !,"<b style='color: #0000FF; font-size: 12px; line-height: 14px; font-family: Arial, Helvetica, sans-serif;'>Resources</b>"
+		Set rs = ##class(%Library.ResultSet).%New("Security.Resources:List")
+		If 'rs Do $System.Status.DisplayError(%objlasterror) Quit
+		Do rs.Execute()
+		Write !,"<br>"
+		Write !,"<table class=sortable id='secresource' border style='font-size: 12px; font-family: Arial, Helvetica, sans-serif; width: 100%' cellpadding=2 cellspacing=0>"
+		Write !,"<tr>"
+		For col=1:1:rs.GetColumnCount() Write !,"<th align='center' title='Click to sort'><b>",(rs.GetColumnName(col)),"</b></th>"
+		Write !,"</tr>"
+		While rs.Next() {
+			Write !,"<tr valign=""top"">"
+			For col=1:1:rs.GetColumnCount() Write !,"<td>",($ZConvert(rs.GetData(col),"O","HTML")),"&nbsp;</td>"
+			Write !,"</tr>"
+		}
+		Write !,"</table>"
+		Write !,"<br>"
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	//Security Roles
+	Try {
+		Write !,"<hr size=2 noshade>"
+		Write !,"<b style='color: #0000FF; font-size: 12px; line-height: 14px; font-family: Arial, Helvetica, sans-serif;'>Roles</b>"
+		Set rs = ##class(%Library.ResultSet).%New("Security.Roles:Detail")
+		If 'rs Do $System.Status.DisplayError(%objlasterror) Quit
+		Do rs.Execute("*")
+		Write !,"<br>"
+		Write !,"<table class=sortable id='secroles' border style='font-size: 12px; font-family: Arial, Helvetica, sans-serif; width: 100%' cellpadding=2 cellspacing=0>"
+		Write !,"<tr>"
+		For col=1:1:rs.GetColumnCount() Write !,"<th align='center' title='Click to sort'><b>",rs.GetColumnName(col),"</b></th>"
+		Write !,"</tr>"
+		Set sc=rs.Next()
+		While sc {
+			Set Role=rs.Data("Name")
+			Write !,"<tr><td valign=top>",rs.Data("Name"),"</td>",!
+			Write "<td valign=top>",$ZConvert(rs.Data("Description"),"O","HTML"),"&nbsp;</td>",!
+			If rs.Data("GrantedRoles")'="" {
+				Write "<td valign=top>",rs.Data("GrantedRoles"),"</td>",!
+			} Else {
+				Write "<td>&nbsp;</td>",!
+			}
+			Set res=rs.Data("Resources")
+			If res'="" {
+				Write "<td valign=top>",$Piece(res,":",1)," : ",$Piece(res,":",2),"<br>",!
+				Set sc=rs.Next()
+				While (sc) && (rs.Data("Name")=Role) {
+					Set res=rs.Data("Resources")
+					Write $Piece(res,":",1)," : ",$Piece(res,":",2),"<br>",!
+					Set sc=rs.Next()
+				}
+				Write "</td>",!
+			} Else {
+				Set sc=rs.Next()
+				Write "<td>&nbsp;</td>",!
+			}
+			Write "</tr>",!
+		}
+		Write !,"</table>"
+		Write !,"<br>"
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	//Security Databases
+	Try {
+		Write !,"<hr size=2 noshade>"
+		Write !,"<b style='color: #0000FF; font-size: 12px; line-height: 14px; font-family: Arial, Helvetica, sans-serif;'>Databases</b>"
+		If $System.Version.GetNumber()="2008.2" {
+			Set rs = ##class(%Library.ResultSet).%New("Config.DataStorage:LocalDatabaseList")
+		}
+		Else  {
+			Set rs = ##class(%Library.ResultSet).%New("Config.Databases:List")
+		}
+		If 'rs Do $System.Status.DisplayError(%objlasterror) Quit
+		Do rs.Execute()
+		Write !,"<br>"
+		Write !,"<table class=sortable id='databases' border style='font-size: 12px; font-family: Arial, Helvetica, sans-serif; width: 100%' cellpadding=2 cellspacing=0>"
+		Write !,"<tr>"
+		For col=1:1:rs.GetColumnCount() Write !,"<th align='center' title='Click to sort'><b>",(rs.GetColumnName(col)),"</b></th>"
+		Write !,"</tr>"
+		While rs.Next() {
+			Write !,"<tr valign=""top"">"
+			For col=1:1:rs.GetColumnCount() Write !,"<td>",($ZConvert(rs.GetData(col),"O","HTML")),"&nbsp;</td>"
+			Write !,"</tr>"
+		}
+		Write !,"</table>"
+		Write !,"<br>"
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	//Security Users
+	Try {
+		Write !,"<hr size=2 noshade>"
+		Write !,"<b style='color: #0000FF; font-size: 12px; line-height: 14px; font-family: Arial, Helvetica, sans-serif;'>System Users</b>"
+		Set rs = ##class(%Library.ResultSet).%New("Security.Users:Detail")
+		If 'rs Do $System.Status.DisplayError(%objlasterror) Quit
+		Do rs.Execute("*","*")
+		Write !,"<br>"
+		Write !,"<table class=sortable id='secloginfail' border style='font-size: 12px; font-family: Arial, Helvetica, sans-serif; width: 100%' cellpadding=2 cellspacing=0>"
+		Write !,"<tr>"
+		For col=1:1:rs.GetColumnCount() Write !,"<th align='center' title='Click to sort'><b>",(rs.GetColumnName(col)),"</b></th>"
+		Write !,"</tr>"
+		While rs.Next() {
+			Write !,"<tr valign=""top"">"
+			For col=1:1:rs.GetColumnCount() Write !,"<td>",($ZConvert(rs.GetData(col),"O","HTML")),"&nbsp;</td>"
+			Write !,"</tr>"
+		}
+		Write !,"</table>"
+		Write !,"<br>"
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	//Security SSL Configurations
+	Try {
+		Write !,"<hr size=2 noshade>"
+		Write !,"<b style='color: #0000FF; font-size: 12px; line-height: 14px; font-family: Arial, Helvetica, sans-serif;'>SSL Configurations</b>"
+		Set rs = ##class(%Library.ResultSet).%New("Security.SSLConfigs:Detail")
+		If 'rs Do $System.Status.DisplayError(%objlasterror) Quit
+		Do rs.Execute()
+		Write !,"<br>"
+		Write !,"<table class=sortable id='secusers' border style='font-size: 12px; font-family: Arial, Helvetica, sans-serif; width: 100%' cellpadding=2 cellspacing=0>"
+		Write !,"<tr>"
+		For col=1:1:rs.GetColumnCount() Write !,"<th align='center' title='Click to sort'><b>",(rs.GetColumnName(col)),"</b></th>"
+		Write !,"</tr>"
+		While rs.Next() {
+			Write !,"<tr valign=""top"">"
+			For col=1:1:rs.GetColumnCount() Write !,"<td>",($ZConvert(rs.GetData(col),"O","HTML")),"&nbsp;</td>"
+			Write !,"</tr>"
+		}
+		Write !,"</table>"
+		Write !,"<br>"
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	//Security Domains  
+	Try {
+		Write !,"<hr size=2 noshade>","<br>"
+		Write !,"<b style='color: #0000FF; font-size: 12px; line-height: 14px; font-family: Arial, Helvetica, sans-serif;'>Domains</b>"
+		Set rs = ##class(%Library.ResultSet).%New("Security.Domains:List")
+		If 'rs Do $System.Status.DisplayError(%objlasterror) Quit
+		Do rs.Execute("*")
+		Write !,"<br>"
+		Write !,"<table class=sortable id='secdomains' border style='font-size: 12px; font-family: Arial, Helvetica, sans-serif; width: 100%' cellpadding=2 cellspacing=0>"
+		Write !,"<tr>"
+		For col=1:1:rs.GetColumnCount() Write !,"<th align='center' title='Click to sort'><b>",(rs.GetColumnName(col)),"</b></th>"
+		Write !,"</tr>"
+		While rs.Next() {
+			Write !,"<tr valign=""top"">"
+			For col=1:1:rs.GetColumnCount() Write !,"<td>",($ZConvert(rs.GetData(col),"O","HTML")),"&nbsp;</td>"
+			Write !,"</tr>"
+		}
+		Write !,"</table>"
+		Write !,"<br>"
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	Set rs=""
+	Use PDev Write:display "."
+	Quit
+ /// Audit related informations.
+Audit  //
+	//Audit-Events
+	Use LogFile
+ 	Write !,"<hr size=""2"" noshade>"
+ 	Write !,"<table border=""0"" width=""100%""><tr>"
+ 	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""audit""></a>Audit</font></b></td>"
+ 	Write !,"<td align=right><a href=""#top"">top</a></td>"
+ 	Write !,"</tr></table>"
+	Try {
+		Write !,"<br><b style='color: #0000FF; font-size: 12px; line-height: 14px; font-family: Arial, Helvetica, sans-serif;'>Audit Events</b>"
+		Set rs = ##class(%Library.ResultSet).%New("Security.Events:ListAll")
+		If 'rs Do $System.Status.DisplayError(%objlasterror) Quit
+		Do rs.Execute("*","*","*")
+		Write !,"<br>"
+		Write !,"<table class=sortable id='secevents' border style='font-size: 12px; font-family: Arial, Helvetica, sans-serif; width: 100%' cellpadding=2 cellspacing=0>"
+		Write !,"<tr>"
+		For col=1:1:rs.GetColumnCount()-2 Write !,"<th align='center' title='Click to sort'><b>",(rs.GetColumnName(col)),"</b></th>"
+		Write !,"</tr>"
+		While rs.Next() {
+			Write !,"<tr valign=""top"">"
+			For col=1:1:rs.GetColumnCount()-2 Write !,"<td>",($ZConvert(rs.GetData(col),"O","HTML")),"&nbsp;</td>"
+			Write !,"</tr>"
+		}
+		Write !,"</table>"
+		Write !,"<br>"
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	//Audit-Log
+	Try {
+		Write !,"<hr size=2 noshade>"
+		Write !,"<b style='color: #0000FF; font-size: 12px; line-height: 14px; font-family: Arial, Helvetica, sans-serif;'>Audit Log ("_2_" days, last "_2000_" entries) </b>"
+		Set rs = ##class(%Library.ResultSet).%New("%SYS.Audit:List")
+		If 'rs Do $System.Status.DisplayError(%objlasterror) Quit
+		Set beginDate=$ZDateTime($Horolog-2+1_",0",3)
+		Do rs.Execute(beginDate)
+		Write !,"<br>"
+		Write !,"<table class=sortable id='secauditlog' border style='font-size: 12px; font-family: Arial, Helvetica, sans-serif; width: 100%' cellpadding=2 cellspacing=0>"
+		Write !,"<tr>"
+		For col=2:1:10 Write !,"<th align='center' title='Click to sort'><b>",(rs.GetColumnName(col)),"</b></th>"
+		Write !,"<th align='center' title='Click to sort'><b>EventData</b></th>"
+		Write !,"</tr>"
+		Set count=0
+		While rs.Next() {
+			If $Increment(count)>2000 Quit
+			Write !,"<tr valign=""top"">"
+			For col=2:1:10 Write !,"<td>",($ZConvert(rs.GetData(col),"O","HTML")),"&nbsp;</td>"
+			Set eventData=##class(%SYS.Audit).%OpenId(rs.GetData(11)_"||"_rs.GetData(1)_"||"_rs.GetData(2)).EventData
+			Write !,"<td class=audit>",($ZConvert(eventData,"O","HTML")),"</td>"
+			Write !,"</tr>"
+		}
+		Write !,"</table>"
+		Write !,"<br><br>"
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	Set rs=""
+	Use PDev Write:display "."
+	Quit
+Processes //
+	Use LogFile
+ 	Write !,"<hr size=""2"" noshade>"
+ 	Write !,"<table border=""0"" width=""100%""><tr>"
+ 	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""processes""></a>Processes</font></b></td>"
+ 	Write !,"<td align=right><a href=""#top"">top</a></td>"
+ 	Write !,"</tr></table>"
+ 	Write !,"<br>"
+	Try {
+		Set rs = ##class(%Library.ResultSet).%New()
+		If 'rs Do $System.Status.DisplayError(%objlasterror) Quit
+		If 'rs.Prepare("select * from %SYS.ProcessQuery") Do $System.Status.DisplayError(%objlasterror) Quit
+		Do rs.Execute()
+		Write !,"<table class=sortable id='procs' border style='font-size: 12px; font-family: Arial, Helvetica, sans-serif; width: 100%' cellpadding=2 cellspacing=0>"
+		Write !,"<tr>"
+		For col=1:1:rs.GetColumnCount() Write !,"<th align='center' title='Click to sort'><b>",(rs.GetColumnName(col)),"</b></th>"
+		Write !,"</tr>"
+		While rs.Next() {
+			Write !,"<tr valign=""top"">"
+			For col=1:1:rs.GetColumnCount() Write !,"<td>",($ZConvert(rs.GetData(col),"O","HTML")),"&nbsp;</td>"
+			Write !,"</tr>"
+		}
+		Write !,"</table>"
+		Write !,"<br>"
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	Set rs=""
+	Use PDev Write:display "."
+	Quit
+LockTab //
+	Use LogFile
+	Write !,"<hr size=""2"" noshade>"
+ 	Write !,"<table border=""0"" width=""100%""><tr>"
+ 	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""locktab""></a>LockTab</font></b></td>"
+ 	Write !,"<td align=right><a href=""#top"">top</a></td>"
+ 	Write !,"</tr></table>"
+ 	Write !,"<br>"
+ 	Try {
+ 		Set rs = ##class(%Library.ResultSet).%New("%SYS.LockQuery:Detail")
+		If 'rs Do $System.Status.DisplayError(%objlasterror) Quit
+		Do rs.Execute("")
+		Write !,"<table class=sortable id='procs' border style='font-size: 12px; font-family: Arial, Helvetica, sans-serif; width: 100%' cellpadding=2 cellspacing=0>"
+		Write !,"<tr>"
+		For col=1:1:rs.GetColumnCount() Write:rs.GetColumnName(col)'="DelKey" !,"<th align='center' title='Click to sort'><b>",(rs.GetColumnName(col)),"</b></th>"
+		Write !,"</tr>"
+		While rs.Next() {
+			Write !,"<tr valign=""top"">"
+			For col=1:1:rs.GetColumnCount() Write:rs.GetColumnName(col)'="DelKey" !,"<td>",($ZConvert(rs.GetData(col),"O","HTML")),"&nbsp;</td>"
+			Write !,"</tr>"
+		}
+		Write !,"</table>"
+		Write !,"<br>"
+ 	}
+ 	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+ 	Use PDev Write:display "."
+ 	Quit
+SysLog //
+	New detail,%ST
+	Use LogFile
+	Write !,"<hr size=""2"" noshade>"
+ 	Write !,"<table border=""0"" width=""100%""><tr>"
+ 	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""syslog""></a>SysLog</font></b></td>"
+ 	Write !,"<td align=right><a href=""#top"">top</a></td>"
+ 	Write !,"</tr></table>"
+ 	Write !,"<pre>"
+ 	Try {
+ 		Set detail=1
+		Do INT^SYSLOG
+ 	}
+ 	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	Write !,"</pre>"
+ 	Use PDev Write:display "."
+ 	Quit
+Cconsole //
+	New cconsoleFile,cconsoleSize,MaxCconsoleSize,x,SkipSize
+	Use LogFile
+	Write !,"<hr size=""2"" noshade>"
+ 	Write !,"<table border=""0"" width=""100%""><tr>"
+ 	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""cconsole""></a>cconsole.log</font></b></td>"
+ 	Write !,"<td align=right><a href=""#endcconsole"">end of cconsole.log</a>&nbsp;&nbsp;<a href=""#top"">top</a></td>"
+ 	Write !,"</tr></table>"
+	Try {
+		If $zconvert($System.Version.GetBuildOS(),"U")?1"WIN".e!($zconvert($System.Version.GetBuildOS(),"U")["UNIX") {
+			Set cconsoleFile=MgrDir_DirDelim_"cconsole.log"
+		}
+		Else  {
+			If $zconvert($System.Version.GetBuildOS(),"U")["VMS" Set cconsoleFile=MgrDir_"CCONSOLE.LOG"
+		}
+		Set cconsoleSize=$ZUtil(140,1,cconsoleFile)
+		If 'cconsoleSize {
+	  		Use LogFile Write !,"<pre>File "_cconsoleFile_" is zero bytes long.</pre>"
+	  		Use PDev
+	  		Quit
+		}
+		//Only put the last x mb in the file
+		Set MaxCconsoleSize=8388608 //8mb
+		If (cconsoleSize>MaxCconsoleSize) {
+		    s SkipSize=cconsoleSize-MaxCconsoleSize
+			Use LogFile Write !,"<pre>File "_cconsoleFile_" is "_cconsoleSize_" bytes. This is too large, skipping first "_SkipSize_" bytes.</pre>"
+		}
+		Else {
+			s SkipSize=0
+		}
+		Use LogFile Write !,"<pre>"
+		Do CopyToLog(cconsoleFile,SkipSize)
+		Use LogFile Write !,"</pre>"
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	Write !,"<span><a name=""endcconsole""></a></span>"
+	Use PDev Write:display "."
+	Quit
+CopyToLog(InputFile,SkipSize=0)
+	; Appends a file to LogFile
+	; SkipSize - Skip the first x number of bytes in the file to reduce size. Used by cconsole.log to keep it a reasonable size
+	New x,Size,ZEOF
+	Set $ZTrap="CopyToLogErr"
+	Open InputFile:"R":5
+	If '$Test Use LogFile Write !,"<pre>File "_InputFile_" does not exist</pre>" Use PDev Quit
+	; Read timeout added to prevent the case where neither <ENDOFFILE> error nor $ZEOF terminate the loop
+	s Size=0
+	For  Use InputFile Read x:30 Set ZEOF=$ZEof Use PDev Quit:'$Test!(ZEOF)  s Size=Size+$l(x) continue:SkipSize>Size  Use LogFile Write $zconvert(x,"O","HTML"),$Char(13,10) Use PDev
+	Close InputFile
+	Quit
+CopyToLogErr
+	Set $ZTrap=""
+	Close InputFile
+	Use LogFile Write ! Use PDev
+	Set $ZError=""
+	Quit
+HttpdConfPWS //Displays httpd.conf of PWS
+	New file,line,HttpdConfPWS
+	Use LogFile
+	Write !,"<hr size=""2"" noshade>"
+ 	Write !,"<table border=""0"" width=""100%""><tr>"
+ 	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""httpdconfpws""></a>Apache PWS Configuration File</font></b></td>"
+ 	Write !,"<td align=right><a href=""#top"">top</a></td>"
+ 	Write !,"</tr></table>"
+	Try {
+		Set HttpdConfPWS=##class(%Library.File).NormalizeFilename($System.Util.InstallDirectory()_"httpd/conf/httpd.conf")
+		Write !,"<p style='color: #0000FF; font-size: 12px; line-height: 14px; font-family: Verdana, sans-serif;'><b>"_HttpdConfPWS_"</b></p>"
+		Write !,"<pre>"
+		Set file=##class(%Library.FileCharacterStream).%New()
+		Set file.Filename=HttpdConfPWS
+		While 'file.AtEnd {
+			Set line=file.ReadLine(20000)
+			Write $ZConvert(line,"O","HTML"),!
+		}
+		kill file
+		Write !,"</pre>"
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	kill file
+	Use PDev Write:display "."
+	Quit
+ErrorLogPWS  //Displays error.log of PWS
+	New file,line,ErrorLogPWS,entry,first,last,i,NumberErrorLogsPWS
+	Set NumberErrorLogsPWS=1000
+	Use LogFile
+	Write !,"<hr size=""2"" noshade>"
+ 	Write !,"<table border=""0"" width=""100%""><tr>"
+ 	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""errorlogpws""></a>Apache PWS Error Log</font></b></td>"
+ 	Write !,"<td align=right><a href=""#top"">top</a></td>"
+ 	Write !,"</tr></table>"
+	Try {
+		Set ErrorLogPWS=##class(%Library.File).NormalizeFilename($System.Util.InstallDirectory()_"httpd/logs/error.log")
+		Write !,"<p style='color: #0000FF; font-size: 12px; line-height: 14px; font-family: Verdana, sans-serif;'><b>"_ErrorLogPWS_"</b> <i>(max. last 1000 entries)</i></p>"
+		Write !,"<pre>"
+		Kill ^||CacheTemp("error.log")
+		Set file=##class(%Library.FileCharacterStream).%New()
+		Set file.Filename=ErrorLogPWS
+		While 'file.AtEnd {
+			Set line=file.ReadLine(20000)
+			Set entry=$Increment(^||CacheTemp("error.log"))
+			Set ^||CacheTemp("error.log",entry)=line
+		}
+		Set last=$Get(^||CacheTemp("error.log")),first=last-NumberErrorLogsPWS+1 If first<1 Set first=1
+		For i=first:1:last {
+			Write $ZConvert(^||CacheTemp("error.log",i),"O","HTML"),!
+		}
+		Kill file
+		Write !,"</pre>"
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+		Use LogFile
+	}
+	Kill file
+	Kill ^||CacheTemp("error.log")
+	Use PDev Write:display "."
+	Quit
+LogGWHeader	//
+	Use LogFile
+	Write !,"<hr noshade size=""4"">"
+	Write !,"<br>"
+	Write !,"<b><font face=""Arial, Helvetica, sans-serif"" style=""font-weight:bold;font-size:24px;color:"_"SteelBlue"_";""><a name=""cspserver"_mgrid_"""></a>CSP Gateway on "_CSPMgr.Server_" : "_CSPMgr.Port_$s(CSPMgr.Port=$g(webserverport):" *PWS*",1:"")_"</font></b><br>"
+	Use PDev Write:display "."
+	Quit
+LogGWInfo // About CSP Gateway
+ 	Set sc=CSPMgr.GetInfo(.info)
+ 	Quit:'sc
+ 	Use LogFile
+ 	Write !,"<hr size=""2"" noshade>"
+ 	Write !,"<table border=""0"" width=""100%""><tr>"
+ 	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""cspinfo"_mgrid_"""></a>CSP Gateway Info for "_CSPMgr.Server_" : "_CSPMgr.Port_"</font></b></td>"
+ 	Write !,"<td align=right><a href=""#top"">top</a></td>"
+ 	Write !,"</tr></table>"
+ 	Write "",!
+	Write "	<table border=""0"">",!
+	Write "	<tr>",!
+	Write "	<td nowrap valign=""top""><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"">Webserver (IP):</font></td>",!
+	Write "	<td><font color=""#000000"" face=""Arial, Helvetica, sans-serif""> "_(CSPMgr.Server)_"</font></td>",!
+	Write "	</tr>",!
+	Write "	<tr>",!
+	Write "	<td nowrap valign=""top""><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"">Webserver Port:</font></td>",!
+	Write "	<td><font color=""#000000"" face=""Arial, Helvetica, sans-serif""> "_(CSPMgr.Port)_"</font></td>",!
+	Write "	</tr>",!
+	Write "	<tr>",!
+	Write "	<td nowrap valign=""top""><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" >Version:</font></td>",!
+	Write "	<td><font color=""#000000"" face=""Arial, Helvetica, sans-serif""> "_(info.Version)_"</font></td>",!
+	Write "	</tr>",!
+	Write "	<tr>",!
+	Write "	<td nowrap valign=""top""> <font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"">Gateway Build:</font></td>",!
+	Write "	<td><font color=""#000000"" face=""Arial, Helvetica, sans-serif""> "_(info.Build)_"</font></td>",!
+	Write "	</tr>",!
+	Write "	<tr>",!
+	Write "	<td nowrap valign=""top""><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"">Web Server Name:</font></td>",!
+	Write "	<td><font color=""#000000"" face=""Arial, Helvetica, sans-serif""> "_(info.WebServerName)_"</font> ",!
+	Write "	</td>",!
+	Write "	</tr>",!
+	Write "	<tr>",!
+	Write "	<td nowrap valign=""top""><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"">Web Server Type:</font></td>",!
+	Write "	<td><font color=""#000000"" face=""Arial, Helvetica, sans-serif""> "_(info.WebServerSoftware)_"</font>",!
+	Write "	</td>",!
+	Write "	</tr>",!
+	Write "	<tr>",!
+	Write "	<td nowrap valign=""top""><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"">Active Interface:</font></td>",!
+	Write "	<td><font color=""#000000"" face=""Arial, Helvetica, sans-serif""> "_(info.ActiveInterface)_"</font>",!
+	Write "	</td>",!
+	Write "	</tr>",! 
+	if +$System.Version.GetNumber()>=2015.1 {  //CMT1293 2015.1+
+		Write "",!
+	Write "		<tr>",!
+	Write "		<td nowrap valign=""top""><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"">Configuration:</font></td>",!
+	Write "		<td><font color=""#000000"" face=""Arial, Helvetica, sans-serif""> "_(info.Configuration)_"</font>",!
+	Write "		</td>",!
+	Write "		</tr>",!
+	Write "		",! 
+	}
+	Write "",!
+	Write "	</table>",!
+	Write " 	",! 
+	Use PDev Write:display "."
+ 	Quit
+LogGWIni // Get CSP.INI
+	Set sc=CSPMgr.GetCSPIni(.ini,"stream")
+	Quit:'sc
+	Use LogFile
+	Write !,"<hr size=""2"" noshade>"
+	Write !,"<table border=""0"" width=""100%""><tr>"
+	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""cspini"_mgrid_"""></a>CSP.INI for CSP Gateway "_CSPMgr.Server_" : "_CSPMgr.Port_"</font></b></td>"
+	Write !,"<td align=right><a href=""#top"">top</a></td>"
+    Write !,"</tr></table>"
+	Write "<pre>",! 
+	do ini.OutputToDevice()  //while 'ini.AtEnd { Write ini.Read() }
+	Write "</pre>",! 
+	Use PDev Write:display "."
+	Quit
+LogGWDefParams // Gateway Default Params
+	New config, item
+	Set sc=CSPMgr.GetDefaultParams(.config)
+	Quit:'sc
+	Use LogFile
+	Write !,"<hr size=""2"" noshade>"
+	Write !,"<table border=""0"" width=""100%""><tr>"
+	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""cspdefparams"_mgrid_"""></a>Default Params for CSP Gateway "_CSPMgr.Server_" : "_CSPMgr.Port_"</font></b></td>"
+	Write !,"<td align=right><a href=""#top"">top</a></td>"
+    Write !,"</tr></table>"
+	Write "<pre>",! 
+	Set item="" for  set item=$order(config(item)) quit:item=""  write item,?32,": ",config(item),!
+	Write "</pre>",! 
+	Use PDev Write:display "."
+	Quit
+LogGWServersParams // Servers and Server Params
+	New serverList, srvname, srvconfig, item
+	Set sc=CSPMgr.GetServers(.serverList)
+	Quit:'sc
+	Use LogFile
+	Write !,"<hr size=""2"" noshade>"
+	Write !,"<table border=""0"" width=""100%""><tr>"
+	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""cspserversparams"_mgrid_"""></a>Servers Params for CSP Gateway "_CSPMgr.Server_" : "_CSPMgr.Port_"</font></b></td>"
+	Write !,"<td align=right><a href=""#top"">top</a></td>"
+    Write !,"</tr></table>"
+	Write !,"<pre>"
+	For i=1:1:$LISTLENGTH(serverList) {
+		Set srvname=$piece($listget(serverList,i),"=",1)
+		Write !!,"[",srvname,"] = ",$piece($listget(serverList,i),"=",2),!
+		Kill srvconfig
+		Set sc=CSPMgr.GetServerParams(srvname,.srvconfig)
+		Quit:'sc
+		SET item=""
+		for  {set item=$order(srvconfig(item)) quit:item=""  write item,?32,": ",srvconfig(item),!}
+	}
+	Write !,"</pre>"
+	Use PDev Write:display "."	
+	Quit
+LogGWAppPathsParams // Application Paths and Path Params
+	New appPaths, appPath, appconfig, item
+	Set sc=CSPMgr.GetApplicationPaths(.appPaths)
+	Quit:'sc
+	Use LogFile
+	Write !,"<hr size=""2"" noshade>"
+	Write !,"<table border=""0"" width=""100%""><tr>"
+	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""cspapppathsparams"_mgrid_"""></a>Application Paths Params for CSP Gateway "_CSPMgr.Server_" : "_CSPMgr.Port_"</font></b></td>"
+	Write !,"<td align=right><a href=""#top"">top</a></td>"
+    Write !,"</tr></table>"
+	Write !,"<pre>"
+	For i=1:1:$LISTLENGTH(appPaths) {
+		Set appPath=$piece($listget(appPaths,i),"=",1)
+		Write !!,"[",appPath,"] = ",$piece($listget(appPaths,i),"=",2),!
+		Kill appconfig
+		Set sc=CSPMgr.GetApplicationParams(appPath,.appconfig)
+		Quit:'sc
+		SET item=""
+		for  {set item=$order(appconfig(item)) quit:item=""  write item,?32,": ",appconfig(item),!}		
+	}
+	Write !,"</pre>"	
+	Use PDev Write:display "."
+	Quit
+LogGWStatus // Gateway System-Status Overview
+	Set sc=CSPMgr.GetSystemStatus(.status)
+	Quit:'sc
+	Use LogFile
+	Write !,"<hr size=""2"" noshade>"
+	Write !,"<table border=""0"" width=""100%""><tr>"
+	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""cspstatus"_mgrid_"""></a>"_"CSP Gateway System Status for "_CSPMgr.Server_" : "_CSPMgr.Port_"</font></b><br></td>"
+	Write !,"<td align=right><a href=""#top"">top</a></td>"
+    Write !,"</tr></table>"
+	Write "",!
+	Write "	<font size=""+1"" face=""Verdana, Arial, Helvetica, sans-serif"">System Status <font size=""-1"" face=""Verdana, Arial, Helvetica, sans-serif""><I>("_($zdatetime($horolog,5))_")</I></font></font><br>",!
+	Write "	<table bgcolor=#000088 border=1 cellspacing=""1"" cellpadding=""1"">",!
+	Write "	<tr bgcolor=""#CCCCCC"">",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Connection<br>Number</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Gateway<br>PID</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Server<br>Name</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">IP<br>Address</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">TCP<br>Port</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Cach&eacute;<br>PID</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Status</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Idle time<br>/ Timeout</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Activity</font></th>",!
+	Write "	</tr>",! 
+	set cnid=""
+	for  {
+		 set conn=status.Connections.GetNext(.cnid)
+		 QUIT:cnid=""
+		Write "",!
+	Write "		<tr bgcolor=""#FFFFFF"">",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(cnid)_"</font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(conn.WebServerPID)_"</font></td>",!
+	Write "		<td align=""CENTER""><font color=""#000000"" face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(conn.CacheServerName)_"</font></td>",!
+	Write "		<td><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(conn.IPAddress)_"</font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(conn.TCPPort)_"</font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(conn.CacheServerPID)_"</font></td>",!
+	Write "		<td><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(conn.Status)_"</font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(conn.IdleTime)_"</font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(conn.Activity)_"</font></td>",!
+	Write "		</tr>",!
+	Write "		",! 
+	}
+	Write "",!
+	Write "	</table>",!
+	Write "	<br>",!
+	Write "	<p>",!
+	Write "	<table bgcolor=#000088 border=1 cellspacing=""1"" cellpadding=""1"">",!
+	Write "	<tr bgcolor=""#CCCCCC"">",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Server<br>Number</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Server<br>Name</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">IP<br>Address</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">TCP<br>Port</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Total<br>Connections</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Connections<br>In-Use</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Private<br>Connections</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Total<br>Activity</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Queued<br>Requests</font></th>",!
+	Write "	</tr>",!
+	Write "	",! 
+	set srvid=""
+	for  {
+		set srv=status.CacheServers.GetNext(.srvid)
+		QUIT:srvid=""
+		Write "",!
+	Write "		<tr bgcolor=""#FFFFFF"">",!
+	Write "		<td align=""CENTER""><font color=""#000000"" face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(srvid)_"</font></td>",!
+	Write "		<td align=""CENTER""><font color=""#000000"" face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(srv.CacheServerName)_"</font></td>",!
+	Write "		<td><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(srv.IPAddress)_"</font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(srv.TCPPort)_"</font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(srv.TotalConnections)_"</font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(srv.ConnectionsInUse)_"</font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(srv.PrivateConnections)_"</font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(srv.Activity)_"</font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"">"_(srv.QueuedRequests)_"</font></td>",!
+	Write "		</tr>",!
+	Write "		",! 
+	}
+	Write "",!
+	Write "		</table>",!
+	Write "		<br>",!
+	Write "		<p>",!
+	Write "		<table bgcolor=#000088 border=1 cellspacing=""1"" cellpadding=""1"">",!
+	Write "		<tr bgcolor=""#CCCCCC"">",!
+	Write "		<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Path<br>Number</font></th>",!
+	Write "		<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Path</font></th>",!
+	Write "		<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Server<br>Number</font></th>",!
+	Write "		<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Server<br>Name</font></th>",!
+	Write "		<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Activity</font></th>",!
+	Write "		<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Status</font></th>",!
+	Write "		<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Action</font></th>",!
+	Write "		",! 
+	set appid=""
+	for  {
+		set app=status.ApplicationPaths.GetNext(.appid)
+		QUIT:appid=""
+		set appsid=""
+		for  {
+			set apps=app.AlternativeServer.GetNext(.appsid)
+			QUIT:appsid=""
+			Write "",!
+	Write "			<tr bgcolor=""#FFFFFF"">",!
+	Write "			<td align=""CENTER""><font color=""#000000"" face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1""> "_(appid)_"</font></td>",!
+	Write "			<td align=""LEFT""><font color=""#000000"" face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1""> "_(app.Path)_"</font></td>",!
+	Write "			<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1""> "_(appsid)_"</font></td>",!
+	Write "			<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1""> "_(apps.CacheServerName)_"</font></td>",!
+	Write "			<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1""> "_(apps.Activity)_"</font></td>",!
+	Write "			<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1""> "_(apps.Status)_"</font></td>",!
+	Write "			<td bgcolor=""#CCCCCC"" align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#CCCCCC""><b><br></b></font></td>",!
+	Write "			</tr>",!
+	Write "			",! 
+		}
+	}	
+	Write "",!
+	Write "	</table>",!
+	Write "	<br>",!
+	Write "	<p>",!
+	Write "	<table bgcolor=#000088 border=1 cellspacing=""1"" cellpadding=""1"">",!
+	Write "	<tr bgcolor=""#CCCCCC"">",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Cached<br>Forms</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Cached Data<br>(Bytes)</font></th>",!
+	Write "	<th align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000"">Cached Form<br>Activity</font></th>",!
+	Write "	</tr>",!
+	Write "	",! 
+	set cache=status.CachedForms
+	Write "	",!
+	Write "		<tr bgcolor=""#FFFFFF"">",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1""> "_(cache.FormsInCache)_"</font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1""> "_(cache.CachedData)_"</font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1""> "_(cache.CacheActivity)_"</font></td>",!
+	Write "		</tr>",!
+	Write "		<tr bgcolor=""#CCCCCC"">",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000""><b>Form</b></font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000""><b>Size</b></font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1"" color=""#000000""><b>Activity</b></font></td>",!
+	Write "		</tr>",!
+	Write "	",! 
+	set formid=""
+	for  {
+		set form=cache.Form.GetNext(.formid)
+		QUIT:formid=""
+		Write "",!
+	Write "		<tr bgcolor=""#FFFFFF"">",!
+	Write "		<td align=""LEFT""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1""> "_(formid)_"</font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1""> "_(form.Size)_"</font></td>",!
+	Write "		<td align=""CENTER""><font face=""Verdana, Arial, Helvetica, sans-serif"" size=""-1""> "_(form.Activity)_"</font></td>",!
+	Write "		</tr>",!
+	Write "		",! 
+	}
+	Write "",!
+	Write "	</table>",!
+	Write "	<br>",!
+	Write "	",! 
+	Use PDev Write:display "."
+	Quit
+LogGWCSPLog // Get CSP.log
+ 	Use LogFile
+	Write !,"<hr size=""2"" noshade>"
+	Write !,"<table border=""0"" width=""100%""><tr>"
+	Write !,"<td><b><font color=""#0000FF"" face=""Arial, Helvetica, sans-serif"" size=""4""><a name=""csplog"_mgrid_"""></a>CSP.log for "_CSPMgr.Server_" : "_CSPMgr.Port_"</font></b>" //<i>(Last "_$$$LastLogEvents_" entries in reverse order)</i></td>"
+	Write !,"<td align=right><a href=""#endcsplog"_mgrid_""">end of csp.log</a>&nbsp;&nbsp;<a href=""#top"">top</a></td>"
+    Write !,"</tr></table>"
+	//Set sc=CSPMgr.GetCSPLog(.log,"now",-1,$$$LastLogEvents) //last 1000 events from time=now backwards
+	Set startDate = $zdate(0,11)_", "_$zdate(0,2)_" "_$ztime($piece(0,",",2),1)_" GMT"  //all events from the very begining, forwards
+ 	Set sc=CSPMgr.GetCSPLog(.log,startDate,1,9999999) //all
+ 	If 'sc do $system.Status.DecomposeStatus(sc,.err) do WriteLog(err(err)) Quit
+	Write "<pre>",! 
+	do log.Rewind()
+	//do log.OutputToDevice()
+	while 'log.AtEnd { Write $zconvert(log.Read(),"O","HTML") }
+	Write "</pre>",! 
+	Write !,"<span><a name=""endcsplog"_mgrid_"""></a></span>"
+	Use PDev Write:display "."
+	Quit
+WriteLog(Record)
+	If Record?1"***".e Quit
+	Use LogFile
+	Write $zconvert(Record,"O","HTML"),$Char(13,10)
+	Use PDev Write:display "."
+	Quit
+LogHeaderTag(HTMLtag,HTMLcaption,HTMLcolor,PadLen) ;
+	New Padding
+	Set Padding=$Justify(" ",+$Get(PadLen,4))
+	Write !,Padding,"<td align=""center"">"
+	Write !,Padding,"  <font size=""2"" face=""Arial, Helvetica, sans-serif"" color=""",HTMLcolor,"""><b><a href=""#",HTMLtag,""">",HTMLcaption,"</a></b></font>"
+	Write !,Padding,"</td>"
+	Quit
+LogHeaderTagBasic(HTMLtag,HTMLcaption)
+	Do LogHeaderTag(HTMLtag,HTMLcaption,"#0000FF")
+	Quit
+LogHeaderTagAdvanced(HTMLtag,HTMLcaption)
+	Do LogHeaderTag(HTMLtag,HTMLcaption,"SteelBlue")
+	Quit
+LogReportTrailer  //
+	Use LogFile
+	Write !,"<hr size=""4"" noshade>"
+	Write !,"<p><font face=""Arial, Helvetica, sans-serif"" style=""font-weight:bold;font-size:16px;color:blue;"" size=""4""><b>End of CSPButtons Diagnostic Report</b></font>"
+	Write !,"&nbsp;&nbsp;<a href=""#top"">top</a>"
+	Write !,"</p>"
+	Write !,"</body>"
+	Write !,"</html>"
+	Use PDev Write:display "."
+	Quit
+GetConfigWebServerPort() ;
+	New webserverport,currNsp,CPFProperties,Properties
+	Set currNsp=$namespace 
+	Try {
+		if currNsp'="%SYS" ZNspace "%SYS"
+		Set CPFProperties = ##class(Config.Startup).Get(.Properties)
+		Set webserverport=$g(Properties("WebServerPort"))
+	}
+ 	Catch { }
+ 	if $namespace'=currNsp ZNspace currNsp
+ 	Quit $g(webserverport)
+	//Creates a new file with Date and Time added to the filename and opens it for Reading and Writing
+NewFile(LogFilePrefix,LogFileSuffix) 
+	//New Date,Dir,NewFile,Time
+	If LogFileSuffix="" Set LogFileSuffix="html"
+	Set Date=$zd($h,8),Time=$tr($zt($p($h,",",2),2),":","")
+	If $zconvert($System.Version.GetBuildOS(),"U")?1"WIN".e Set LogFileSuffix=$ZConvert(LogFileSuffix,"l")
+	Else  If $zconvert($System.Version.GetBuildOS(),"U")["UNIX" Set LogFileSuffix=$ZConvert(LogFileSuffix,"l")
+	Else  If $zconvert($System.Version.GetBuildOS(),"U")["VMS" Set LogFileSuffix=$ZConvert(LogFileSuffix,"U")
+	Set Dir=MgrDir
+	Set LogDirectory=$Get(LogDirectory,"")
+	If LogDirectory'="" Set Dir=LogDirectory
+	If $zconvert($System.Version.GetBuildOS(),"U")?1"WIN".e Set NewFile=Dir_DirDelim_LogFilePrefix_Date_Time_"."_LogFileSuffix
+	Else  If $zconvert($System.Version.GetBuildOS(),"U")["UNIX" Set NewFile=Dir_DirDelim_$ZConvert(LogFilePrefix,"l")_Date_Time_"."_LogFileSuffix
+	Else  If $zconvert($System.Version.GetBuildOS(),"U")["VMS" Set NewFile=Dir_$ZConvert(LogFilePrefix,"U")_Date_Time_"."_LogFileSuffix_";"
+	Set $ZTrap="NewFileErr"
+	Open NewFile:"RWNSK\UTF8\":5
+	If '$Test Quit ""
+	Quit NewFile
+NewFileErr
+	Set $ZTrap="",$ZError=""
+	Quit ""
+GetDirs
+	Set MgrDir=$System.Util.ManagerDirectory()
+	Set CurDir=$ZUtil(12,"")
+	Set CurNsp=$namespace
+	Set:$zconvert($System.Version.GetBuildOS(),"U")?1"WIN".e DirDelim="\",NullDev="//./nul"
+	Set:$zconvert($System.Version.GetBuildOS(),"U")["UNIX" DirDelim="/",NullDev="/dev/null/"
+	Set:$zconvert($System.Version.GetBuildOS(),"U")["VMS" DirDelim=".",NullDev="NL:"
+	If $zconvert($System.Version.GetBuildOS(),"U")?1"WIN".e!($zconvert($System.Version.GetBuildOS(),"U")["UNIX") {  //Remove trailing \ or /
+	  If $Extract(MgrDir,$Length(MgrDir))=DirDelim Set MgrDir=$Extract(MgrDir,1,$Length(MgrDir)-1)
+	  If $Extract(CurDir,$Length(CurDir))=DirDelim Set CurDir=$Extract(CurDir,1,$Length(CurDir)-1)
+	}
+	If $zconvert($System.Version.GetBuildOS(),"U")["VMS" {
+	  Set MgrDir=$$VMSCanonize(MgrDir)
+	  Set CurDir=$$VMSCanonize(CurDir)
+	}
+	Quit
+VMSCanonize(Dir)
+	New (Dir)
+	Set Dev=$Piece(Dir,":",1),Dir=$Piece(Dir,":",2,999999999)
+	Set Dir=$Translate(Dir,"<","[") ; Replace < by [
+	Set Dir=$Translate(Dir,">","]") ; Replace > by ]
+	Set i=$Length(Dir,"[")-1
+	If i>1 {  ; Directory format is [DIR.][SUBDIR]...
+	  If $Extract(Dir,1)="[" Set Dir=$Extract(Dir,2,*)
+	  If $Extract(Dir,$Length(Dir))="]" Set Dir=$Extract(Dir,1,$Length(Dir)-1)
+	  For  Quit:$Piece(Dir,"[",2)=""  Set Dir=$Piece(Dir,"[",1)_$Piece(Dir,"[",2,999999999)
+	  For  Quit:$Piece(Dir,"]",2)=""  Set Dir=$Piece(Dir,"]",1)_$Piece(Dir,"]",2,999999999)
+	  Set Dir="["_Dir_"]"
+	}
+	Set Dir=Dev_":"_Dir
+	Quit Dir
+TestCompress  //
+    Set PDev=$Principal
+    s cabname="CSP_"_$Piece($Piece($ZUtil(86),"*",2)," ",1) //_$$$CurDate_$$$CurTime
+    s cabdir=cabname
+    s sourcepath=##class(%SYS.System).TempDirectory()_"\"_cabdir
+    s cabpath=$System.Util.ManagerDirectory()_dirname  //"C:\temp\testcomp"
+    w !,"sourcepath:",sourcepath
+    w !,"cabpath:",cabpath
+    w !,"cabname:",cabname
+    w !,"cabdir:",cabdir
+    s deletesourcepath=0
+    w !,"deletesourcepath:",deletesourcepath
+    do CompressFiles(sourcepath,cabpath,cabname,cabdir,deletesourcepath,1)
+	Quit
+CompressFiles(SourcePath, CabPath, CabName, CabDir, deleteSourcePath, display)
+	Set EOF=$ZUtil(68,40)
+	If $ZUtil(68,40,1) ; Enable setting of $ZEOF and disable <ENDOFFILE> error
+	Try {
+		Write:display !,"Compressing files",!
+		If $zconvert($System.Version.GetBuildOS(),"U")?1"WIN".e {
+			Set DirName=$p(CabPath,"\",$l(CabPath,"\"))
+			//with makecab.exe we cannot include multiple files directly. To do that, we have to create a directive file called a Diamond  Directive File(DDF)
+			//and include instructions in it.
+			Set ddfFile=CabPath_"\"_CabName_".ddf"
+			Open ddfFile:("WNS"):10
+			Use ddfFile
+			Write ".Set DiskDirectory1=",!
+			Write ".Set CabinetName1="""_CabPath_"\"_CabName_".cab"_"""",!
+			Write ".Set MaxCabinetSize=999999999",!
+			Write ".Set SourceDir=""",SourcePath,"""",!
+			Write ".Set DestinationDir=",CabDir,!  //inside cab
+			Write ".Set CompressionType=""MSZIP""",!
+			Write ".Set Cabinet=""ON""",!
+			Write ".Set Compress=""ON""",!
+			Write ".Set InfFileName="""_CabPath_"\"_CabName_"_.inf""",!
+			Write ".Set RptFileName="""_CabPath_"\"_CabName_"_.rpt""",!
+			Set rs=##class(%Library.ResultSet).%New("%Library.File:FileSet")
+			Set sc=rs.Execute(SourcePath,"*.*")
+			If '(sc) Use PDev Do DisplayError^%apiOBJ(sc) Quit
+			While rs.Next(.sc) {
+				If '(sc) Quit
+				Write rs.Data("ItemName"),!
+			}
+			If '(sc) Use PDev Do DisplayError^%apiOBJ(sc) Quit
+			Close ddfFile
+			//w !,"***" r a
+			//BM 2015-04-30 use NullDev to suppress output from makecab.exe since /V0 is not working!
+			Do ExtCmdPipe("makecab.exe /V0 /f "_ddfFile,$s('display:NullDev,1:PDev))   //V[n] - Verbosity level (1..3)  1=default, 3=Verbose. 0=none -> not working :(
+			//we can use expand.exe to extract a cab archive. (expand /?)
+			// To extract all files in an archive : expand -F:* [filename] [\destination]
+			Use PDev
+			if deleteSourcePath=1 {
+				Write:display !,"Deleting source directory "_SourcePath
+				Do ExtCmdPipe("rmdir /s /q "_SourcePath,PDev)
+			}
+			Do ExtCmdPipe("del /q "_ddfFile,PDev)
+			Do ExtCmdPipe("del /q "_CabPath_"\"_CabName_"_.*",PDev)
+			Write:display !!,"Files in "_SourcePath_" were compressed and saved to: ",!,CabPath_"\"_CabName_".cab",!!
+		}
+		ElseIf $zconvert($System.Version.GetBuildOS(),"U")["UNIX" {
+			Set OneUpDir=$p(SourcePath,"/",1,$l(SourcePath,"/")-1)  //same as $$$TempDir but it is better to get it from the SourcePath
+			//tar switches: c - Creates a new .tar archive file. v - Verbosely show the .tar file progress. f - File name type of the archive file. z = gzip (.tgz = .tar.gz)
+			//tar -cvzf output_filename.tgz /home/username/dir1/dir2/selecteddir
+			//Do ExtCmdPipe("tar -cvzf "_CabPath_"/"_CabName_".tgz "_SourcePath,PDev)  //this will create the whole directory-path into the tar :(
+			//tar -cvzf output_filename.tgz -C /home/username/dir1/dir2 selecteddir    //this will only create selecteddir directory into the tar :)
+			if $zconvert($system.Version.GetPlatform(),"U")["AIX" {
+			  //AIX does not support z flag
+			  Do ExtCmdPipe("tar -c"_$s(display:"v",1:"")_"f "_CabPath_"/"_CabName_".tar -C "_OneUpDir_" "_CabName,$s('display:NullDev,1:PDev))
+			  //compress and zip the tar file : gzip mytest.tar -> .tar.gz
+			  Do ExtCmdPipe("gzip "_CabPath_"/"_CabName_".tar",$s('display:NullDev,1:PDev))
+			}
+			else  {
+			  Do ExtCmdPipe("tar -c"_$s(display:"v",1:"")_"zf "_CabPath_"/"_CabName_".tgz -C "_OneUpDir_" "_CabName,$s('display:NullDev,1:PDev))
+			}
+			//You can extract a gzipped tar archive with x (extract) option : $ tar xvfz archive_name.tar.gz
+			Use PDev
+			if deleteSourcePath=1 {
+			  Write:display !,"Deleting source directory "_SourcePath
+			  Do ExtCmdPipe("rm -fr "_SourcePath,PDev)
+			}
+			Write:display !!,"Files in "_SourcePath_" were compressed and saved to: ",!,CabPath_"/"_CabName_$s($zconvert($system.Version.GetPlatform(),"U")["AIX":".tar.gz",1:".tgz"),!!
+		}
+	}
+	Catch {
+		Use PDev
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML")
+	}
+	If $ZUtil(68,40,EOF) ; Reset $ZEOF to the original setting
+	Quit
+ExtCmdPipe(Command, Device)  //Execute an OS command through a pipe.
+	Try {
+		Open Command:("RQ"):10
+		If '$Test Quit
+		; Read timeout added to prevent the case where neither <ENDOFFILE> error nor $ZEOF terminate the loop
+		For  Use Command Read x:60 Set ZEOF=$ZEof Quit:'$Test!(ZEOF)  If x'="" Use Device Write x,!
+	}
+	Catch {
+		Use Device
+		Write !,"ERROR: ",$ZCvt($ZError,"O","HTML"),!
+	}
+	Use Device
+	Close Command
+	Quit
+	//--------------------------------------------------------------------
+	//External-Entry:
+	//Job-Start for ^CSPButtons frequently over a dedicated time frame.
+	//Example set ups:
+	//>Job CSPButtonsJob^CSPButtons(1,"06:00",30,48) - Starts today+1 (tomorrow) at 6am, running every half hour (30 min.) with 48 interations => 24 hour = whole day long. => Will end next day at 8am
+	//
+CSPButtonsJob(startDateDayOffset = "", startTimeDisplay = "", intervalMin = 30, iterations = 1)
+	Set startDate=+$horolog+startDateDayOffset
+	Set startTime=$ztimeh(startTimeDisplay)  //08:00 = 28800
+	Kill ^CSPButtons("CSPButtonsJob",$job)
+	Set ^CSPButtons("CSPButtonsJob",$job,$increment(^CSPButtons("CSPButtonsJob",$job)))=$zdatetime($horolog)_";START;"_$zdate(startDate)_" "_$ztime(startTime)_";"_intervalMin_" min.;"_iterations_"X"
+	//Wait Phase before Start
+	Set Go=0
+	For {
+	  if +$horolog>=startDate,$piece($horolog,",",2)>=startTime Set Go=1 Quit
+	  if $data(^CSPButtons("CSPButtonsJob",$job,"STOP")) Set Go=0 Kill ^CSPButtons("CSPButtonsJob",$job) Quit  //STOP switch
+	  Hang 60
+	}
+	Quit:'Go
+	//Start Phase of Jobs/Iterations
+	For i=1:1:iterations {
+		if $data(^CSPButtons("CSPButtonsJob",$job,"STOP")) Kill ^CSPButtons("CSPButtonsJob",$job,"STOP") Quit  //STOP switch
+	  	Set display=0
+	  	Job Start^CSPButtons(display)::5
+	  	Set ^CSPButtons("CSPButtonsJob",$job,$increment(^CSPButtons("CSPButtonsJob",$job)))=$zdatetime($horolog)_";Job Start^CSPButtons #"_i_"/"_iterations_" every "_intervalMin_" min.;Job Started:"_$Test_" - Jobno.:"_$ZChild
+	  	Quit:(i>=iterations)
+	  	Hang (intervalMin*60)
+	}
+	Set ^CSPButtons("CSPButtonsJob",$job,$increment(^CSPButtons("CSPButtonsJob",$job)))=$zdatetime($horolog)_";END"
+	Quit
+	//Get CSP-Gateway System-Status Overview via http get.
+	//This can/must be used if no CSP Gateway-Registry is available (pre 2012.2)
+CSPGWSTATUSINFO(server="127.0.0.1",port="80",USERNAME="CSPSystem",PASSWORD="SYS",Dir="",Debug=0)
+	do CSPGWINFO(server,port,1,USERNAME,PASSWORD,Dir,Debug)
+	Quit
+	//Get CSP-Gateway Infos via http get. (general)
+CSPGWINFO(server="127.0.0.1",port="80",CSPSYS=1,USERNAME="CSPSystem",PASSWORD="SYS",Dir="",Debug=0)	//
+	Set:$get(Dir)="" Dir=$System.Util.ManagerDirectory() ;"C:\temp\CSPButtons\"
+	Set stream=##class(%Stream.FileCharacter).%New()
+	Set filename="cspgw_"_$s(CSPSYS=1:"status",CSPSYS=17:"about",1:CSPSYS)_"_info"_$translate($zdatetime($horolog,3)," -:","_")_".html"
+	Set sc=stream.LinkToFile(Dir_filename)
+	Set page="/csp/bin/Systems/Module.cxw"
+    Set urlFile="http://"_server_page
+    Set urlParams="CSPSYS="_CSPSYS_"&CSPUNM="_USERNAME_"&CSPPWD="_PASSWORD
+    Set httpreq=##class(%Net.HttpRequest).%New()
+    Set httpreq.Server=server
+    if port'="",'(port=80) Set httpreq.Port=port
+    Set httpreq.Timeout=5
+    if urlParams'="" {
+      For i=1:1  {
+       Set ParamNameValue=$piece(urlParams,"&",i)
+       Quit:ParamNameValue=""
+       Set ParamName=$piece(ParamNameValue,"=",1)
+       Set ParamValue=$piece(ParamNameValue,"=",2)
+       Do httpreq.SetParam(ParamName,ParamValue)
+       write:Debug !,"HttpRequest - Param: "_ParamName_"="_ParamValue
+      }
+    }
+    Set sc=httpreq.Get(page)
+    if sc=1 {
+      Set httpres=httpreq.HttpResponse.StatusLine
+      write:Debug !,"HttpResponse:",httpres,!
+      write:Debug !,"-ContentInfo:",httpreq.HttpResponse.ContentInfo
+      write:Debug !,"-ContentType:",httpreq.HttpResponse.ContentType
+      Set CT=$piece(httpreq.HttpResponse.ContentType,";",1)
+      write:Debug " -> CT=",CT
+      write:Debug !,"-ContentLength:",httpreq.HttpResponse.ContentLength
+      write:Debug !
+      if httpres["200",httpres["OK" {
+          //Read Byte/Chunks
+          set stop=0
+          while ('httpreq.HttpResponse.Data.AtEnd && 'stop) {
+            set readLen = 30000
+            set requestedLen = readLen
+            set chunk = httpreq.HttpResponse.Data.Read(.readLen)
+            set:(requestedLen > readLen) stop = 1
+            do stream.Write(chunk)
+          }
+      }
+    }
+    else  {
+      write:Debug !,"Error:",$system.Status.GetOneErrorText(sc)
+      Set Result="0~"_$system.Status.GetOneErrorText(sc)
+    }
+    kill httpreq
+    write:Debug !,urlFile," created!"
+    write:Debug !,"Size:",stream.SizeGet()
+    write:Debug !
+    Set sc=stream.%Save()
+    if 'sc Set Result="0~"_$system.Status.GetOneErrorText(sc)
+    else  Set Result=1
+    write:Debug !,"Saved! ",stream.Filename
+	Quit
+	//External-Entry:
+	//Job-Start for Get CSP-Gatway System-Status Overview (see above) frequently over a dedicated time frame.
+	//Example set ups:
+	//>Job CSPGWSTATUSJOB^CSPButtons("","10:15",5,3) - Starts Today at 10:15am, running every 5 Min. doing 3 interations
+	//>Job CSPGWSTATUSJOB^CSPButtons(1,"17:00",60,24,"127.0.0.1",80,"CSPSystem","ars123") - Starts tomorrow at 5pm, running every hour with 24 interations => whole day long. Will end next day at 5pm
+CSPGWSTATUSJOB(startDateDayOffset = "", startTimeDisplay = "", intervalMin = 30, iterations = 1, server="127.0.0.1",port="80",USERNAME="CSPSystem",PASSWORD="SYS",Dir="") //
+	Set startDate=+$horolog+startDateDayOffset
+	Set startTime=$ztimeh(startTimeDisplay)  //08:00 = 28800
+	Kill ^CSPButtons("CSPGWSTATUSJOB",$job)
+	Set ^CSPButtons("CSPGWSTATUSJOB",$job,$increment(^CSPButtons("CSPGWSTATUSJOB",$job)))=$zdatetime($horolog)_";START;"_$zdate(startDate)_" "_$ztime(startTime)_";"_intervalMin_" min.;"_iterations_"X"_";"_server_":"_port_";"_USERNAME_";"_PASSWORD_";"_Dir
+	//Wait Phase before Start
+	Set Go=0
+	For {
+	  if +$horolog>=startDate,$piece($horolog,",",2)>=startTime Set Go=1 Quit
+	  if $data(^CSPButtons("CSPGWSTATUSJOB",$job,"STOP")) Set Go=0 Kill ^CSPButtons("CSPGWSTATUSJOB",$job) Quit  //STOP switch
+	  Hang 60
+	}
+	Quit:'Go
+	//Start Phase of Jobs/Iterations
+	For i=1:1:iterations {
+		if $data(^CSPButtons("CSPGWSTATUSJOB",$job,"STOP")) Kill ^CSPButtons("CSPGWSTATUSJOB",$job,"STOP") Quit  //STOP switch
+	  	Job CSPGWSTATUSINFO^CSPButtons(server,port,USERNAME,PASSWORD,Dir)::5
+	  	Set ^CSPButtons("CSPGWSTATUSJOB",$job,$increment(^CSPButtons("CSPGWSTATUSJOB",$job)))=$zdatetime($horolog)_";Job Start #"_i_"/"_iterations_" every "_intervalMin_" min.;Job Started:"_$Test_" - Jobno.:"_$ZChild
+	  	Quit:(i>=iterations)
+	  	Hang (intervalMin*60)
+	}
+	Set ^CSPButtons("CSPGWSTATUSJOB",$job,$increment(^CSPButtons("CSPGWSTATUSJOB",$job)))=$zdatetime($horolog)_";END"
+	Quit
+	//External-Entry:
+	//Get full CSP.log
+GETCSPLOGS() // 
+ New
+ Do GetDirs
+ //Logs for every GW
+ Set CSPRegs=$system.CSP.GetGatewayRegistry()
+ Set CSPMgrs=CSPRegs.GetGatewayMgrs()
+ For mgrid=1:1:CSPMgrs.Count()  {
+ 	Set CSPMgr=CSPMgrs.GetAt(mgrid)
+	Set fileprefix="CSP_"_CSPMgr.Server_"_"_CSPMgr.Port_"_"
+	Set filesuffix="log"
+	Set LogFile=$$NewFile(fileprefix,filesuffix)
+	Set startDate = $zdate(0,11)_", "_$zdate(0,2)_" "_$ztime($piece(0,",",2),1)_" GMT"
+	Set sc=CSPMgr.GetCSPLog(.log,startDate,1,999999) 
+ 	IF 'sc Do $system.OBJ.DisplayError(sc) CONTINUE
+ 	Do log.Rewind()
+	Use LogFile do log.OutputToDevice()
+	Close LogFile
+	Write !,"Log file saved to: ",LogFile_", "_$FNumber($ZUtil(140,1,LogFile),",")_" bytes",!
+ }
+ Quit

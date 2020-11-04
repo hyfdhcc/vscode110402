@@ -1,0 +1,1160 @@
+ROUTINE GBLOCKCOPY [Type=INT]
+GBLOCKCOPY ; Fast global copy from database to namespace ; RFD623   4/11/11
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ n 
+ i $p($g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY")),"~",1)'="1.0" k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY")
+ i '$d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY")) s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY")="1.0~"
+ s POP=0
+ w !,"This routine will do a fast global copy from a database to another database or"
+ w !,"to a namespace. If a namespace is the destination, the global will follow any"
+ w !,"mappings set up for the namespace."
+ ; 
+MENU ;
+ w !
+ w !,"1) Interactive copy"
+ w !,"2) Batch copy"
+ w !,"3) Exit"
+ w !
+ s Option=$$OPTION("Option? ",3,3)
+ i Option=1 d INTERACTIVE g MENU
+ i Option=2 d BATCH g MENU
+ q
+INTERACTIVE
+ s POP=0
+ s Name=$e($j,$l($j)-6,$l($j))
+ k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)
+ d BATCHSETUP q:POP
+ s Interactive=1,Jobs=1,JobsDir=1
+ d SETJOBS(Name,Jobs,JobsDir)
+ d BATCHRUN1
+ i +$g(POP)=1 k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)
+ q
+BATCH
+ w !
+ w !,"1) Manage Batches"
+ w !,"2) Run a Batch"
+ w !,"3) Restart a Batch"
+ w !,"4) Add Processes to a running Batch"
+ w !,"5) Stop a Running batch"
+ w !,"6) Monitor Running Batch"
+ w !,"7) Batch Report"
+ w !,"8) Exit"
+ w !
+ s Option=$$OPTION("Option? ",8,8)
+ i Option=1 d BATCHMANAGE g BATCH
+ i Option=2 d BATCHRUN g BATCH
+ i Option=3 d BATCHRESTART g BATCH
+ i Option=4 d BATCHADDPROCESSES g BATCH
+ i Option=5 d BATCHSTOP g BATCH
+ i Option=6 d BATCHMONITOR g BATCH
+ i Option=7 d BATCHREPORT g BATCH
+ q
+BATCHMANAGE
+ w !
+ w !,"1) Create a Batch"
+ w !,"2) Edit a Batch"
+ w !,"3) List Batches"
+ w !,"4) Delete a Batch"
+ w !,"5) Exit"
+ w !
+ s Option=$$OPTION("Option? ",5,5)
+ i Option=1 d BATCHCREATE g BATCHMANAGE
+ i Option=2 d BATCHEDIT g BATCHMANAGE
+ i Option=3 d BATCHLIST g BATCHMANAGE
+ i Option=4 d BATCHDELETE g BATCHMANAGE
+ q
+BATCHCREATE s $zt="BATCHE"
+ s Name=$$GETNAME("Batch name to create? ",0,0) q:POP
+ f  w !!,"Adding to batch: "_Name d BATCHSETUP q:POP
+ g BATCHCREATE
+BATCHEDIT   s $zt="BATCHE"
+ s Name=$$GETNAME("Batch name to edit? ",1,0) q:POP
+ s Status=$$GETSTATUS(Name,1)
+ i $p(Status,"~",4)'="Queue" w !,"Batch "_Name_" has been run, please re-enter" g BATCHEDIT
+ i $$YN("Do you want to add to the batch","Y")="Y" f  w !!,"Adding to batch: "_Name d BATCHSETUP q:POP
+ i $$YN("Do you want to delete entries from batch "_Name,"N")="N" g BATCHEDIT
+BATCHEDIT1
+ d SUMMARYREPORT(Name,0)
+ s Option=$$OPTION("Delete which entry? ",0,+$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,""),-1)) 
+ i Option=0 g BATCHEDIT
+ k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Option)
+ s Index="" s Count=0 f  s Index=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)) q:Index=""  s Count=Count+1 i Count'=Index m ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Count)=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index) k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)
+ i $d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,1))=0 k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name) g BATCHEDIT
+ g BATCHEDIT1
+BATCHLIST s $zt="BATCHE"
+ s Name=$$GETNAME("Batch name to list (*=ALL)? ",1,1) q:POP
+ i $$YN("Include Global list","N")="Y" s detail=1
+ e  s detail=0
+ d GETNAMEREPORT(Name,detail)
+ g BATCHLIST
+BATCHDELETE   s $zt="BATCHE"
+ s Name=$$GETNAME("Batch name to delete? ",1,0) q:POP
+ d GETJOBSTATUS(Name,0,0,.JobInfo)
+ i JobInfo(0) w !,"Batch "_Name_" is currently running, Please re-enter" g BATCHDELETE
+ i $$YN("Do you want to delete batch "_Name,"N")="N" g BATCHDELETE
+ k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)
+ w !,"Batch "_Name_" is deleted"
+ g BATCHDELETE
+BATCHRUN s $zt="BATCHE"
+ s Name=$$GETNAME("Batch name to run? ",1,0) q:POP
+ s Status=$$GETSTATUS(Name,1)
+ i $p(Status,"~",4)'="Queue" w !,"Batch was already run, Please re-enter" g BATCHRUN
+ s Index="",Count=0 f  s Index=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)) q:Index=""  s Count=Count+1
+ s Jobs=$$OPTION("How many copy processes do you want to run for all directories at once? "_Count_" => ",Count,999)
+ i Jobs=0 g BATCHRUN
+ s Count=Jobs\Count i Count=0 s Count=1
+ s JobsDir=$$OPTION("How many of these copy processes do you want to run for each directory? "_Count_" => ",Count,Jobs)
+ i JobsDir=0 g BATCHRUN
+ d SETJOBS(Name,Jobs,JobsDir)
+ s Interactive=0
+BATCHRUN1
+ s POP=0
+ i $$YN("Confirm copy","Y")="N" s POP=1 q
+ w !,"Verifying and renaming directories..."
+ s Index="" f  s Index=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)) q:Index=""  d  q:rc=0
+ . s rc=$$RENAMEDB(Name,Index) q:rc=0
+ . s srcdir=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"SRCDIR")
+ . s dstdir=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"DSTDIR")
+ . s rc=$s($e(srcdir,1,2)="^^":$$CHECKDIR(srcdir,0),1:$$CHECKNS(srcdir))
+ . i rc=0 w !,$$NSMSG(srcdir,err) q
+ . s rc=$s($e(dstdir,1,2)="^^":$$CHECKDIR(dstdir,0),1:$$CHECKNS(dstdir))
+ . i rc=0 w !,$$NSMSG(dstdir,err) q
+ q:rc=0
+ w !,"Building work queues..."
+ s Index="" f  s Index=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)) q:Index=""  d  q:('rc)
+ . s srcdir=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"SRCDIR")
+ . s dstdir=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"DSTDIR")
+ . s ConvertCollation=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"CONVERTCOLLATION")
+ . k glinfo set rc=$$GetGlobalDirectoryInfo^%SYS.DATABASE(srcdir,"glinfo")
+ . If ('rc) w !,"Error getting directory information for ",srcdir q
+ . k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED")
+ . i $d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSLIST","*")) s glo="" f  s glo=$o(glinfo(glo),1,glinfo) q:glo=""  s COL=$$COLLATION(glinfo,ConvertCollation),^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED",glo)=COL
+ . i '$d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSLIST","*")) s glo="" f  s glo=$o(glinfo(glo),1,glinfo) q:glo=""  i $d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSLIST",glo)) s COL=$$COLLATION(glinfo,ConvertCollation),^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED",glo)=COL
+ . i $d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED",$c(255))) d
+ . . q:$zname($c(255))
+ . . k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED",$c(255))
+ . If $o(glinfo(""))="GbLoCk",$o(glinfo("GbLoCk"))="" s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"EMPTYSOURCE")=1,empty=1
+ . Else  k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED","GbLoCk")
+ q:('rc)
+ w !,"Creating destination globals..."
+ s Index="" f  s Index=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)) q:Index=""  d  q:('rc)
+ . s srcdir=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"SRCDIR")
+ . s dstdir=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"DSTDIR")
+ . k glinfo set rc=$$GetGlobalDirectoryInfo^%SYS.DATABASE(srcdir,"glinfo")
+ . s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED",glo),1,COL) q:glo=""  d  q:('rc)
+ . . s createglo=glo i createglo=$c(255) s createglo="rOBJ"
+ . . Set jrnval=$Case($Zboolean(+$p(glinfo(glo),"^",4),4,1),4:1,:0)
+ . . Set keepval=$Case($Zboolean(+$p(glinfo(glo),"^",4),1,1),1:1,:0)
+ . . If $g(empty) s rc=1
+ . . Else  s rc=$$CreateGlobal^%SYS.DATABASE(dstdir,createglo,COL,$p(glinfo(glo),"^",1),jrnval,keepval)
+ . . q:(''rc) ;i ($$$ISERR(rc)),($li($li($e(rc,3,$l(rc)),1),1)'=1) d  q
+ . . i $SYSTEM.Status.GetErrorCodes(rc)'=333,$SYSTEM.Status.GetErrorCodes(rc)'=335 d  q
+ . . . w !,"Unable to create global "_createglo_" in database "_dstdir_" skipped!"
+ . . . k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED",glo) s rc=1
+ . . s dstdirx=dstdir
+ . . i $e(dstdir)'="^" s dstdirx=$$getdest^%SYS.GXLINF1(dstdir,createglo) s dstdirx="^"_dstdirx i dstdirx="^" d  s rc=1 q
+ . . . k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED",glo)
+ . . . w !,"Unable to determine the destination database for ^|""",dstdir,"""|",createglo
+ . . . w !,"Global "_createglo_" in database "_dstdir_" skipped!"
+ . . k dstglinfo set rc1=$$GetGlobalDirectoryInfo^%SYS.DATABASE(dstdirx,"dstglinfo")
+ . . i '(''rc1) d  s rc=1 q
+ . . . k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED",glo)
+ . . . w !,"Unable to get destination directory info for global "_createglo
+ . . . w !,"Global "_createglo_" in database "_dstdir_" skipped!"
+ . . i '$d(dstglinfo(createglo)) s rc=1 q
+ . . i $p(dstglinfo(createglo),"^",5)=$p(glinfo(glo),"^",5) s rc=1
+ . . e  d
+ . . . q:'Interactive
+ . . . w !,"Unable to preserve the collation of global ^"_createglo_", destination already exists"
+ . . . i $$YN("Skip","Y")="Y" q
+ . . . s rc=1
+ . . if ('rc) k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED",glo) w !,"Global "_createglo_" in database "_dstdir_" skipped!"
+ . . s rc=1
+ d STARTJOBS(Name,Interactive)
+ i 'Interactive d MONITORREPORT(Name)
+ q
+BATCHRESTART
+ s $zt="BATCHE"
+ w !!,"This option will restart global copies which started and failed to complete"
+ w !,"either because of an error while the global was being copied, or system crash."
+ w !,"It will first add the globals back to the queue state, then restart copy"
+ w !,"processes if necessary. You can also use this option to restart a copy"
+ w !,"you used the STOP option on. You can also use this option to re-queue"
+ w !,"a global which had an error even if other globals are still being copied"
+ w !
+BATCHRESTART1
+ s Name=$$GETNAME("Batch name to restart? ",1,0) q:POP
+ s Status=$$GETSTATUS(Name,1)
+ i $p(Status,"~",4)="Queue" w !,"Batch "_Name_" has not been run, Please re-enter" g BATCHRESTART1
+ d SUMMARYREPORT(Name,0)
+BATCHRESTART2
+ w ! i $$YN("Confirm restart of batch "_Name,"Y")="N" g BATCHRESTART
+ s Index="" f  s Index=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)) q:Index=""  d BATCHRESTARTGLO(Name,Index,$p(Status,"~",4))
+ d STARTJOBS(Name,0)
+ q
+BATCHADDPROCESSES s $zt="BATCHE"
+ s Name=$$GETNAME("Batch name to add processes to? ",1,0) q:POP
+ d GETJOBSTATUS(Name,0,0,.JobInfo)
+ i JobInfo(0)=0 w !,"Batch is not currently running, Please re-enter" g BATCHADDPROCESSES
+ d GETJOBS(Name,.Jobs,.JobsDir)
+ w !
+ w !,"Batch "_Name_" currently has "_JobInfo(0)_" process(es) running of "_Jobs_" started"
+ w !,"Each directory has "_JobsDir_" process(es) assigned to it"
+ w !
+ s NewJobs=$$OPTION("How many copy processes do you want to run at once? "_Jobs_" => ",Jobs,999)
+ i NewJobs=0 g BATCHADDPROCESSES
+ s NewJobsDir=$$OPTION("How many of these copy processes do you want to run for each directory? "_JobsDir_" => ",JobsDir,NewJobs)
+ i NewJobsDir=0 g BATCHADDPROCESSES
+ d SETJOBS(Name,NewJobs,NewJobsDir)
+ d STARTJOBS(Name,0)
+ q
+BATCHSTOP s $zt="BATCHE"
+ s Name=$$GETNAME("Batch name to stop? ",1,0) q:POP
+ d GETJOBSTATUS(Name,0,0,.JobInfo)
+ i JobInfo(0)=0 w !,"Batch "_Name_" is not currently running, Please re-enter" g BATCHSTOP
+ w !
+ w !,"1) Stop immediately"
+ w !,"2) Stop after current global copies are finished"
+ w !,"3) Exit"
+ w !
+ s Option=$$OPTION("Option? ",3,3) 
+ i $$YN("Confirm stop of batch "_Name,"N")="N" g BATCHSTOP
+ i (Option=0)!(Option=3) g BATCHSTOP
+ s Index=""  f  s Index=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)) q:Index=""  s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"STOP")=Option
+ g BATCHSTOP
+BATCHE s $zt=""
+ i $ze["<INTERRUPT>" q
+ w !,"Error: "_$ZE
+ q
+BATCHMONITOR s $zt="BATCHE"
+ s Name=$$GETNAME("Batch name to monitor (*=ALL)? ",1,1) q:POP
+ d MONITORREPORT(Name)
+ g BATCHMONITOR
+BATCHREPORT s $zt="BATCHREPORTE"
+ w !
+ w !,"1) Summary report"
+ w !,"2) Detail report"
+ w !,"3) Exit"
+ w !
+ s Option=$$OPTION("Option? ",3,3) i (Option=0)!(Option=3) q
+ s Name=$$GETNAME("Batch name (*=ALL)? ",1,1) i POP g BATCHREPORT
+ i Option=1 d SUMMARY g BATCHREPORT
+ i Option=2 d DETAIL g BATCHREPORT
+ q
+BATCHREPORTE s $zt=""
+ i $d(IO) c:IO'=$P IO
+ w !,"ERROR: "_$ze
+ q
+MONITORREPORT(InName) [] PUBLIC {
+ D MONITORREPORT^GBLOCKCOPY1(InName)
+}
+BATCHSETUP
+ w !
+ w !,"1) Copy from Database to Database"
+ w !,"2) Copy from Database to Namespace"
+ w !,"3) Exit"
+ w !
+ s Option=$$OPTION("Option? ",3,3) i (Option=0)!(Option=3) s POP=1 q
+ s srcdir=$$ASKDIR("Source",0) q:POP
+ i $e(srcdir,1,2)="^^" {
+    New blksiz Set blksiz=$Piece($zu(49,$p(srcdir,"^",3)),",",2)
+    If $zbitget($zversion(0),21),blksiz>32768,'$$IsLongStringEnabled() {
+       Write !!,"GBLOCKCOPY from a 64KB database requires long string support."
+       Write !,"This system or process does not have long strings enabled."
+       s srcdir="",POP=1 Quit  
+    }
+    If blksiz=2048 {
+       w !!,"Databases with 2K block size are no longer supported."
+       w !!,"You must user version 2011.1 or earlier to convert them."
+       s srcdir="",POP=1 Quit  
+   }
+ } 
+ i Option=1 {
+	s dstdir=$$ASKDIR("Destination",1) q:POP
+	i $e(dstdir,1,2)="^^" {
+		New blksiz Set blksiz=$Piece($zu(49,$p(dstdir,"^",3)),",",2)
+    	If blksiz=2048 {
+	        w !!,"Databases with 2K block size are no longer supported."
+       		w !!,"You must user version 2011.1 or earlier to convert them."
+       		s srcdir="",POP=1 Quit  
+    	}
+	}
+ } 	
+ i Option=2 s dstdir=$$ASKNS() q:POP
+ i srcdir=dstdir w !,"Destination and source directories cannot be the same" g BATCHSETUP
+ s rc=$$GETGLOBALS(srcdir,.GLOBALS) q:POP
+ s journal=$$GETJOURNAL() q:POP
+ s Index=$$GETINDEX(Name)
+ s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"SRCDIR")=srcdir
+ s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"SRCDIRTYPE")=$g(^|srcdir|GbLoCk,"CACHE.DAT")
+ s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"DSTDIR")=dstdir
+ s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"CONVERTCOLLATION")=$g(GLOBALS(0),1) k GLOBALS(0)
+ s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"JOURNAL")=journal
+ s glo="" f  s glo=$o(GLOBALS(glo)) q:glo=""  s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSLIST",glo)=""
+ k GLOBALS
+ q
+BATCHRESTARTGLO(Name,Index,Status) [] PRIVATE {
+ k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"STOP")
+ s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo),1,cvtdata) q:glo=""  d
+ . i ($p(cvtdata,"~",9)'="")!(($p(cvtdata,"~",9)="")&(Status="Crash")) d
+ . . s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED",glo)=""
+ . . k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"END")
+ . . w !,"Re-queueing Batch "_Name_" entry "_Index_" global "_glo
+ . . s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"RESTART",glo)=$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"RESTART",glo))_$h_"~"_$p(cvtdata,"~",9)_"~"_$p(cvtdata,"~",10)_"*"
+ q
+}
+SUMMARY i $$YN("Include Global list","N")="Y" s detail=1
+ e  s detail=0
+ s NameCount=0
+ w !
+ N IOMS s IOMS=$System.Device.GetRightMargin()
+ d OUT^%IS q:POP
+ u IO
+ w !,$$CENTER("GBLOCKCOPY Summary Report at "_$ZDATETIME($h),80)
+ i Name'="*" d SUMMARY1 
+ i Name="*" s Name="" f  s Name=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)) q:Name=""  d SUMMARY1
+ U:$P=IO IO:/MAR=IOMS 
+ c:IO'=$P IO
+ q
+SUMMARY1
+ i NameCount'=0 k x s $p(x,"-",79)="-" w !!,x
+ s NameCount=NameCount+1
+ d SUMMARYREPORT(Name,detail)
+ q
+SUMMARYREPORT(Name,Detail) [] PUBLIC {
+ d SUMMARYREPORT^GBLOCKCOPY1(Name,Detail)
+}
+DETAIL s detail=0,NameCount=0
+ w !
+ N IOMS s IOMS=$System.Device.GetRightMargin()
+ d OUT^%IS q:POP
+ u IO
+ w !,$$CENTER("GBLOCKCOPY Detailed Report at "_$ZDATETIME($h),80)
+ i Name'="*" {
+	 d DETAIL1
+ } else {
+ 	s Name="" f  s Name=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)) q:Name=""  d DETAIL1
+ }
+ U:$P=IO IO:/MAR=IOMS 
+ c:IO'=$P IO
+ q
+DETAIL1
+ i NameCount'=0 k x s $p(x,"-",79)="-" w !!,x
+ s NameCount=NameCount+1
+ d DETAILREPORT(Name)
+ q
+DETAILREPORT(Name) [] PUBLIC {
+ d DETAILREPORT^GBLOCKCOPY1(Name)
+ q
+}
+STARTJOBS(Name,Interactive) [] PUBLIC 
+ {
+ i Interactive d  q
+ . w !,"Starting copy"
+ . w !!,"Global",?34,"Last Update",?46,"Blks Done",?57,"Blks ToDo",?67,"Status"
+ . s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,1,"STARTJOBS")=1
+ . d START(Name,1,Interactive)
+ w !,"Starting processes"
+ k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,1,"STARTJOBS")
+ d GETJOBS(Name,.Jobs,.JobsDir)
+ s (Count,ErrCount)=0 f  s Index=$$NEXTINDEX(Name) q:Index=0  d
+ . j START^GBLOCKCOPY(Name,Index,Interactive)::5 i '$t s ErrCount=ErrCount+1 q
+ . s Count=Count+1 w "."
+ . f  d GETJOBSTATUS(Name,0,0,.JobInfo) q:Count'>JobInfo(0)  w "|" h 1
+ w !,"Started "_Count_" copy processes"
+ i ErrCount w !,"Failed to start "_ErrCount_" copy processes"
+ s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,1,"STARTJOBS")=1
+ h 5
+ q
+ }
+START(Name,Index,Interactive) 
+ d SETJOBSTATUS(Name,$j,"Start",Index,"")
+ s $zt="STARTE"
+ f  q:$d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,1,"STARTJOBS"))  h 1
+ f  {  
+ 	q:+Index=0
+ 	s srcdir=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"SRCDIR")
+ 	s dstdir=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"DSTDIR")
+	l +^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)
+ 	i $d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"START"))=0 d
+ 	. s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"START")=$h
+	. q:Interactive
+	. If $extract(dstdir,1,2)="^^" s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"MAPS")=$$CHANGEMAPS($e(dstdir,3,$l(dstdir)))
+	l -^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)
+	s CURRENTJOURNALMODE=$$CURRENT^%SYS.NOJRN
+	i +$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"JOURNAL")) d ##class(%SYS.ProcessQuery).EnableJournalInt()
+	e  d ##class(%SYS.ProcessQuery).DisableJournalInt()
+ 	s oldns=$zu(5)
+	s srcmounted=$s($e(srcdir,1,2)="^^":$$NeedMountDB($e(srcdir,3,*)),1:0)
+	s dstmounted=$s($e(dstdir,1,2)="^^":$$NeedMountDB($e(dstdir,3,*)),1:0)
+ 	i $zu(5,srcdir)
+ 	s status=$$NEXTGLO(Name,Index,Interactive)
+ 	i $d(oldns) d $zu(5,oldns)
+	if $g(srcmounted,0) s srcmounted=0 d $zu(3,srcdir)
+	if $g(dstmounted,0) s dstmounted=0 d $zu(3,dstdir)
+	i CURRENTJOURNALMODE d ##class(%SYS.ProcessQuery).EnableJournalInt()
+	e  d ##class(%SYS.ProcessQuery).DisableJournalInt()
+	q:$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"STOP"),100)<3
+ 	i '$d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED")),'$d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED")) d
+ 	. s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"END")=$h
+	. i $d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"MAPS")) d
+	. . d RESTOREMAPS($e(dstdir,3,$l(dstdir)),^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"MAPS"))
+ 	i Interactive d  q
+ 	. i status d
+ 	. . w !!,"Copy of data has completed",!
+ 	. . i $$RENAME("Do you want to save statistics for later review",.Name) d
+ 	. . . w !,"Use the Summary or Detail option under Batch Copy for statistics"
+ 	. i 'status d
+	. . w !!,"The previous copy operation was aborted. You can restart the copy operation"
+	. . w !,"in the future as a batch copy if you want.",!
+	. . i $$RENAME("Do you want to be able to restart the copy operation",.Name) d
+	. . . w !,"Use the Restart option under Batch Copy to restart the copy"
+	q:$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"STOP"),100)<4
+ 	s Index=$$NEXTINDEX(Name)
+ }
+ i Interactive,(Name="") q
+ i (+Index'=0),$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,+Index,"STOP"),100)<4  d SETJOBSTATUS(Name,$j,"Stop",Index,"") 
+ e  d SETJOBSTATUS(Name,$j,"Success",Index,"") 
+ i Interactive,(status=0) d SETJOBSTATUS(Name,$j,$ze,Index,"")
+ q
+STARTE s $zt=""
+ i $zu(5,"%SYS") 
+ if $g(srcmounted,0) s srcmounted=0 d $zu(3,srcdir)
+ if $g(dstmounted,0) s dstmounted=0 d $zu(3,dstdir)
+ d SETJOBSTATUS(Name,$j,$ze,$g(Index),"") 
+ d BACK^%ETN
+ i $d(oldns) d $zu(5,oldns)
+ q:Interactive
+ h 60	; If we keep erroring, Don't fill the error trap
+ k (Name,Index,Interactive)
+ j START(Name,Index,Interactive)
+ halt
+SETJOBS(Name,Jobs,JobsDir) [] PUBLIC{
+ i JobsDir>Jobs s JobsDir=Jobs
+ s $p(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name),"~",1,2)=Jobs_"~"_JobsDir
+ }
+GETJOBS(Name,Jobs,JobsDir) [] PUBLIC{
+ s Info=$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name))
+ s Jobs=+$p(Info,"~",1),JobsDir=+$p(Info,"~",2)
+ q
+ }
+SETJOBSTATUS(Name,Job,ze,Index,Glo) [] PRIVATE {
+ s $zt="SETJOBSTATUSE"
+ q:Name=""
+ L +^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)
+ i ze="Start" s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)_"~"_$j_"*"_$h_"***"_Index_"*"_Glo L -^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name) q
+ s Jobs=$p(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name),"~",1,2)
+ s Info=$p(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name),"~",3,10000)
+ s x=0
+ f i=1:1 s JobInfo=$p(Info,"~",i) q:JobInfo=""  i $p(JobInfo,"*",1)=Job s x=i
+ i x'=0 s Data=$p(Info,"~",x),Data=$j_"*"_$p(Data,"*",2)_"*"_$h_"*"_ze_"*"_Index_"*"_Glo,$p(Info,"~",x)=Data
+ s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)=Jobs_"~"_Info
+SETJOBSTATUSE
+ s $zt=""
+ L -^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)
+ q
+ }
+GETJOBSTATUS(Name,Index,All,JobInfo) [] PUBLIC {
+ k JobInfo
+ s ExistsCount=0
+ s Info=$p($g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)),"~",3,10000)
+ i Info="" s JobInfo(0)=0 q
+ f i=1:1 s x=$p(Info,"~",i) q:x=""  d
+ . s Job=+$p(x,"*",1),Start=$p(x,"*",2),End=$p(x,"*",3),Error=$p(x,"*",4),ViewIndex=$p(x,"*",5),Glo=$p(x,"*",6)
+ . i ($zu(67,0,Job)=2) s Exists=1 s:$j=Job Exists=0
+ . e  s Exists=0
+ . s Status=$s(Exists:"Run",Error="Success":"Done",Error="":"Crash",Error="Stop":"Stop",1:"Error")
+ . s Error=$s((Status="Done")!(Status="Stop"):"",1:Error)
+ . i All=0 q:'Exists
+ . i Index'=0 q:Index'=ViewIndex
+ . i Exists s ExistsCount=ExistsCount+1
+ . s JobInfo(Job,$i(JobInfo(Job,0)))=Status_"~"_Start_"~"_End_"~"_ViewIndex_"~"_Glo_"~"_Error
+ s JobInfo(0)=ExistsCount
+}
+NEXTGLO(Name,Index,Interactive) [] PRIVATE {
+ s $zt="NEXTGLOE",status=1
+ f  {
+	L +^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)
+	s global=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED",""))
+	i global="" LOCK -^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index) q
+	i '$d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",global)) s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",global)=0_"~"_$h_"~0~"_$h_"~0~0~0~^"_global_"~~~"
+	k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED",global)
+	LOCK -^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)
+	s status=$$BLKSAVE(Name,Index,global,^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"DSTDIR"),Interactive)
+	i Interactive,(status=0) q
+	q:$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"STOP"),100)<3
+ }
+ q status
+NEXTGLOE s $zt=""
+ LOCK -^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)
+ i $zu(5,"%SYS") 
+ d SETJOBSTATUS(Name,$j,$ze,Index,$g(global)) 
+ d BACK^%ETN
+ h 60	; If we keep erroring, Don't fill the error trap
+ k (Name,Index,Interactive)
+ j START(Name,Index,Interactive)
+ halt
+}
+NEXTINDEX(Name) [] PUBLIC {
+ s $zt="NEXTINDEXE"
+ L +^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)
+ d GETJOBS(Name,.Jobs,.JobsDir)
+ d GETJOBSTATUS(Name,0,0,.JobInfo)
+ i Jobs=JobInfo(0) L -^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name) q 0
+ s POP=0 s Index="" f  s Index=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)) q:Index=""  d  q:POP
+ . q:$d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED"))=0
+ . d GETJOBSTATUS(Name,Index,0,.JobInfo)
+ . q:JobInfo(0)>(JobsDir-1)
+ . s POP=1
+ L -^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)
+ q +Index
+NEXTINDEXE s $zt=""
+ L -^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)
+ q 0
+}
+BLKSAVE(Name,Index,glo,destns,Interactive) [] PRIVATE
+ {
+BLKSAVE1
+ s $zt="BLKSAVEE"
+ d SETJOBSTATUS(Name,$j,"",Index,glo)
+ s StartTime=$h,myrc=""
+ s data=$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo)) 
+ i +$p(data,"~",5)'=0 s Restart=1,savedatablk=+$p(data,"~",5),nblocks=$p(data,"~",6)-1,bigcnt=$p(data,"~",7),blockstocopy=$p(data,"~",11) s:nblocks=-1 nblocks=0
+ e  s (Restart,datablk,nblocks,bigcnt,savedatablk,blockstocopy)=0,^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo)=$j_"~"_StartTime_"~0~"_$h_"~0~0~0~^"_glo_"~~~0"
+ i $zcvt($zu(5),"L")'=$zcvt(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"SRCDIR"),"L") s myrc="<NAMESPACE>,"_$zu(5) g BLKSAVEERROR
+ Set bigdb=$Piece($zu(49,""),",",2)
+ o 63
+ i Interactive w !,"^"_glo,?34,$$DISPLAYDATE($h),?46,$j(nblocks,9),?56,$j(0,10),?67,"0%",$j("",80-$x),$c(13)
+ i (glo=$c(255)) d  g BLKSAVEDONE
+ . m ^|destns|rOBJ=@("^"_glo) 
+ . s xglo="" f  s xglo=$o(@("^"_glo)@(xglo)) q:xglo=""  s nblocks=nblocks+1
+ . s blockstocopy=nblocks
+ i (glo="mMAC") d  g BLKSAVEDONE
+ . m ^|destns|rMAC=@("^"_glo) 
+ . s xglo="" f  s xglo=$o(@("^"_glo)@(xglo)) q:xglo=""  s nblocks=nblocks+1
+ . s blockstocopy=nblocks
+ i (glo="mMACSAVE") d  g BLKSAVEDONE
+ . m ^|destns|rMACSAVE=@("^"_glo) 
+ . s xglo="" f  s xglo=$o(@("^"_glo)@(xglo)) q:xglo=""  s nblocks=nblocks+1
+ . s blockstocopy=nblocks
+ i (glo="mINC") d  g BLKSAVEDONE
+ . m ^|destns|rINC=@("^"_glo) 
+ . s xglo="" f  s xglo=$o(@("^"_glo)@(xglo)) q:xglo=""  s nblocks=nblocks+1
+ . s blockstocopy=nblocks
+ i (glo="mINCSAVE") d  g BLKSAVEDONE
+ . m ^|destns|rINCSAVE=@("^"_glo) 
+ . s xglo="" f  s xglo=$o(@("^"_glo)@(xglo)) q:xglo=""  s nblocks=nblocks+1
+ . s blockstocopy=nblocks
+ i glo="GbLoCk" g BLKSAVEDONE
+ If '$d(@("^|""^^""|"_glo)) g BLKSAVEDONE ; Set up global vector
+ Set collate=$li($zu(208),2)
+ Set myrc=$$GetGlobalPointers^%SYS.DATABASE("",glo,.topblk,.datablk)
+ If ('myrc) s myrc=$select(+myrc:$$Error^%apiOBJ(54),1:$$AppendStatus^%occSystem(myrc,$$Error^%apiOBJ(54))) g BLKSAVEERROR
+ Set length=$l(glo)+2,POP=0,nextblk=0,off=0,newio=0
+ s zz=$zu(93,6,destns,glo,$case(bigdb,2048:1,:$case($Zutil(40,0,0),0:7,1:8)),0,collate)
+ i Restart s datablk=savedatablk
+ e  d
+ . s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo)=$j_"~"_StartTime_"~0~"_$h_"~"_0_"~"_nblocks_"~"_bigcnt_"~"_$$LASTREF(glo)_"~~~"_blockstocopy_"~Calc"
+ . s blockstocopy=$$GSIZE(bigdb,topblk)
+ . s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo)=$j_"~"_StartTime_"~0~"_$h_"~"_datablk_"~"_nblocks_"~"_bigcnt_"~"_$$LASTREF(glo)_"~~~"_blockstocopy
+ s myrc=""
+ For  v datablk s nblocks=nblocks+1,nextblk=$case(bigdb,2048:$v(2040,0,"3O"),:$v($Zutil(40,32,4),0,4)),data=$zu(93,0,0),data1="" s:$l(data)=32767 data1=$zu(93,0,1) d $zu(93,7,data_data1) Set off=$Zutil(93,1,-1) d:('(nblocks#100))!(off'="")  Q:myrc'=""  s datablk=nextblk Q:'datablk
+ . Set off2=1 For  Quit:off=""  Set off2=off2+$p(off,"^",2),ref=$View(off2,-6),val=$v(off2+1,-5) d $Zutil(93,4,ref,val,collate,0) Set off2=off2+2,off=$Zutil(93,1,off) Set:savedatablk'=datablk bigcnt=bigcnt+1
+ . i '(nblocks#100) s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo)=$j_"~"_StartTime_"~0~"_$h_"~"_datablk_"~"_nblocks_"~"_bigcnt_"~"_$$LASTREF(glo)_"~~~"_blockstocopy,totalblocks=$i(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,1,"TOTALBLOCKS"),100) s:$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"STOP"),100)=1 myrc="<STOP>" i Interactive w "^"_glo,?34,$$DISPLAYDATE($h),?46,$j(nblocks,9),?56,$j(blockstocopy,10),?67 w:blockstocopy'=0 $p(((nblocks/blockstocopy)*100),".")_"%" w:blockstocopy=0 "0%" w $j("",80-$x),$c(13) h 0
+BLKSAVEDONE ;
+ If myrc'="" g BLKSAVEERROR
+ i (glo="ROUTINE"),(($g(^GbLoCk)["OPENM")!($g(^GbLoCk)["MUMPS")) d  i $$CONVERTROUTINE(destns)=0 s myrc="<RECOMPILE>"_$ZE g BLKSAVEERROR
+ . i Interactive w "^"_glo,?34,$$DISPLAYDATE($h),?46,$j(nblocks,9),?56,$j(blockstocopy,10),?67,"Compile",$j("",80-$x),$c(13) h 0
+ . s $p(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo),"~",6)=nblocks,$p(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo),"~",12)="Compl" 
+ i Interactive w "^"_glo,?34,$$DISPLAYDATE($h),?46,$j(nblocks,9),?56,$j(blockstocopy,10),?67,"Done",$j("",80-$x),$c(13) h 0
+ s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSENDED",glo)=$j_"~"_StartTime_"~"_$h_"~"_$h_"~"_datablk_"~"_nblocks_"~"_bigcnt_"~"_$$LASTREF(glo)_"~~~"_blockstocopy
+ k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo)
+ q 1
+BLKSAVEERROR ;
+ i Interactive w "^"_glo,?34,$$DISPLAYDATE($h),?46,$j(nblocks,9),?56,$j(blockstocopy,10),?67,myrc,$j("",80-$x),$c(13)
+ s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo)=$j_"~"_StartTime_"~"_$h_"~"_$h_"~"_datablk_"~"_nblocks_"~"_bigcnt_"~"_$$LASTREF(glo)_"~"_myrc_"~0~"_blockstocopy
+ i Interactive  w !!,"Copy aborted"
+ q 0
+BLKSAVEE S $ZT="" ; Prevent loops in error trapper.
+ i $ze["<INTERRUPT>" s $ze="<STOP>"
+ s ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo)=$j_"~"_StartTime_"~"_$h_"~"_$h_"~"_datablk_"~"_nblocks_"~"_bigcnt_"~"_$$LASTREF(glo)_"~"_$ze_"~~"_blockstocopy
+ i Interactive d  w ! g:POP=0 BLKSAVE1 q 0
+ . w "^"_glo,?34,$$DISPLAYDATE($h),?46,$j(nblocks,9),?56,$j(blockstocopy,10),?67,$ze,$j("",80-$x),! h 0
+ . s POP=1 i $$YN("Do you really want to abort the copy","N")="N" s POP=0 q
+ . w !!,"Copy aborted"
+ s oldns=$zu(5)
+ d $zu(5,"%SYS")
+ l +^ERRORS("GBLOCKCOPY"):30
+ d BACK^%ETN ; Save Error dump
+ s $p(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo),"~",10)=$o(^ERRORS(+$h,""),-1)
+ l -^ERRORS("GBLOCKCOPY")
+ i $zu(5,oldns)
+ q 0
+ }
+LASTREF(glo) [] PRIVATE {
+ s $zt="LASTREFE"
+ i '$d(@("^"_glo)) q "^"_glo
+ s x=$v(1,-5)
+ i $tr($p(x,"^",2)," ","")="" q "^"_glo
+ q $tr(x,"~"," ")
+LASTREFE s $zt=""
+ i $ze["UNIMPLEMENTED" s $ze="" q "^"_glo
+ q "^"_glo
+}
+RENAME(Prompt,Name) [POP] PRIVATE {
+RENAME1 s $zt="RENAMEE"
+ i $$YN(Prompt,"N")="N" k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name) s Name="" q 0
+ s NewName=$$GETNAME("Batch name to save information to? ",0,0)
+ i POP g RENAME1
+ m ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",NewName)=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)
+ k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)
+ w !,"Information saved to Batch name "_NewName
+ s Name=NewName
+ q 1
+RENAMEE s $zt="" 
+ k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name) s Name=""
+ w !,"ERROR: "_$ZE
+ q 0
+}
+CONVERTROUTINE(destns) [] PRIVATE {
+ s $zt="CONVERTROUTINE"
+ s oldnsp=$zu(5) 
+ i $zu(5,destns) 
+ f type="INC","MAC" d
+ . s xglo="" f  s xglo=$o(^ROUTINE(0,type,1,xglo)) q:xglo=""  d convert^%RCNV(type,xglo)
+ . k ^ROUTINE(0,type) ; Remove any leftover garbage
+ i ($g(^|oldnsp|GbLoCk)["MUMPS.DAT")!($zname($c(255))=0) d
+ . s xglo="" f  s xglo=$o(^|oldnsp|ROUTINE(xglo)) q:xglo=""  i $$ROUTINE^%R(xglo_".INT",,,"LCS")
+ i $zu(5,oldnsp)
+ q 1
+CONVERTROUTINEE s $zt=""
+ i $d(oldns) i $zu(5,oldns)
+ q 0
+}
+GETSTATUS(Name,Index) [glinfo,JobInfo] PUBLIC {
+ s srcdir=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"SRCDIR") s srcdir=$e(srcdir,3,$l(srcdir))
+ s dstdir=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"DSTDIR") i $e(dstdir,1,2)="^^" s dstdir=$e(dstdir,3,$l(dstdir))
+ s dspdir=srcdir_"=>"_dstdir
+ i $l(dspdir)>45 d
+ . f i=1:1:10 s dspdir=$e(dspdir,2,$l(dspdir)) i $l(dspdir)<45 s dspdir="*"_dspdir q
+ . q:$e(dspdir)="*"
+ . i $l(dspdir)>44 d
+ . . f  s dspdir=$e(dspdir,2,$l(dspdir)),dspdir=$p(dspdir,">",1)_">"_$e($p(dspdir,">",2),2,$l(dspdir))  q:$l(dspdir)<44
+ . . s dspdir="*"_$p(dspdir,">",1)_">*"_$p(dspdir,">",2)
+ s dspdir=$e(dspdir,1,45)
+ i $d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSLIST","*")) s AllOrSelected="All"
+ e  s AllOrSelected="Selected"
+ s queglo=0
+ s startedglo=0
+ s endedglo=0
+ s lastupdate=""
+ s errors=0
+ s status="Queue"
+ i '$d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"START")) d  g GETSTATUSDONE
+ . i $d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSLIST","*")) d  q
+ . . k glinfo set rc=$$GetGlobalDirectoryInfo^%SYS.DATABASE("^^"_srcdir,"glinfo")
+ . . s glo="" f  s glo=$o(glinfo(glo)) q:glo=""  s queglo=queglo+1
+ . s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSLIST",glo)) q:glo=""  s queglo=queglo+1
+ s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED",glo)) q:glo=""  s queglo=queglo+1
+ s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo),1,cvtdata) q:glo=""  s startedglo=startedglo+1,date=$p(cvtdata,"~",4),lastupdate=$s(+lastupdate>+date:lastupdate,+lastupdate<+date:date,+$p(lastupdate,",",2)>+$p(date,",",2):lastupdate,1:date) s:$p(cvtdata,"~",9)'="" errors=errors+1 
+ s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSENDED",glo),1,cvtdata) q:glo=""  s endedglo=endedglo+1,date=$p(cvtdata,"~",4),lastupdate=$s(+lastupdate>+date:lastupdate,+lastupdate<+date:date,+$p(lastupdate,",",2)>+$p(date,",",2):lastupdate,1:date) s:$p(cvtdata,"~",9)'="" errors=errors+1 
+ d GETJOBSTATUS(Name,0,0,.JobInfo)
+ i startedglo'=0 s status="Run"
+ i (startedglo'=0),(JobInfo(0)=0) s status="Crash"
+ i $d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"END")) d
+ . i startedglo=0 s status="Done" q
+ . i (startedglo'=0) s status="Error" q
+ i (JobInfo(0)=0),$d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"STOP")) s status="Stop"
+GETSTATUSDONE
+ q srcdir_"~"_dstdir_"~"_dspdir_"~"_status_"~"_AllOrSelected_"~"_queglo_"~"_startedglo_"~"_endedglo_"~"_lastupdate_"~"_errors
+ }
+GETNAMEREPORT(Name,Detail) [] PUBLIC {
+ s $zt="GETNAMEREPORTE"
+ w !
+ w !,"Name",?7," #",?11,"Source DB=>Destination DB/NS",?62,"Globals",?71,"Status"
+ w !,"----",?7," -",?11,"----------------------------",?62,"-------",?71,"------"
+ i Name'="*" d GETNAMEREPORT1 q
+ i Name="*" s Name="" f  s Name=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)) q:Name=""  d GETNAMEREPORT1
+ q
+GETNAMEREPORT1
+ w !,Name
+ s Index="" f  s Index=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)) q:Index=""  d  w !
+ . s Status=$$GETSTATUS(Name,Index)
+ . w ?7,$j(Index,2),?11,$p(Status,"~",3),?62
+ . w $p(Status,"~",5) ; Selected or all
+ . w ?71,$p(Status,"~",4)  ; Status
+ . q:'Detail
+ . i $d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSLIST","*")),'$d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"RENAME")) d  q
+ . . s oldns=$zu(5) 
+ . . d $zu(5,^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"SRCDIR")) 
+ . . d ^%SYS.GLO
+ . . s glo="0" f  s glo=$o(^||CacheTempUtil("GLO",glo)) q:glo=""  w !,?11,glo
+ . . d $zu(5,oldns)
+ . s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSLIST",glo)) q:glo=""  w !,?11,glo
+ q
+GETNAMEREPORTE s $zt=""
+ d:$d(oldns) $zu(5,oldns)
+ w !,"ERROR: "_$ZE
+ }
+ASKNS() [POP,err] PRIVATE
+ {
+ d List^%SYS.NAMESPACE(.nsplist,3)
+ s nsplist="" f  s nsplist=$o(nsplist(nsplist)) q:nsplist=""  s nsplist($i(nsplist(0)))=nsplist k nsplist(nsplist)
+ASK s $ZT="ASKNSE"
+ s POP=0
+ w !,"Destination Namespace for Copy (? for List)? "
+ r dir 
+ i dir="?" d  w ! g ASK
+ . w !! f i=1:1:nsplist(0) d
+ . . i $x+$l(nsplist(i))+4>79 w !
+ . . w i_") "_nsplist(i)
+ . . i ($x>40) w ! 
+ . . e  w ?40
+ i dir="^"||(dir="STOP") s POP=1 q
+ i dir?1.4N i (dir<1)!(dir>nsplist(0)) w !,"Please enter a namespace or number between 1 and "_dirlist(0) g ASK
+ i dir?1.4N w " ",nsplist(dir) s dir=nsplist(dir) 
+ s rc=$s($e(dir,1,2)="^^":$$CHECKDIR(dir,0),1:$$CHECKNS(dir))
+ i rc=0 w !,err g ASK
+ q dir
+ASKNSE S $ZT="ASKNSE1"
+ s POP=1 
+ i $ze["<INTERRUPT>" q ""
+ w !,"Error: "_$ze 
+ q ""
+ASKNSE1 s $zt=""
+ s POP=1
+ w !,"Error: "_$ZE
+ q ""
+ }
+CHECKNS(dir) [err] PRIVATE {
+ s $zt="CHECKNSE"
+ s olddir=$zu(5)
+ i $zu(5,dir)
+ d $zu(5,olddir)
+ q 1
+CHECKNSE s $zt=""
+ i $d(olddir) d $zu(5,olddir)
+ s err=$$NSMSG(dir,$ZE)
+ q 0
+ }
+ASKDIR(Msg,Mode) [POP,err] PRIVATE
+ { 
+ s dir="" f  s dir=$o(^|"%SYS"|SYS("UCI",dir)) q:dir=""  s dirlist($i(dirlist(0)))=dir
+ASK s $ZT="ASKDIRE"
+ s POP=0
+ w !,Msg_" Directory for Copy (? for List)? "
+ r dir i dir="" s POP=1 q ""
+ i dir="?" w !! d  w ! g ASK
+ . f i=1:1:dirlist(0) d
+ . . i $x+$l(dirlist(i))+4>79 w !
+ . . w i_") "_dirlist(i)
+ . . i ($x>40) w ! 
+ . . e  w ?40
+ i dir="^"||(dir="STOP") s POP=1 q ""
+ i dir?1.4N i (dir<1)!(dir>dirlist(0)) w !,"Please enter a directory or number between 1 and "_dirlist(0) g ASK
+ i dir?1.4N w " ",dirlist(dir) s dir=dirlist(dir) 
+ s rc=$$CHECKDIR(.dir,1)
+ i rc=1 q dir
+ i (Mode=0),(rc=0) w !,err g ASK
+ i (Mode=1),((rc=2)!(rc=3)) w !,err g ASK
+ i Mode=0 d  g:dir="" ASK q dir
+ . i rc=2 s File="OPENM.DAT"
+ . e  s File="MUMPS.DAT"
+ . w !,"A "_File_" database has been detected in "_$e(dir,3,$l(dir))
+ . i $$YN("Do you want to rename it to CACHE.DAT, then mount and use it","Y")="N" s dir="" q
+ . i $$DBRENAME($e(dir,3,$l(dir))) s ^|dir|GbLoCk=$e(dir,3,$l(dir))_File
+ . e  s dir=""
+ i (Mode=1),(rc=0),(dir'="") d  g:dir="" ASK q dir
+ . w !,"Database "_$e(dir,3,$l(dir))_" does not exist"
+ . i $$YN("Do you want to create it","N")="N" s dir="" q
+ . s Option=$$DBCREATE($e(dir,3,$l(dir)))
+ . ;i $$$ISOK(Option) w !,"Database "_$e(dir,3,$l(dir))_" created" q
+ . i (+Option) w !,"Database "_$e(dir,3,$l(dir))_" created" q
+ . w !,"Error "_$$DecomposeStatus^%SYS.DATABASE(Option)_" creating database "_$e(dir,3,$l(dir)) s dir=""
+ i rc=0 w !,err g ASK
+ q dir
+ASKDIRE S $ZT="ASKDIRE1"
+ s POP=1 
+ i $ze["<INTERRUPT>" q ""
+ w !,"Error: "_$ze 
+ q ""
+ASKDIRE1 s $zt=""
+ s POP=1
+ w !,"Error: "_$ZE
+ q ""
+ }
+CHECKDIR(dir,msg) [err] PRIVATE {
+ s $zt="CHECKDIRE"
+ i $e(dir,1,2)="^^" s dir=$e(dir,3,*)
+ s dir=##class(%Library.File).NormalizeDirectory(dir)
+ i (dir="")!'##class(%Library.File).DirectoryExists(dir) {
+	s err="Invalid directory specification or directory does not exist" 
+	i dir'="" s dir="^^"_dir
+	q 0
+ }
+ s dir="^^"_dir
+ s mounted=$$NeedMountDB($e(dir,3,*))
+ O 63:dir
+ s type=$g(^|dir|GbLoCk)
+ i msg,((type["OPENM")!(type["MUMPS")) w !,"Database "_$e(dir,3,$l(dir))_" was formerly a "_type_" database"
+ c 63
+ if $g(mounted,0) s mounted=0 d $zu(3,dir)
+ q 1
+CHECKDIRE s $zt="CHECKDIRE1"
+ c 63
+ if $g(mounted,0) s mounted=0 d $zu(3,dir)
+ s err=$$NSMSG(dir,$ZE)
+ i $zu(140,4,$e(dir,3,$l(dir))_"OPENM.DAT")=0 q 2
+ i $zu(140,4,$e(dir,3,$l(dir))_"MUMPS.DAT")=0 q 3
+ q 0
+CHECKDIRE1 s $zt=""
+ c 63
+ q 0
+ }
+NeedMountDB(dir) ;
+ s $ZT="NeedMountDBErr"
+ n zu49
+ s zu49=$zu(49,dir)
+ q:+$p(zu49,",",27)=0 0
+ if (+zu49'=-1)&(+zu49'=$zu(40,0,41)) q 0
+ q +$zu(17,dir)=1
+NeedMountDBErr
+ q 0
+NSMSG(dir,ze)  [] PRIVATE {
+ s x=$s(dir["^^":"Directory",1:"Namespace")
+ i $e(dir,1,2)="^^" s dir=$e(dir,3,$l(dir))
+ I ze["<FUNCTION>" q "Bad "_x_" name "_dir
+ I ze["<DIRECTORY>" q x_" "_dir_" is not available"
+ I ze["<NAMESPACE>" q x_" "_dir_" is not available."
+ I ze["<PROTECT>" q "Insufficient privileges for "_x_" "_dir
+ I ze["<NOTOPEN>" q "No database or database is dismounted in "_x_" "_dir
+ q "Error: "_ze
+ }
+GETNAME(Prompt,Flag,Star) [POP] PRIVATE {
+GETNAMEA ;
+ s $zt="GETNAMEE"
+ s POP=0
+ w !!,Prompt
+ r Name i Name="" s POP=1 q ""
+ i Name="?" d  g GETNAMEA
+ . s detail=0,Name="*"
+ . d GETNAMEREPORT(Name,detail)
+ i (Name="*"),(Star=1) q Name
+ i (Name="*"),(Star=0) w !,"Invalid entry, please re-enter" g GETNAMEA
+ i $l(Name)>6 w !,"Batch name must be 6 characters or less, please re-enter" g GETNAMEA
+ s Name=$ZCVT(Name,"U")
+ i Flag=2 q Name
+ s Exists=$d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name))
+ i (Flag=0)&&(Exists=0) q Name
+ i (Flag=1)&&(Exists) q Name
+ i Flag=0 w !,"Batch name already exists"
+ e  w !,"Batch name does not exist"
+ g GETNAMEA	 
+GETNAMEE s $zt=""
+ s POP=1 
+ i $ze["<INTERRUPT>" q ""
+ w !,"Error: "_$ze
+ q ""
+ }
+GETGLOBALS(srcdir,&GLOBALS) [POP] PRIVATE {
+    Set $zt="GETGLOBALSE"
+    Set POP=0
+    Kill GLOBALS
+    // Pick up default directory and system,
+    // also make sure that you can access this dataset or namespace
+    Set oldns=$zu(5)
+    Do $zu(5,srcdir)
+    Set dirnam=$$defdir^%SYS.GLO($ZU(5))
+    Set sysnam=$$defsys^%SYS.GLO($ZU(5))
+    Do $zu(5,oldns)
+    Kill oldns
+    If '$$OPT^%GSET(,,,,,dirnam,sysnam,,,0,1,.glolist,.gloutil) {
+	Write !,"No globals selected"
+	Set POP=1
+	Quit 0
+    }
+    Set glo=""
+    For {
+	Set glo=$o(glolist(glo))
+	Quit:glo=""
+	Set GLOBALS(glo)=""
+	Set Count=$g(Count)+1
+	Set Col($p($g(gloutil(glo),"^^^^5"),"^",5))=""
+    }
+    If Count=gloutil(0,"PHYSICAL") {
+	Kill GLOBALS
+	Set GLOBALS("*")=""
+    }
+    Set GLOBALS(0)=1,Found=0
+    Write !
+    For Col=0,1,2,3,4,128,129 {
+	If $d(Col(Col)) {
+	    Write !,"Globals with a non standard collation of "_$$NAME^COLLATE(Col)_" detected"
+	    Set Found=1
+	}
+    }
+    Quit:'Found 1
+    If $$YN("Would you like to change the collation to a standard Cache Collation","Y")="N" {
+	Set GLOBALS(0)=0
+    }
+    Quit 1
+GETGLOBALSE Set $zt=""
+    Do:$d(oldns) $zu(5,oldns)
+    Set POP=1 
+    Quit:$ze["<INTERRUPT>" ""
+    Write !,"Error: "_$ze
+    Quit 0
+}
+GETJOURNAL() [POP] PRIVATE {
+ s $zt="GETJOURNALE"
+ s POP=0
+ i $$YN("Turn journaling off for this copy","Y")="Y" q 0
+ q 1
+GETJOURNALE s $zt=""
+ s POP=1
+ i $ze["<INTERRUPT>" q 0
+ w !,"Error: "_$ze
+ q 0
+}
+COLLATION(GloInfo,ConvertCollation) [] PRIVATE {
+ s Col=$p(GloInfo,"^",5)
+ i (Col>4),(Col<128) q Col
+ i (Col=128)!(Col=129) q 133
+ i (Col>129) q Col
+ q:ConvertCollation=0 Col
+ q 5
+ }
+GETINDEX(Name) [] PRIVATE
+ {
+ i '$d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)) q 1
+ q $o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,""),-1)+1
+ }
+CENTER(str,rm) [] PRIVATE {
+ Q $J(str,$L(str)+rm\2)
+}
+DISPLAYDATE(Date) [] PRIVATE {
+ i Date="" q Date
+ s cvtdate=$zdatetime(Date)
+ q $p(cvtdate,"/",1,2)_" "_$p($p(cvtdate," ",2),":",1,2)
+ }
+RENAMEDB(Name,Index) [] PRIVATE {
+ s $zt="RENAMEDBE"
+ q:'$d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"RENAME")) 1
+ s record=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"RENAME")
+ s DB=$p(record,"~",1),srcdir=$p(record,"~",2),File=$p(record,"~",3)
+ i $p(record,"~",4)="2K" s status=$$DISMOUNT(DB) i status<0 w !,"Error dismounting database "_File_", "_$$Error^%apiOBJ(-status) q 0
+ i '$$DBRENAMEMOVE(DB,srcdir) w !,"Error renaming database "_File_" to "_srcdir_"CACHE.DAT" q 0
+ w !,"Database "_File_" renamed to "_srcdir_"CACHE.DAT"
+ d LABEL(srcdir)
+ s status=$$MOUNT(srcdir) i status<0 w !,"Unable to mount "_srcdir_"CACHE.DAT, "_$$Error^%apiOBJ(-status) q 0
+ i $p(record,"~",4)'="2K" s ^|"^^"_srcdir|GbLoCk=File
+ i '$$RENAMEMOVE(DB_"CACHE.NEW",DB_"CACHE.DAT") w !,"Unable to rename "_DB_"CACHE.NEW to "_DB_"CACHE.DAT" q 0
+ d LABEL(DB)
+ s status=$$MOUNT(DB) i status<0 w !,"Unable to mount "_DB_"CACHE.DAT, "_$$Error^%apiOBJ(-status) q 0
+ k ^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"RENAME")
+ q 1
+RENAMEDBE s $zt=""
+ w !,"ERROR: "_$ZE_" while performing rename of "_DB
+ q 0
+ }
+DBRENAME(dir) [] PRIVATE {
+ s $zt="DBRenErr"
+ s dir=$zu(12,dir) q:dir=""  ; Canonicize directory name if we can
+ d DBalter(dir,".DAT")
+ s dblist(dir)="",next=$zu(36,dir,0,1)
+ f  q:next=""!(next<0)  d
+ . s next=$zu(12,next) q:next=""
+ . q:$d(dblist(next))  d DBalter(next,".EXT")
+ . s dblist(next)="",next=$zu(36,next,1,1)
+ i $zu(49,dir)<0 w !,"Database renamed, but unable to mount it" q 0
+ q 1
+DBRenErr s $zt=""
+ w !,"ERROR: "_$ze
+ q 0
+}
+DBalter(dir,ext) [] PRIVATE {
+ i ($zversion(1)=3) q:dir'?.e1"/"  ; N/A to raw disk partitions
+ s new=dir_"CACHE"_ext q:$$DBtest(new)
+ s done=0 f dbname="OPENM","MUMPS" d  q:done
+ . s old=dir_dbname_ext i $$DBtest(old) d  s done=1 q
+ . . i ($zversion(1)=2) s x=$zf(-1,"RENAME "_$zu(147,old)_" "_"CACHE"_ext) d:x
+ . . . w !,"ERROR: rename failed with error code "_x
+ . . i ($zversion(1)=1) s x=$zf(-1,"RENAME/NOLOG "_old_" "_new) d:x>1
+ . . . w !,"ERROR: rename failed with error code "_x
+ . . i ($zversion(1)=3) s x=$zf(-1,"mv "_$zu(147,old)_" "_$zu(147,new)) d:x
+ . . . w !,"ERROR: rename failed with error code "_x
+ q  
+}
+DBRENAMEMOVE(dir,newdir) [] PRIVATE {
+ s $zt="DBRenErr"
+ s dir=$zu(12,dir) q:dir=""  ; Canonicize directory name if we can
+ d DBalterMove(dir,newdir,".DAT")
+ s dblist(dir)="",next=$zu(36,newdir,0,1)
+ f  q:next=""!(next<0)  d
+ . s next=$zu(12,next) q:next=""
+ . q:$d(dblist(next))  d DBalter(next,".EXT")
+ . s dblist(next)="",next=$zu(36,next,1,1)
+ q 1
+DBRenErr s $zt=""
+ w !,"ERROR: "_$ze
+ q 0
+}
+DBalterMove(dir,newdir,ext) [] PRIVATE {
+ i ($zversion(1)=3) q:dir'?.e1"/"  ; N/A to raw disk partitions
+ s new=newdir_"CACHE"_ext q:$$DBtest(new)
+ s done=0 f dbname="OPENM","MUMPS","CACHE" d  q:done
+ . s old=dir_dbname_ext i $$DBtest(old) d  s done=1 q
+ . . i ($zversion(1)=2) d
+ . . . f i=1:1:10 s x=$zf(-1,"MOVE "_$zu(147,old)_" "_$zu(147,new)) q:x=0  h (i*.5)
+ . . . i x w !,"ERROR: rename failed with error code "_x
+ . . i ($zversion(1)=1) d
+ . . . f i=1:1:10 s x=$zf(-1,"RENAME/NOLOG "_old_" "_new) q:x<2  h (i*.5)
+ . . . i x>1 w !,"ERROR: rename failed with error code "_x
+ . . i ($zversion(1)=3) d
+ . . . f i=1:1:10 s x=$zf(-1,"mv "_$zu(147,old)_" "_$zu(147,new)) q:x=0  h (i*.5)
+ . . . i x w !,"ERROR: rename failed with error code "_x
+ h 1
+ q  
+}
+RENAMEMOVE(old,new) [] PRIVATE {
+ s status=1
+ i ($zversion(1)=2) d
+ . f i=1:1:10 s x=$zf(-1,"MOVE "_$zu(147,old)_" "_$zu(147,new)) q:x=0  h (i*.5)
+ . i x w !,"ERROR: rename failed with error code "_x s status=0
+ i ($zversion(1)=1) d
+ . f i=1:1:10 s x=$zf(-1,"RENAME/NOLOG "_old_" "_new) q:x<2  h (i*.5)
+ . i x>1 w !,"ERROR: rename failed with error code "_x s status=0
+ i ($zversion(1)=3) d
+ . f i=1:1:10 s x=$zf(-1,"mv "_$zu(147,old)_" "_$zu(147,new)) q:x=0  h (i*.5)
+ . i x w !,"ERROR: rename failed with error code "_x s status=0
+ h 1
+ q status
+}
+DBtest(dbf) [] PRIVATE {
+ s $zt="DBerr" o dbf:"RU":0 c dbf q $t
+DBerr q 1 ; File exists but we have trouble opening it
+}
+DBCREATE(dir) [] PRIVATE {
+ i $zu(140,9,dir)
+ i +$zu(49,dir)=-1 q 1
+ s x=$$CreateDatabase^%SYS.DATABASE(dir)
+ q x
+}
+ ; 
+CHANGEMAPS(dir) [] PRIVATE {
+ s $zt="CHANGEMAPSE"
+ s stat=$zu(49,dir),oldmaxmaps=$p(stat,",",6) d:oldmaxmaps
+ . n %data s %data="$zu(1,"""_dir_""","_$p(stat,",",2,5)_",0,"_$p(stat,",",7,12)_")"
+ . i @%data
+ q oldmaxmaps
+CHANGEMAPSE s $zt=""
+ q oldmaxmaps
+}
+RESTOREMAPS(dir,oldmaxmaps) [] PRIVATE {
+ s $zt="RESTOREMAPSE"
+ d:oldmaxmaps
+ . i $$QUIESCE^SWSET(4,"database expansion",30,0)
+ . s stat=$zu(49,dir),newmaxmaps=$p(stat,",",4)
+ . s:newmaxmaps<oldmaxmaps newmaxmaps=oldmaxmaps ;Current maps > old max?
+ . n %data s %data="$zu(1,"""_dir_""","_$p(stat,",",2,5)_","_newmaxmaps_","_$p(stat,",",7,12)_")"
+ . i @%data
+ q
+RESTOREMAPSE s $zt=""
+ q
+}
+OPTION(prompt,default,max) [] PRIVATE {
+ s $zt="OPTIONE"
+OPTION1 w !,prompt
+ r Option i Option="" q default
+ i '(Option?.N)!(Option<1)!(Option>max) w !!,"Please enter a number between 1 and "_max,! g OPTION1
+ q +Option
+OPTIONE s $zt=""
+ i $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q 0
+}
+GSIZE(bigdb,blk) [] PRIVATE {
+ s $zt="GSIZERR"
+ o 63
+ s Count=0
+ f  q:'blk  v blk s type=$case(bigdb,2048:$v(2043,0,1),:$v($Zutil(40,32,1),0,1)) q:(type=6!(type=70))  s blk=$v(2,-5)
+ i blk d
+ . f  q:'blk  v blk  d  s Count=Count+i-1 
+ . . f i=1:1 s x=$v(i*2-1,-6) q:x=""
+ . . s blk=$case(bigdb,2048:$v(2040,0,"3O"),:$v($Zutil(40,32,4),0,4))
+ q Count
+GSIZERR
+ s $zt=""
+ i $ze["UNIMPLEMENTED" s $ze="" q 0
+ q 0
+}
+LABEL(Dir) [] PRIVATE {
+ s $zt="LABELE"
+ s Label=$zu(36,Dir,0,0)
+ ;q:+Label<0  ; If $ZU(36) failed, stop here
+ I +Label<0 q
+ q:Label=Dir
+ s Label=$zu(36,Dir,0,0,Dir)
+ s NextDir=$zu(36,Dir,0,1)
+ f  q:(NextDir="")!(NextDir<0)  d
+ . d $zu(36,NextDir,1,0,Dir)
+ . s NextDir=$zu(36,NextDir,1,1) 
+ q
+LABELE s $ZT=""
+ q
+}
+DISMOUNT(db) [] PRIVATE {
+ s $zt="DISMOUNTE"
+ f i=1:1:20 s status=$zu(3,db) q:status>0  h 1
+ h 1
+ q status 
+DISMOUNTE s $zt=""
+ q -29
+}
+MOUNT(db) [] PRIVATE {
+ f i=1:1:20 s status=$zu(17,db) q:status>0  h 1
+ q status 
+MOUNTE s $zt=""
+ q -29
+}
+IsLongStringEnabled() {
+  s $zt="lsError"
+  i $zu(69,69) q 1
+  s $p(str,".",$ZU(40,0,20)+1)="."
+  q 1
+lsError s $zt=""
+	if $ze["<MAXSTRING" quit 0
+	quit 1  ;any other errror indicates its enabled 
+}
+ShowMessage(sc,device) [] PRIVATE {
+    Do DecomposeStatus^%SYS.DATABASE(sc,.msglist,0,"")
+    Do wrtmsg($C(13,10),device)
+    For i=1:1:msglist {	Do wrtmsg(msglist(i)_$C(13,10),device) }
+}
+wrtmsg(msg,device) [] PRIVATE {
+    Quit:'$L(msg)  ; Avoid argumentless writes...
+    If device=-1 { Do $zu(9,"",msg,0,0) Quit }
+    If $g(%UI,"CHUI")="CHUI" { Use device Write msg Quit }
+    Do:$$IjcMsg^%Wprima("DI"_msg)="CANCEL"  ; Return value could be cancel message 
+    . i $$IjcMsg^%Wprima("DI"_$C(13,10)_"Abort received!"_$C(13,10))
+    . zt "Abort"
+}
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R

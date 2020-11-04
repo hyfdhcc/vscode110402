@@ -1,0 +1,387 @@
+ROUTINE SHDWSBLK [Type=INT]
+SHDWSBLK ;Server side sending blocks ;$Change$
+	; Revision: $Id$
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+getjrnowner(fd,ourown,status) ;
+ n info,curown
+ Set info=$$query^JRNINFO(,"JRNINFO,"_fd)
+ If 'info {
+ 	Set curown=$p(info,",",8,10)
+ 	If curown'="" {
+ 		If $p(curown,",",3)=$p($p($zu(172,4),$c(0),1),$c(1),3) {
+ 			Set ourown=1 ;the journal file is one of our own
+                } elseif $p(curown,",",2)="" {
+                        s shdwzerr=$$Error^%apiOBJ(179,curown) ztrap $$traperr^SHDWUTIL(shdwzerr)
+ 		} else {
+ 			Set status=$g(status)_","_curown
+ 		}
+ 	}
+ }
+ If +info<0 {
+ 	s shdwzerr=$$Error^%apiOBJ(1033,fd) ztrap $$traperr^SHDWUTIL(shdwzerr) 
+ }
+ q
+SNDB(port) ;
+	Do $ZU(67,10,19,$j)
+	k blankblk s $p(blankblk,$c(0),16384)=$c(0)
+	Set tcp="|TCP|"_port
+	Set delimiter=$$del2^%Wprim
+	Set d=delimiter
+	Set shdwzerr=""
+	; "exchange name and status of the starting journal file"
+	u tcp r fd#MsgLenVar:10 e  s shdwzerr=$$Error^%apiOBJ(1071) ztrap "READ"
+	Set fd=$P(fd,delimiter,1)
+	Set status=0
+	Set fd=$zu(12,fd)
+	Set mirguid=$zu(78,22,fd,15)
+	Set status=(mirguid>0) ;1 if file exists and is a valid journal file
+	If status,$p(mirguid,",",2)'="",$System.Mirror.IsAsyncMember() { ;a mirror journal file
+	  Set mirname=$p(fd,"-",2) ;assuming MIRROR-<mirname>-YYYYMMDD.NNN
+	}
+	Set ourown=0 ;meaningful only for cluster shadows
+	If clushdw,status {
+		d getjrnowner(fd,.ourown,.status)
+	}
+	Use tcp
+	Write (status)_$$del2^%Wprim_$J("",MsgLenVar-$L((status)_$$del2^%Wprim)),!
+	If USEGZIP Write *-99,!
+	If 'status {
+		s shdwzerr=$$Error^%apiOBJ(1033,fd) ztrap $$traperr^SHDWUTIL(shdwzerr)
+	}
+	Set ^SYS("shdwsrv",port,"jrn")=fd
+	Set fchan=-1 ;not open yet
+	Set shdwstat=$lb(0,0,0,"",0,0,0,0)
+	Set MustSendEndBlocksBeforeSwitch=1
+	For {
+		i +$g(^SYS("shdwsrv",0,"stop")) s shdwzerr="0;INFO: database server shutdown" ztrap "STOP"
+		if fchan'<0 d $zu(78,7,fchan) s fchan=-1
+		; "get starting location"
+		Set x=""
+		Set %L=MsgLenVar
+		Use tcp 
+		For {
+			Read %X#%L:10 
+			Set x=x_%X
+			Set %L=%L-$l(%X)
+			Quit:'%L
+			Do:'$l(%X) ReadNone^SHDWUTIL(tcp,$name(x),MsgLenVar)
+			If +$g(^SYS("shdwsrv",0,"stop")) {
+				Set shdwzerr="0;INFO: database server shutdown"
+				ztrap "STOP"
+			}
+		}
+	//	$$$rftc(x)
+		i $g(mirname)'="" {
+                  s rc=$SYSTEM.Mirror.GetLastJournalFilename(mirname) ;mirjrncnt,filename
+                  if +rc=0 { ;mirror journal log file doesn't exist
+                    s shdwzerr="0;FATAL: Mirror journal log "_mirname_" doesn't exist"
+		    ztrap "NOML"
+		  }
+                  if +rc=-1 { ;error reading the log file. This shouldn't happen. 
+		    s shdwzerr="0;FATAL: Failed to read mirror journal log "_mirname
+		    ztrap "RDML"
+                  }
+                  s lastjrnfilepath=$p(rc,",",2)
+		  s caughtup=($zu(12,lastjrnfilepath)=fd)
+		} elseif clushdw&&'$g(ourown) {
+		  s caughtup=($$NEXTJRN0^JRNUTIL(fd,,clushdw)="") i 1
+		} else {
+		  s caughtup=($zu(12,$zu(78,3))=fd)
+		}
+		; "open journal file for read"
+		s fchan=$zu(78,5,fd,0) i fchan<0 s shdwzerr=$$Error^%apiOBJ(1100,fd) ztrap "FILE"
+		Set begaddr=+$P(x,delimiter,1)
+		Set begblk=+$P(x,delimiter,2)
+		Set:$L(x,d)>2 dirver=+$P(x,delimiter,3) 
+		If begaddr=-1 {
+			; "read header block and send it"
+			u tcp i $$SetIO^%SYS.NLS("RAW") 
+			d $zu(78,6,fchan) s x=$zu(78,65,0*16384,16384)
+			Use tcp
+			Write x,!
+			If USEGZIP Write *-99,!
+			u tcp i $$SetIO^%SYS.NLS("UnicodeLittle") 
+			Quit:fd=""
+			Continue
+		}
+		Set endaddr=$$GEND(fd,.eof) 
+		If $li(shdwstat,2)=$li(shdwstat,3) {
+			Set copied=0
+			Set timespent=0
+		} else {
+			Set copied=begaddr-$li(shdwstat,2)
+			Set timespent=$zh-$li(shdwstat,1)
+			If copied<0 ||(timespent<0) {
+				Do BACK^%ETN
+			}
+		}
+		Set shdwstat=$lb($zh,begaddr,endaddr,fd,$li(shdwstat,5)+copied,$li(shdwstat,6)+timespent,copied,timespent)
+		If begblk,begaddr'<endaddr  { ; D  Q  ;caught up or switch file
+			If caughtup {
+				If $g(SrcSendJrnStat) {
+					Use tcp
+					Write (endaddr_delimiter_delimiter_delimiter_$zu(78,22))_$$del2^%Wprim_$J("",MsgLenVar-$L((endaddr_delimiter_delimiter_delimiter_$zu(78,22))_$$del2^%Wprim)),!
+					If USEGZIP Write *-99,!
+					Quit:fd=""
+					Continue
+				}
+				If '$p($zu(78,22),"^",6) {
+					d ERRLOG^SHDWUTIL($$Error^%apiOBJ(1046))
+				}
+				Use tcp
+				Write (endaddr)_$$del2^%Wprim_$J("",MsgLenVar-$L((endaddr)_$$del2^%Wprim)),!
+				If USEGZIP Write *-99,!
+				Quit:fd=""
+				Continue
+			}
+			; "not caught up yet -- more journal files to go"
+			If MustSendEndBlocksBeforeSwitch {
+				Set endblk=(((eof-1)\16384)+1)
+				Set dirinfo=+$G(dirver)_"^-1"  ;a fake dirblk
+				Use tcp
+				; "FXLNMSG:"
+				Write (endaddr_d_endblk_d_dirinfo)_$$del2^%Wprim_$J("",MsgLenVar-$L((endaddr_d_endblk_d_dirinfo)_$$del2^%Wprim)),!
+				Set begblk=$s(endaddr:((endaddr-1)\16384),1:0)
+				u tcp i $$SetIO^%SYS.NLS("RAW") 
+				; "send blocks (1-based)"
+				For i=begblk:1:(endblk-1) {
+					If i#10=1 {
+						i +$g(^SYS("shdwsrv",0,"stop")) s shdwzerr="0;INFO: database server shutdown" ztrap "STOP"
+					}
+					d $zu(78,6,fchan) s x=$zu(78,65,i*16384,16384)
+					Use tcp
+					Write x
+				}
+				Use tcp
+		        	i $g(USEGZIP) Write *-99,!
+				Write !
+				u tcp i $$SetIO^%SYS.NLS("UnicodeLittle") 
+				Set MustSendEndBlocksBeforeSwitch=0
+				Continue  ;handle shadow reply before switching
+			}
+			Set MustSendEndBlocksBeforeSwitch=1 ;reset for next file
+			d $zu(78,6,fchan) s x=$zu(78,65,0*16384,16384)
+			if fchan'<0 d $zu(78,7,fchan) s fchan=-1
+			Set oldfd=fd
+			if $g(mirname)'="" { ;use mirror journal log 
+			  Set next=$$NXTMIRJRN^JRNUTIL(oldfd,mirname),fd=$p(next,",") 
+			} else {
+			  Set next=$$NEXTJRN0^JRNUTIL(oldfd,,clushdw),fd=$p(next,",") 
+			  If clushdw {
+				s curowner=""
+				d getjrnowner(fd,.ourown,.curowner)
+				i curowner="" Set next=fd ;omit owner info
+			  }
+			}
+			If fd="" {
+				s shdwzerr=$$Error^%apiOBJ(1109,oldfd) ztrap $$traperr^SHDWUTIL(shdwzerr)
+			}
+			; "open next journal file and send its name"
+			s fchan=$zu(78,5,fd,0) i fchan<0 s shdwzerr=$$Error^%apiOBJ(1100,fd) ztrap "FILE"
+			Use tcp
+			Write (next)_$$del2^%Wprim_$J("",MsgLenVar-$L((next)_$$del2^%Wprim)),!
+			; "send the header block of previous file"
+			u tcp i $$SetIO^%SYS.NLS("RAW") 
+			Use tcp 
+			Write x,!
+		        i $g(USEGZIP) Write *-99,!
+			Set fd=$zu(12,fd)
+			u tcp i $$SetIO^%SYS.NLS("UnicodeLittle") 
+			Set ^SYS("shdwsrv",port,"jrn")=fd
+			Quit:fd=""
+			Continue
+		}
+		; "figure out what blocks are available to send"
+		Set begblk=$s(begaddr:((begaddr-1)\16384),1:0)
+		If fd=$zu(12,$zu(78,3)) {
+			Set ioinc=($ZU(78,40)*(fd=$zu(12,$zu(78,3))))
+			Set:ioinc eof=ioinc
+		}
+		Set endblk=(((eof-1)\16384)+1)
+		Set MustSendEndBlocksBeforeSwitch=caughtup
+		If begblk'<endblk {
+			Set dirinfo=+$G(dirver)_"^-1"  ;a fake dirblk
+		} Else {
+			; "get directory info of the journal file"
+			d $zu(78,6,fchan) s lastblkx=$zu(78,65,endblk-1*16384,16384)
+			If +$zu(78,22),fd=$zu(12,$zu(78,3)) { ; d  i 1
+				Set dirinfo=$zu(78,28) ;current journal
+				Set n=eof#16384
+				Set:n lastblkx=$e(lastblkx,1,n)_$e(blankblk,1,16384-n)
+			} else {
+				If fchan < 0 {
+					s ch=$zu(78,5,fd,0) i ch<0 s shdwzerr=$$Error^%apiOBJ(1100,fd) ztrap "FILE"
+				} else {
+					Set ch=fchan
+				}
+				Do $zu(78,6,ch)
+				Set dirinfo=$zu(78,28)
+				Do:fchan<0 $zu(78,7,ch)
+			}
+			Set x=""
+			If $P(dirinfo,"^",1)'=dirver {
+				Set dirblk=$P(dirinfo,"^",2)*(65536/16384)
+				If begblk'>dirblk,dirblk'>(endblk-1) {
+				} else {
+					; "read dir block"
+					Set x=$p(dirinfo,"^",3)
+					Set $p(dirinfo,"^",3)=(x-1)\16384
+					Set $p(dirinfo,"^",2)=dirblk ;in BLKSIZE
+				}
+			}
+			Set:x="" $P(dirinfo,"^",2)=-1 ;a fake dirblk means: no dir blk update
+		}
+		Use tcp
+		; "FXLNMSG:"
+		Write (endaddr_d_endblk_d_dirinfo)_$$del2^%Wprim_$J("",MsgLenVar-$L((endaddr_d_endblk_d_dirinfo)_$$del2^%Wprim)),!
+		u tcp i $$SetIO^%SYS.NLS("RAW") 
+		If $P(dirinfo,"^",2)'<0 {
+			Set dirblk=$P(dirinfo,"^",2)
+			For i=dirblk:1:(dirblk+$p(dirinfo,"^",3)) {
+				d $zu(78,6,fchan) s x=$zu(78,65,i*16384,16384)
+				Use tcp
+				Write x ;send dir block(s)
+			}
+		}
+		; "send blocks (1-based)"
+		For i=begblk:1:(endblk-2) {
+			If i#10=1 {
+				i +$g(^SYS("shdwsrv",0,"stop")) s shdwzerr="0;INFO: database server shutdown" ztrap "STOP"
+			}
+			d $zu(78,6,fchan) s x=$zu(78,65,i*16384,16384)
+			Use tcp
+			Write x
+		}
+		; "blocks Sent"
+		If begblk<endblk {
+			Use tcp
+			Write lastblkx
+			Kill lastblkx      
+		}
+		Use tcp
+		i $g(USEGZIP) Write *-99
+		Write !
+		u tcp i $$SetIO^%SYS.NLS("UnicodeLittle") 
+		Quit:fd=""
+	}
+	ZTRAP "JEND" ;quit on fd="" -- should never happen
+	Quit
+etRDBLK ;
+	Set $ZT=""
+	Set x=""
+	Quit
+TrapEOF ;
+	Set $zt=""
+	If $ze'["ENDOFFILE" {
+		Ztrap $ze  
+	}
+	if fchan'<0 d $zu(78,7,fchan) s fchan=-1
+	s fchan=$zu(78,5,fd,0) i fchan<0 s shdwzerr=$$Error^%apiOBJ(1100,fd) ztrap "FILE"
+	Set reopen=1
+	Quit 
+GEND(f,eof) ;
+	New dev,next,end
+	s dev=$zu(78,5,f,0) i dev<0 s shdwzerr=$$Error^%apiOBJ(1100,f) ztrap "FILE"
+	Set $zt="etGEND"
+	Do $zu(78,6,dev)
+	n cnt s cnt=0
+getcurend ;
+	i f=$zu(12,$zu(78,3)) {
+		s eof=$zu(78,40)
+		s end=$zu(78,18,eof)
+		i f=$zu(12,$zu(78,3)) {
+			i end'<0 {
+				d $zu(78,7,dev)
+				q end   ;currend end of the current file
+			}
+			i $i(cnt)>9 { ;too many retries
+				Set shdwzerr=$$Error^%apiOBJ(1093,eof,f)
+				ztrap "FILE"
+			}
+			g getcurend
+		}
+	}
+	Set eof=$zu(78,18,0)
+	Quit:'eof 0
+	Set end=$zu(78,18,eof)
+	If end'<0 {
+		Do $zu(78,7,dev)
+		Quit end
+	}
+	Set shdwzerr=$$Error^%apiOBJ(1093,eof,f)
+	ztrap "FILE"
+etGEND
+	Set $zt=""
+	Do $zu(78,7,dev)
+ 	ztrap $ze
+STAT(pid,latency,shdwstat,shdwrate) [] public {
+	Set $zt="Error"
+	Set shdwstat=$zu(88,2,pid,"shdwstat")
+	Quit:$g(shdwstat)="" 0 ;no info available
+	Set begaddr=$listget(shdwstat,2)
+	Set endaddr=$listget(shdwstat,3)
+	Set jrnf=$zu(12,$listget(shdwstat,4))
+	Set totalcopied=$listget(shdwstat,5)
+	Set totaltime=$listget(shdwstat,6)
+	Set copied=$listget(shdwstat,7)
+	Set timespent=$listget(shdwstat,8)
+	Set gapsiz=$$GetGapFileSize(jrnf)+(endaddr-begaddr)
+	Set:'gapsiz latency=0 ;no gap - already caught up
+	Set:totaltime shdwrateavg=totalcopied/totaltime,shdwrate=shdwrateavg
+	Set:timespent shdwraterec=copied/timespent,shdwrate=shdwraterec
+	Set:$g(shdwrate) latency=gapsiz/shdwrate
+	Quit 1
+Error 
+	Set $zt=""
+	If $ze'["NOJOB" {
+		Do $zu(9,"",$ze,(2>0),2)
+		Quit "-1,"_$ze
+	}
+	If $zu(67,0,pid)<2 {
+		Quit "-1,"_$ze ;job no longer exists
+	}
+	Quit 0  ;job busy
+}
+GetGapFileSize(jrnf) 
+	Set jrnf=$zu(12,jrnf)
+	Set curfile=$zu(78,3) 
+	Quit:curfile=jrnf 0
+	Set sw13=$$%swstat^SWSET(13)
+	Set gapsiz=0
+	Set file=curfile 
+	for {
+		If 'sw13 {
+			Set rc=$$PREVJRN^JRNUTIL2(file,.prev)
+		} else {
+			Set rc=$zu(78,22,file,1)
+			Set prev=$p(rc,",",2)
+		}
+		Quit:+rc'=1 ;'file' is not a journal file
+		Set filesize=$zu(140,1,file) 
+		If filesize'<0 {
+			Set gapsiz=gapsiz+filesize ;filesize<0 should never happen
+		}
+		Quit:prev=""
+		Quit:prev=jrnf
+		Set file=prev
+	}
+	If gapsiz'>0 {
+		Set gapsiz=(2**32)
+	}
+	Quit gapsiz

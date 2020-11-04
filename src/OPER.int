@@ -1,0 +1,42 @@
+ROUTINE OPER [Type=INT]
+OPER ; OPERATOR'S UTILITIES MENU ; DEC/92 ; RLL ; LFT663 12/30/98
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;
+ n opt
+getopt 
+ w !!,"Operator's Utilities"
+ w !!,"1.  Dismount CACHE.DAT Files (DISMOUNT)"
+ w !,"2.  Mount CACHE.DATA Files (^MOUNT)"
+ w !,"3.  Lock Table Management (^LOCKTAB)"
+ w !,"4.  Free Count (ALL^%FREECNT)"
+ w !,"5.  Journal Utilities (^JOURNAL)"
+ w !,"6.  Backup Utilities (^BACKUP)"
+ w !,"7.  Examine Job (^JOBEXAM)"
+ w !,"8.  Terminate Job (^RESJOB)"
+ w !,"9.  Switch Set/Clear (^SWSET)"
+ w !,"10. Free Up Terminal (^TTYFREE)"
+ w !,"11. Broadcast a Message (^BROADCAS)"
+ w !,"12. Display System Error Log (^SYSLOG)"
+ w !,"13. Exit This Utility"
+ r !!,"Option? ",opt
+ i ((+opt=opt)&(opt>0)&(opt<13)) s act=$s((opt=1):"^DISMOUNT",(opt=2):"^MOUNT",(opt=3):"^LOCKTAB",(opt=4):"ALL^%FREECNT",(opt=5):"^JOURNAL",(opt=6):"^BACKUP",(opt=7):"^JOBEXAM",(opt=8):"^RESJOB",(opt=9):"^SWSET",(opt=10):"^TTYFREE",(opt=11):"^BROADCAS",(opt=12):"^SYSLOG") w ! d @act g getopt
+ i opt=13 q  
+ s opt=$zcvt(opt,"U")
+ i ((opt="Q")!(opt="QUIT")) q  
+ e  g getopt
+ q

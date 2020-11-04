@@ -1,0 +1,349 @@
+ROUTINE Wr [Type=INT]
+Wr ;spj,Routine utilities, ; LFT1327 11/18/04
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+maskincl(mask,item,ext) New e,i,include,m,m1,m2
+ Set include=0,ext=$ZCVT($g(ext,""),"U")
+ For i=1:1 Set m=$p(mask,";",i),e="" Quit:m=""  Do:m'["'"  Quit:include
+ . Set:m["." m=$$ParseRoutineName^%R(m,.e),e=$s(e="*":"",e="SRC":".INC.MAC.INT.BAS",e="":"",1:"."_e)
+ . If m["*" Do  Quit
+ . . Set m=$p(m,"*")
+ . . If m=$e(item,1,$l(m)),(e=""!(e[ext)) Set include=1 Quit
+ . If m[":" Do  Quit
+ . . Set m1=$p(m,":"),m2=$p(m,":",2)
+ . . If m1=$e(item,1,$l(m1))!(item]m1) Do
+ . . . If m2=$e(item,1,$l(m2))!(m2]item) Do
+ . . . . Set:e=""!(e[ext) include=1
+ . If m=item,(e=""!(e[ext)) Set include=1 Quit
+ If include,mask["'" For i=1:1 Set m=$p(mask,";",i),e="" Quit:m=""  Do:m["'"  Quit:'include
+ . Set m=$e(m,2,*)
+ . Set:m["." m=$$ParseRoutineName^%R(m,.e),e=$s(e="*":"",e="SRC":".INC.MAC.INT.BAS",e="":"",1:"."_e)
+ . If m["*" Do  Quit
+ . . Set m=$p(m,"*")
+ . . If m=$e(item,1,$l(m)),e=""!(e[ext) Set include=0
+ . If m[":" Do  Quit
+ . . Set m1=$p(m,":"),m2=$p(m,":",2)
+ . . If m1=$e(item,1,$l(m1))!(item]m1) Do
+ . . . If m2=$e(item,1,$l(m2))!(m2]item) Do
+ . . . . Set:e=""!(e[ext) include=0 ; SJ bug fix
+ . If m=item,(e=""!(e[ext)) Set include=0 Quit
+ Quit include
+ Quit
+fmtErr(e) ;
+ New i,errmsg,e1
+ For i=1:1:$LL(e) Do
+ . Set e1=$LI(e,i)
+ . Set errmsg=$g(errmsg)_$s(i>1:$c(13,10),1:"")_"line: +"_$LI(e1,1)_" offset: "_$LI(e1,2)_" error: "_$LI(e1,3)
+ Quit $g(errmsg)
+GenErr(msg) Quit 0_$c(22,35,1)_msg_"."_$s($ZE'="":$c(13,10,10)_"$ze="_$ZE,1:"")
+GUIset(flag,str) Kill:flag ^CacheTempJ($j)
+ For i=1:1:$l(str,$c(22,35,1)) Set x=$p(str,$c(22,35,1),i) Set:x'="" ^CacheTempJ($j)=$g(^CacheTempJ($j))+1,^CacheTempJ($j,x)=""
+ Quit $g(^CacheTempJ($j))
+rcomp(ns1,ns2,rtn1,rtn2) Quit $$rcomp^Wr1(ns1,ns2,rtn1,rtn2)
+rcopy(routine,nspace1,nspace2,over,compile,syntax,backup,action,copied) 
+ Quit $$rcopy^Wr1(routine,nspace1,nspace2,over,compile,syntax,backup,action,.copied) 
+callback(xa,xb) Set:$g(ff)[1!($g(ff)[2) counter=$g(counter)+1 Set nbytes=1024
+ Set string=$g(string),line=""
+ Set:ff=0 $p(line,$c(19,94,1),1)=xa,$p(line,$c(19,94,1),4)=xb
+ Set:ff[1 $p(line,$c(19,94,1),1)="+"_nline(1),$p(line,$c(19,94,1),2)=xa
+ Set:ff[2 $p(line,$c(19,94,1),3)="+"_nline(2),$p(line,$c(19,94,1),4)=xb
+ If $g(%UI)="GUI" Do
+ . If xa=0,xb=0 Set _txtVisM.Text=string_$c(22,35,1),string="" Quit
+ . Set:($l(string)+$l(line))>nbytes _txtVisM.Text=string_$c(22,35,1),string=""
+ . Set:line'="" string=string_$c(22,35,1)_line
+ Else  Do
+ . If xa=0,xb=0 Quit
+ . New io Set io=$io
+ . Use 0 Write !,line Use io
+ Quit ""
+wrcomp(p) New %UI Set %UI="GUI",%UI("CANCEL")=0 
+ Quit $$rcomp^Wr1($p(p,$c(22,35,1)),$p(p,$c(22,35,1),3),$p(p,$c(22,35,1),2),$p(p,$c(22,35,1),4)) 
+onedel(rtn,allvers) Do onedel^Wr1(rtn,allvers) Quit
+oneline(routine,line,text,type,rtnnew) New X,i,found,output
+ Set X=$S('case:$ZCVT(text,"U"),1:text),found=0,i=""
+ For  Set i=$o(string(i)) Quit:i=""  If X[string(i) Set found=1 Quit
+ Quit:'found
+ Set output=$s('rtnnew:$c(22,35,1)_routine_"."_type_$c(22,35,1),1:"")_$j("+"_line,6)_" "_text
+ Set cancel=$$callVisM^%Wprim(0,output),rtnnew=1
+ Quit
+rsel(MASK,SILENT) New (MASK,SILENT,%UI) Set $ze="",$zt="rselErr^Wr"
+ Set return=1,MASK=$g(MASK),SILENT=$g(SILENT,0),c="",n=0
+ If $$ParseRoutineName^%R(MASK)="*",$zu(5)'="%SYS" Set MASK=MASK_";'%*.*" ;Skip %* routines
+ Kill ^CacheTempJ($j)
+ For  Do  Quit:'more
+ . Set more=$$LIST^%R(MASK,1000,0,.d,.c)
+ . If d'="" Set len=$ll(d) For i=1:1:len Set ^CacheTempJ($j,$li(d,i))="",n=n+1
+ Set ^CacheTempJ($j)=n
+ Quit 1
+rselErr Quit 0
+begrou(glo) Quit $S($zu(5)="%SYS":"",1:$o(@glo@("A"),-1))
+wrsel(MASK) New %UI Set %UI="GUI",%UI("CANCEL")=0 Quit:'$$rsel(MASK) 0 Quit 1
+init Kill ^CacheTempJ($j),nrp Set nrp(1)=0,nrp(0)=0 Do sel,unsel:nrp(1)
+ Set ^CacheTempJ($j)=nrp(1)_";"_nrp(0) Quit nrp(1)
+sel Kill err Read !,"Routines: ",rs," " Quit:rs=""  Set getf=1 Set:rs?1"-".e getf=0,rs=$e(rs,2,*) Do parse Write:$d(err) " ?? bad format" Do:'$d(err) store Goto sel
+unsel Kill err Read !,"Exclusions: ",rs," " Quit:rs=""  Set getf=0 Do parse Write:$d(err) " ?? bad format" Do:'$d(err) store Goto unsel
+parse Kill pat,err Set np=0 Goto range:rs[":",single:rs'["*"&(rs'["?")
+ For i=1:1:$l(rs) Set c=$e(rs,i) Do chk Quit:$d(err)
+ Quit:$d(err)  Set m="",n="" For i=0:0 Set n=$o(pat(n)) Quit:n=""  Set l=pat(n) Do lchk Set m=m_l
+ Set rpattern="?"_m Quit
+range Set brtn=$p(rs,":"),ertn=$p(rs,":",2,999)
+ For x=brtn,ertn Goto:'$$rname(x) err1
+ Goto:brtn]ertn err1 Set rpattern=":"_rs Quit
+err1 Set err=1 Quit
+single Goto:'$$rname(rs) err1 Set rpattern="="_rs Quit
+chk Goto chk1:c="?",chk2:c="*",pct:c="%",err1:c'?1a&(c'?1n) Set:'$d(pat(np)) pat(np)=$c(0) Set pat(np)=pat(np)_c Quit
+chk1 Set np=np+1,pat(np)="1e",np=np+1 Quit
+chk2 Set np=np+1,pat(np)=".e",np=np+1 Quit
+pct Goto err1:np Goto err1:$g(pat(0))'="" Set pat(0)=$c(0)_"%" Quit
+lchk Set:'$a(l) l="1"_""""_$e(l,2,$l(l))_"""" Quit
+store Set:'$d(^CacheTempJ($j,getf)) ^CacheTempJ($j,getf)=0 Set nrp(getf)=nrp(getf)+1,^CacheTempJ($j,getf,nrp(getf))=rpattern Quit
+screen(rtn) New (rtn) Set screen=0,type=1 Do tests Set:pass screen=1
+ Quit:'screen 0 Set type=0 Do tests Quit:pass 0 Quit screen
+tests Set pass=0 For i=1:1 Quit:'$d(^CacheTempJ($j,type,i))  Set test=^(i) Do pass Quit:pass
+ Quit
+pass Set tt=$e(test),test=$e(test,2,*) Goto equals:tt="=",inmatch:tt="?",inrange:tt=":" Quit
+equals Set:rtn=test pass=1 Quit
+inmatch Xecute "i rtn?"_test_" s pass=1" Quit
+inrange Set brtn=$p(test,":",1),ertn=$p(test,":",2) Quit:brtn]rtn  Quit:rtn]ertn  Set pass=1 Quit
+rname(rtn) Quit:$l(rtn)>31 0 Set fc=$e(rtn) Quit:fc'="%"&(fc'?1a) 0 Set sp=1,ok=1
+ For i=2:1:$l(rtn) Set c=$e(rtn,i) If c'?1n&(c'?1a) Set ok=0 Quit
+ Quit ok
+wrset(p) New (p) Kill ^CacheTempJ($j),nrp Set return=1,nrp(1)=0,nrp(0)=0,ln=$l(p,$c(13,10))
+ For ij=1:1:ln Set rs=$p(p,$c(13,10),ij) If rs'="" Do  Quit:'return
+ . Set rsfull=rs,getf=1 Set:$e(rs)="'"!($e(rs)="-") getf=0,rs=$e(rs,2,$l(rs))
+ . Do parse If $d(err) Set return=rsfull_" - wrong format" Quit
+ . Do store
+ Set ^CacheTempJ($j)=nrp(1)_";"_nrp(0) Quit return
+rsave(TYPE,file,description,format,printf,autoload,silent) 
+ New (%UI,TYPE,file,description,format,printf,autoload,silent,j2)
+ Set cancel=0,EXT=TYPE Set:format="Object" TYPE="OBJ",printf=0,autoload=0
+ Set parms="~Format="_format_"."_$s($p($p(file,"(",2),")",1)["V":"V",1:"S")_"~"
+ Set silent=$g(silent,0)
+ If autoload Do  Set description=D
+ . Set D="N IO,D,P,I,A,X,L S IO=$I R D U 0 W !,D,! S P=""^"" "
+ . Set D=D_"F  U IO R A Q:A=""""  I $P(A,P,3) S L=$P(A,P,5) "
+ . Set D=D_"S:L X=$ZUTIL(55,L) ZLOAD  ZSAVE @$P(A,P) S:L X=$ZUTIL(55,0) "
+ . Set D=D_"U 0 W !,$P(A,P,1,2),?20,"" loaded"" ;(Self-loading)"
+ Do INT^%T Set DATTIM=$ZD($H,6)_"  "_%TIM
+ Set SYSNAM="M/SQL-UNIX",VOL=1,$zt="rsaveErr"
+ If '$$OpenDev^%Wprim(.file) Quit 0_$c(22,35,1)_"Can't open file."
+ Set stream=$$IsStream^%Wprim(file) Use file
+ If format="DTM" Do
+ . Write ";Routine Save - "_DATTIM_" (DT format - "_$zv_")"_parms Write:stream !
+ . Write ";Saved from "_$tr($zu(5),":","")_": "_description Write:stream !
+ If format="DSM" Do
+ . Write "Saved by %RO from "_$tr($zu(5),":","")_" on "_$tr($zd($h,2)," ","-")_" "_%TIM Write:stream !
+ . Write description Write:stream !
+ If format="Cache"!(format="ISM")!(format="") Do
+ . Write $S(autoload:description,1:"Cache for Windows NT^"_EXT_"^"_description_"^"_parms) Write:stream !
+ . Write "%RO on "_DATTIM Write:stream !
+ If format="MSM" Do
+ . Write %TIM_"  "_$tr($zd($h,2)," ","-")_parms Write:stream !
+ . Write description Write:stream !
+ If format="ANSI" Do
+ . Write %TIM_"  "_$tr($zd($h,2)," ","-")_parms Write:stream !
+ . Write description Write:stream !
+ If format="Object" Do  Goto:$G(err) rsaerr Goto close ; Based on %ROMF
+ . Use file Use:$ZU(96,18,2,"RAW")!1 0
+ . New ok Set rtn="",%R=+$g(^CacheTempJ($j)),description=$tr(description,"~","")
+ . Set VOL=0,%DAT=$P(DATTIM,"  "),bytes=0
+ . Do INT^%T,INT^%D S SYS=$S(($zversion(1)=1):"M/AV",($zversion(1)=2):"M/WNT",1:"M/UX")
+ . If '$$VOLHDR^%ROMF(0,file,$$MAKEHDR^%ROMF(description,SYS),%DAT,%TIM,.VOL,.bytes) Set cancel=1 Quit
+ . Set cancel=0,j=0,err=0,iot=$s($$IsFile^%Wprim(file):"RMS",1:"MT") 
+ . For j2=1:1 Set rtn=$$ParseRoutineName^%R($g(^CacheTempJ($j,j2)),.EXT) Quit:rtn=""  If EXT="OBJ" Do  Quit:cancel!err
+ . . Set j=j+1,ok=$$ONEROU^%ROMF(1,file,iot,rtn) 
+ . . If 'ok Quit:$P(ok,"^",2)=""  Set $ZE=$P(ok,"^",2),err=1 Quit
+ . . If 'silent Set cancel=$$callVisM^%Wprim($s(j#5=1:1,1:0),rtn) Quit:cancel
+ . Use file Write $C(0)
+ Set page=0,rtn=0
+ For j=1:1 Set rtn=$g(^CacheTempJ($j,j)) Quit:rtn=""  Do rsave1(rtn) Quit:cancel  If 'silent Do DoEvents^%CDSrv
+ If 'silent Set:'cancel cancel=$$callVisM^%Wprim(1,"")
+ Write:stream !! Write:'stream "",""
+close Close file Set $zt="" Quit $s(cancel:"Canceled",1:1)
+rsaveErr Close file Quit 0_$c(22,35,1)_$ze
+rsave1(x) Set RTN=$$ParseRoutineName^%R(x,.EXT)
+ If 'silent Set cancel=$$callVisM^%Wprim($s(j#5=1:1,1:0),RTN)
+ Set rc=$$ROUTINE^%R(x,.%rou,.err,"L")
+ Set DT=$$DATE^%R(x),LANG=$$LANG^%R(x,,.GENERATED),NL=%rou(0)
+ If 'printf Do  Write:stream !
+ . If "DTM,DSM,MSM,ANSI"'[format Write RTN_"^"_EXT_"^"_$S(EXT="INT":1,EXT="BAS":1,1:"")_"^"_DT_"^"_LANG_"^"_GENERATED
+ . Else  Write RTN
+ Do:printf rsahead
+ For II=1:1:NL Set X=%rou(II) D:printf LINE Do:'printf
+ . If format="DSM" Set J=$P(X," "),X=J_$c(9)_$P(X," ",2,999)
+ . Else  s:X="" X="."
+ . Write:X'="" X Write:stream !
+ Write:format="DTM" # Write:stream ! Write:'stream ""
+ Quit
+rsave2(rou,file,description) New (%UI,rou,file,description)
+ Kill ^CacheTempJ($j) Set ^CacheTempJ($j,1)=rou
+ s rtn=$$ParseRoutineName^%R(rou,.type)
+ Quit $$rsave(type,file_":(""WNS"")",description,"Cache",0,0,1)
+rsaerr Set $zt="" Set err=$ze Close file Close 63 Quit err
+LINE Goto:EXT="INC" LOOP
+ If X?." "1"#".E,X'?." "1"##".E
+ Else  Set J=$P(X," "),X=$E(J_$J("",7),1,7)_$E(J,8,99)_" "_$P(X," ",2,999)
+LOOP Write $E(X,1,79) Write:stream ! Set X=$E(X,80,*) Goto:X]"" LOOP
+ If $Y+5>60,II+2<NL Do rsahead
+ Quit
+rsahead Set PAGE=$G(PAGE)+1 Write #,RTN_"."_EXT,?60\2,DATTIM,?70,"Page "_PAGE,!!!
+ Quit
+LJ(x,n) Quit ($E(x_$J("",n),1,n)_$E(x,n+1,$L(x)))
+wrsave(s) New %UI,desc,format,printf,autoload Set %UI="GUI",%UI("CANCEL")=0
+ Set format=$p(s,$c(22,35,1),4),autoload=$p(s,$c(22,35,1),5)
+ Set printf=$s(format="Printer":1,1:0) Set:$e(printf)=" " printf=$e(printf,2)
+ Set:$e(autoload)=" " autoload=$e(autoload,2)
+ Set desc=$tr($p(s,$c(22,35,1),3),$c(13,10)," ")
+ Quit $$rsave($p(s,$c(22,35,1)),$p(s,$c(22,35,1),2),desc,format,printf,autoload)
+getdescr(filespec,format) Quit $$getdescr^Wr1(filespec,format)
+getlist(param) Quit $$getlist^Wr1(param) 
+GUIlist(file) Set %UI="GUI",%UI("CANCEL")=0 Quit $$getlist^Wr1(file) 
+rload(file,format,selection,over,compile,syntax,backup,showstat,langmode,pasting) 
+ New (%UI,file,format,selection,over,compile,syntax,backup,showstat,langmode,pasting)
+ Set $ze="",$zt="rlderr",langmode=$g(langmode),pasting=$g(pasting,0)
+ Set zs=$zs,$zs=16384 ;expand partitition to allow for large routine arrays
+ Set cancel=0,limited=$s(selection=1:3,1:2),message=""
+ If '$$OpenDev^%Wprim(.file) Quit $$notopen
+ If '$$IsFile^%Wprim(file) Use file w *-5
+ If format="Object" Quit $$rloado^Wr1(file,format,selection,over)  ; Object separatly
+ Use file Read x,y ; Read Header
+ If $ZEOF g rldeof
+ If format="XML" Set header1=x,header2=y
+ For iii=1:1 Set $zt="rldeof2" Use file Read x Goto:$ZEOF rldeof2 Set $zt="rlderr",x=$p(x,$c(13)) Quit:x=""!(format="XML"&(x'["<Routine"))  Do  Quit:cancel
+ . Set roustart=x,rtn=$$ParseRoutineHeader^%R(x,.type,.ver,.date,.lang,format,.generated) Quit:rtn=""
+ . Set okcomp=$s(type="MAC":1,type="INT":1,type="BAS":1,1:0)
+ . Set:date="" date=$H
+ . Set:langmode'="" lang=langmode
+ . If showstat,$g(%UI)="GUI" Do DoEvents^%CDSrv
+ . If pasting Do
+ . . If iii#5=1 Set cancel=$$callVisM^%Wprim(1,rtn_"."_type)
+ . Else  Set cancel=$$callbckl(limited,rtn_"."_type)
+ . If '$$include(rtn,type,selection) Do  Quit  ; Do not restore this routine
+ . . Do skip(file,format) ; Skip routine
+ . . Set cancel=$$callbckl(limited_1,rtn,rtn_"."_type_$c(19,94,1)_0_$c(19,94,1)_0_$c(19,94,1)_"not in selection"_$c(22,35,1))
+ . Set status=$$over(rtn,type,over) If 'status Do  Quit  ;Do not overvrite this routine
+ . . Do skip(file,format)  ; Skip routine
+ . . Set cancel=$$callbckl(limited_1,rtn,rtn_"."_type_$c(19,94,1)_0_$c(19,94,1)_0_$c(19,94,1)_"already exists"_$c(22,35,1))
+ . Do:backup&("MAC,INC"[type) ^%RSHUF("PUSH","","",rtn,type) Kill %temp
+ . If format'="XML" Do
+ . . Use file Set n=0 For  Read x If $ZEOF,$ZUTIL(96,0,42) {} Set x=$P(x,$C(13)) Quit:$$stop(.x,format)  Do
+ . . . Set:x="." x=" " Set n=n+1,%temp(n)=x
+ . . Set %temp(0)=n,(message,errmsg)="",(loaded,compiled)=0
+ . . Set rc=$$ROUTINE^%R(rtn_"."_type,.%temp,.e,$s((compile&okcomp):"CS",1:"S"),lang,date,,,generated)
+ . . Set loaded=$s(rc[",SAVED":1,1:0),compiled=$s(rc[",COMPILED":1,1:0)
+ . . If $ll(e) Kill:"MAC,INC"[type %temp Set errmsg=$c(13,10)_$$FMTERR^%R(e,.%temp)
+ . Else  Do  Quit:$g(quit)
+ . . Set (message,errmsg)="",(loaded,compiled,flg)=0
+ . . Set temp=$p(file,".",1,$l(file,".")-1),ext=$p(file,".",$l(file,".")) Set:temp="" temp=file,ext="xml"
+ . . For i=1:1:1000 Set tempfile=temp_i_"_tmp."_ext Quit:$zu(140,4,tempfile)
+ . . If i<1000 Open tempfile:("WNS"):0 Set flg=$t
+ . . If i=1000!'flg Set errmsg=0_$c(22,35,1)_"Could not open file "_tempfile,quit=1 Quit
+ . . Use tempfile Write header1,!,header2,!,roustart,!
+ . . For  Use file Read x If $ZEOF,$ZUTIL(96,0,42) {} Set x=$P(x,$C(13)) Use tempfile Write x,! Quit:$$stop(.x,format)
+ . . Use tempfile Write "<Checksum value=""0""/>",!,"</Export>",! Close tempfile
+ . . Set stype=type ;Circumvent $System.OBJ.Load bug
+ . . Set rc=$System.OBJ.Load(tempfile,$s(compile:"c",1:"")_"k-d")
+ . . Set type=stype
+ . . Set loaded=1,compiled=compile
+ . . Set rc=$zu(140,5,tempfile)
+ . Set:status=2 message=message_"replaced old one"
+ . Set message=rtn_"."_type_$c(19,94,1)_loaded_$c(19,94,1)_compiled_$c(19,94,1)_message_$c(19,94,1)_errmsg
+ . Set cancel=$$callbckl(limited_1,rtn,message_$c(22,35,1))
+rldeof2 ;
+ If $d(tempfile) Close tempfile
+ Set cancel=$$callbckl(limited,"") ;flush final routine name 
+ Set cancel=$$callbckl(limited_2) Kill ^CacheTempJ($j),^CacheTempWr($j) Close file
+ Set $zs=zs
+ Quit 1
+rldeof Set $ZE="<ENDOFFILE>"  ;come here on EOF error
+rlderr Set $zt="",$zs=zs
+ If $ZE["ENDOF",((format="DTM")!(format="DSM")) Close file Do  Quit 1
+ . Set cancel=$$callbckl(limited_2) Kill ^CacheTempWr($j),^CacheTempJ($j)
+ . If $d(tempfile) Close tempfile
+ Close file Close 63 Close:$d(tempfile) tempfile Quit 0_$c(22,35,1)_$ZE
+skip(file,format) Use file
+ If format=""!(format="Cache")!(format="ISM")!(format="MSM")!(format="DSM")!(format="ANSI") For  Read y If $ZEOF,$ZUTIL(96,0,42) {} Quit:y=""
+ If format="DTM" For  Read y If $ZEOF,$ZUTIL(96,0,42) {} If y="" Read y If $ZEOF,$ZUTIL(96,0,42) {} If y="",($a($zb)=12) Read y If $ZEOF,$ZUTIL(96,0,42) {} Quit
+ Quit
+stop(x,format) New y
+ If format=""!(format="Cache")!(format="ISM")!(format="MSM")!(format="DSM")!(format="ANSI") Quit:x="" 1
+ If format="XML" Quit $s(x["</Routine>":1,1:0)
+ If format="DTM",x="" Read x Goto:$ZEOF rldeof If x="",($a($zb)=12) Read x Goto:$ZEOF rldeof Quit 1
+ Quit ""
+include(rtn,type,selection) New j Quit:'selection 1
+ Quit:selection=1 $d(^CacheTempJ($j,rtn,type))
+ Quit:selection=2 $$screen(rtn) ; ^Wrset
+ Quit 1 ; Restore
+over(rtn,type,over) Set status=$$EXIST^%R(rtn_"."_type) Set:status>1 status=1
+ Quit:over=2 1+status Quit:'status 1 Quit:'over 0 Quit $$callbckl(4,rtn,type)*2
+wrload(p) New %UI,d Set %UI="GUI",%UI("CANCEL")=0,d=$c(22,35,1)
+ Quit $$rload($p(p,d),$p(p,d,2),$p(p,d,3),$p(p,d,4),-$p(p,d,5),-$p(p,d,6),-$p(p,d,7),$p(p,d,8),$p(p,d,9))
+callbckl(who,rtn,p1,p2) Set nbytes=1024
+ If $g(%UI)="GUI" Do  If who=4 Quit $g(return)
+ . Set str=$g(str)
+ . If who=1 Do  Quit  ; Create list
+ . . Set _txtVisM.Text=rtn
+ . . Set line=0_$c(19,94,1)_rtn_$c(19,94,1)_p1_$c(19,94,1)_p2
+ . . Set:$l(str)+$l(line)>(nbytes-5) _txtVisM=str_$c(22,35,1),str=""
+ . . Set str=str_$c(22,35,1)_line
+ . If who=21!(who=31) Do  Quit  ; Create log
+ . . Set str=$g(str)
+ . . Set:$l(str)+$l(p1)>(nbytes-5) _txtVisM=str_$c(22,35,1),str=""
+ . . Set str=str_$c(22,35,1)_p1
+ . If who=2 Set:showstat _txtVisM.Text=rtn Quit  ;Update progress
+ . If who=3 Set:showstat _txtVisM.Text=rtn Quit
+ . If who=11!(who=22) Set _txtVisM=str_$c(22,35,1) Quit  ;Flush out
+ . If who=32 Set _txtVisM=str_$c(22,35,1) Quit
+ . If who=4 Do  Quit
+ . . Set:showstat _txtVisM.Text=rtn ;update status when message box is shown
+ . . If $g(yesAll) Set return=6
+ . . Else  Do
+ . . . Set return=$$confirm^%Wprim(9000_$c(19,94,1)_"%S1"_$c(19,94,1)_rtn_"."_p1,"_frmUtility!txtConfirm")
+ . . . If return=-1 Set yesAll=1,return=6
+ . . Set:return=2 %UI("CANCEL")=1,cancel=1,return=7 Set return=7-return
+ If $g(%UI)'="GUI",showstat Set IO=$IO U 0 Do  Use IO ;show chui status
+ . If who=21!(who=31) Do  Quit  ; Create log
+ . . New rtn,load,comp,comm,err
+ . . Set rtn=$p(p1,$c(19,94,1),1),load=$p(p1,$c(19,94,1),2),comp=$p(p1,$c(19,94,1),3),comm=$p($p(p1,$c(19,94,1),4),$c(22,35,1),1),err=$p($p(p1,$c(19,94,1),5),$c(22,35,1),1)
+ . . Write !,rtn,$s(load:" Loaded",1:" Skipped"),$s(comp:"; Compiled",1:""),$s(comm="":"",1:"; "_comm)
+ . . If err'="" W !,err,!
+ Quit $G(%UI("CANCEL"))
+HEAD() Set C="",DT="",VOL="" Do GUIHDR^%RIMF(file,.C,.DT,.VOL)
+ Quit:'$$ID^%RIMF($$COMPART^%RIMF(C,2)) "[This is not %ROMF/%SQMRO file.]"
+ Set VOL=+VOL,EB=$$COMPART^%RIMF(C,5),OS=$P($$COMPART^%RIMF(C,3)," ")
+ Set CAP=$$COMPART^%RIMF(C,4),C=$$COMPART^%RIMF(C,1)
+ Set ENDIAN=$E(CAP,2) ;the big/little endian value
+ Set NEW=($E(CAP,3)>1) ;CAP = Ascii/Ebcdic-endian-version (must be 0/1!)
+ Quit:VOL'=1 "[***Error: this is volume "_VOL_". Please try again]"
+ If " "'[EB,EB="A" Do  Quit ret ;if extra byte added, was 8th bit stripped?
+ . Set ret="ERROR: this file has had all '8-bit' characters"
+ . Set ret=ret_" truncated to 7-bits -- this file is UNREADABLE as is."
+ . Set ret=ret_" Please make sure all file transfers (if any) were done"
+ . Set ret=ret_" in BINARY MODE."
+ If " "'[EB,EB'=$C(128+$A("A")) Do  Quit ret ;if not 'right' character
+ . Set ret="* * * * ERROR: this file has been 'scrambled' in some form"
+ . Set ret=ret_" which this routine cannot determine.  Specifically, an"
+ . Set ret=ret_" '8-bit' character expected in the file is neither now"
+ . Set ret=ret_" '7-bit' nor is it the proper value -- the characters in"
+ . Set ret=ret_" the header have somehow been scrambled; this file"
+ . Set ret=ret_"cannot be processed."
+ If $E(CAP)'="A" Do  Quit ret
+ . Set ret="Unfortunately, this file was written on a platform which"
+ . Set ret=ret_" used a non-ASCII character set.  At this time, this"
+ . Set ret=ret_" version of utility cannot read these files."
+ Quit 1
+notopen Set $zt="" Quit "Can't open file" 

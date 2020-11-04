@@ -1,0 +1,159 @@
+ROUTINE %SYS.Debug [Type=INT]
+%SYSDebug ; Debugger interface
+ ;
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ q                               ; Only through entry points
+OPEN(pid,sid) public {
+ If '$System.Security.Check("%Development","USE")  q 0_$c(22,35,1)_"4098"
+ s $ZT="OPENERR"
+ i $d(^rOBJ("%ZDEBUG")) D SENDOPEN^%ZDEBUG
+ s x=$ZU(25,pid,0)
+ q x
+OPENERR ;
+ s $ZT=""
+ q 0_$c(22,35,1)_$ZE
+}
+CLOSE(pid) public {
+ s $ZT="CLOSEERR"
+ If '$System.Security.Check("%Development","USE")  q 0_$c(22,35,1)_"4095"
+ s x=$ZU(25,pid,2)
+ q x
+CLOSEERR ;
+ s $ZT=""
+ i $ze["NOJOB" q 0_$c(22,35,1)_"4095"    ; Job no longer exists
+ s err="ERROR SENDING DEBUG CLOSE"
+ d BACK^%ETN
+ q 0_$c(22,35,1)_$ZE
+}
+BREAK(pid) public {
+ s $ZT="BREAKERR"
+ If '$System.Security.Check("%Development","USE")  q 0_$c(22,35,1)_"4098"
+ ; Now break the process
+ s x=$ZU(25,pid,1)
+ q x
+BREAKERR s $ZT=""
+ i $ze["NOJOB" q 0_$c(22,35,1)_"4095"    ; Job no longer exists
+ s err="ERROR SENDING DEBUG BREAK"
+ d BACK^%ETN
+ q 0_$c(22,35,1)_$ZE
+}
+ ;----------------------------------------------------------------------
+ ; Open a debugger device
+ ;----------------------------------------------------------------------
+DBGDEV(sid) public {
+ s $ZT="OpenPrincipalDeviceE"
+ ; Open a tcp port
+ s port = $$DPORT^%SYS.Wcdu()
+ f i=1:1:100 {
+	s dev="|TCP|"_port               ; Get the debug TCP/IP port
+	o dev:(/ACCEPT:/CRLF:/ESCAPE:/PAD:/SENDIMMEDIATE):5
+	q:$t
+	s port=port+69
+ }
+OpenPrincipalDeviceE
+ Set $ZT = "DbgdevErr"
+ i '$t s port=0
+ ; signal the debugger we are ready
+ s rc = $system.Event.Signal(sid,port)
+ q:rc'=1
+ i port {
+	; read for accept
+	u dev r x
+	zb /DEBUG:dev                   ; Redirect debugger
+ }
+DbgdevErr
+ q
+}
+ ;----------------------------------------------------------------------
+ ; Get variables / values at stack level n
+ ;----------------------------------------------------------------------
+STKVAR(sid,lev,start) public {
+	s $zt="STKVARE"
+	s vlist=""
+	if start '= "" {
+		s vref = start
+		if $e(vref,1)="~" goto private
+		s i=1
+		goto public
+	}
+	s vref="~"
+private
+	f i=1:1:50 {
+		s vref = $ZU(42,lev,vref)
+		q:vref=""
+		s val = $ZU(43,lev,vref)
+		s vlist = vlist_$lb(vref,val)
+	}
+	if i=50 goto exit
+	s vref=""
+public
+	f i=i:1:50  {
+		s vref = $ZU(42,lev,vref)
+		q:vref=""
+		s val = $ZU(43,lev,vref)
+		s vlist = vlist_$lb(vref,val)
+	}
+exit
+	s vlist = vlist_$lb(vref)
+	d $system.Event.Signal(sid,vlist)
+	q
+STKVARE
+	s $zt=""
+	s vlist = vlist_$lb(vref,$p($ze,">",1)_">")
+	goto exit
+}
+ ;----------------------------------------------------------------------
+ ; Get properties / values for an oref
+ ;----------------------------------------------------------------------
+OREF(sid,var) public {
+ s $zt="OREFE"
+ s vararray=""
+ s prop=var
+ Set rspec = ##class(%Library.ResultSet).%New("%Studio.General:DumpObject")
+ Do rspec.Execute(var)
+ While rspec.Next(.sc) {
+	If '$SYSTEM.Status.IsOK(sc) q
+	Set prop= rspec.GetData(1) q:prop=""
+	Set val= rspec.GetData(2)
+	s vararray = vararray_$lb(prop,val)
+	q:$length(vararray)>30000
+   }
+exit
+	s $zt="OREFFATAL"
+	d $system.Event.Signal(sid,vararray)
+	q
+OREFE
+	s $zt=""
+	s vararray = vararray_$lb(prop,$p($ze,">",1)_">")
+	goto exit
+OREFFATAL
+	s $zt=""
+	q
+}
+ ;----------------------------------------------------------------------
+ ; The following are auxiliary functions
+ ;----------------------------------------------------------------------
+SESSION(pid) public {
+ ; This function returns back a generated session id number to use when
+ ; connecting to the process to debug.
+ ; If the pid is passed in, it is the job number.
+ ; Otherwise, it is the current process job number.
+ s session="ISCSYSDEBUG"
+ i $g(pid)'="" q session_$zu(67,3,pid)            
+ q session_$zu(67,3,$j)            
+}

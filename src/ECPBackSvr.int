@@ -1,0 +1,51 @@
+ROUTINE ECPBackSvr [Type=INT]
+ECPBackSvr ;Big Networking Background Server; RJW1164 8/11/05
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+Run(reporter) [] PUBLIC {
+ ; Transaction rollback function for a big networking transaction processing
+ ; server process to rollback one transaction at the request of the client
+ ; job.
+ ;   reporter = set if error trapper should print out error msgs
+ s $ZT="tpecperr"
+ i $G(^NET(0,"DODEMON","LOG")),$zu(9,"","ECP background daemon started")
+loop ;
+ s code=0 ; 0 means to initiate the daemon
+ s ssys=0 ; 0 means this is an initial call
+ i $ZJ#2=0 s reporter=0 ; Force reporter to 0 for jobbed jobs
+ for  {
+    s adr=$ZU(183,code,ssys) ; returns index^filecnt^remjobid^remsysid
+    q:adr=""
+     i $G(^NET(0,"DODEMON","LOG")),$zu(9,"","ECP Back Svr: Rolling back transaction with id: "_adr)
+    s ssys=$p(adr,"^",4)
+    s code=$$tpservone^ROLLBACK(reporter,adr,"TROLLBACK")+1 ; 1=>rollback failure, 2=>rollback success
+    }
+ q
+tpecperr
+ s x=$ZU(9,"","Error "_$ZE_" in tprollbackdmn in "_$ZR_" going back to main loop.")
+ d BACK^%ETN
+ zq
+ q
+ g loop
+}
+Start() ;
+ JOB Run(0)::10 Q:$t 1
+ W "Failed to job tprollbackdmn"
+ Q 0
+ ;

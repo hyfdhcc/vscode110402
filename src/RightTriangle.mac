@@ -1,0 +1,54 @@
+ROUTINE RightTriangle
+RightTriangle /* compute area and hypotenuse of a right triangle
+               this routine contains examples of new ObjectScript features */
+ write !, "Compute the area and hypotenuse of a right triangle",
+       !, "given the lengths of its two sides."    
+ read !!, "First, choose a unit of measurement. ",
+       !, "(i)nches, (f)eet, (m)iles, ",
+          "(c)entimeters, m(e)ters, (k)ilometers: ", units
+ // translate units to a full word
+ set units = $case( $extract( units, 1), "i":"inches", "f":"feet",
+                                         "m":"miles",  "c":"centimeters",
+                                         "e":"meters", "k":"kilometers",
+                                            :"units" )
+ do { read !!, "Length of side 1: ", side1
+      quit:(side1 = "")  // exit the do loop
+    }
+ while $$IsNegative( side1 )
+ quit:(side1 = "")  // exit the routine
+ do { read !,  "Length of side 2: ", side2
+      quit:(side2 = "")  // exit the do loop
+    }
+ while $$IsNegative( side2 )
+ quit:(side2 = "")  // exit the routine
+ do Compute( units, side1, side2)
+ write !!, "Current date: "
+ do ^%D
+ write !, "Current time:"
+ do ^%T
+ quit
+ 
+IsNegative(num ) PUBLIC // is num negative?
+ { if (num '> 0) {
+     write "  Enter a positive number." 
+     quit 1 // return "true"
+    }
+   else {
+     write "  Accepted."
+     quit 0 // return "false"
+    }
+ }
+    
+Compute(units, A, B ) // compute and display area and hypotenuse
+ { set area  = ( A * B ) / 2, 
+       area = $justify( area, 0, 2),
+       squaredSides = ( A ** 2 ) + ( B ** 2 ) 
+   set hypot = $zsqr(squaredSides) // $zsqr function computes square root
+   set hypot = $justify( hypot, 0, 2)   // round hypot to 2 places
+   write !!, "The area of this triangle is ", area, " square ", units, ".",
+         !!, "The hypotenuse is ", hypot, " ", units, "."
+ }
+ 
+ 
+ 
+ 

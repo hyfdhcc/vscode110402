@@ -1,0 +1,2274 @@
+ROUTINE %SYS.DATABASE [Type=INT]
+%SYSDATABASE ; API for database management ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/general/_sys.database.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ShowMessage(sc,device) [] PRIVATE {
+    Do DecomposeStatus^%SYS.DATABASE(sc,.msglist,0,"")
+    Do wrtmsg($C(13,10),device)
+    For i=1:1:msglist {	Do wrtmsg(msglist(i)_$C(13,10),device) }
+}
+wrtmsg(msg,device) [] PRIVATE {
+    Quit:'$L(msg)  ; Avoid argumentless writes...
+    If device=-1 { Do $zu(9,"",msg,0,0) Quit }
+    If $g(%UI,"CHUI")="CHUI" { Use device Write msg Quit }
+    Do:$$IjcMsg^%Wprima("DI"_msg)="CANCEL"  ; Return value could be cancel message 
+    . i $$IjcMsg^%Wprima("DI"_$C(13,10)_"Abort received!"_$C(13,10))
+    . zt "Abort"
+}
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ q
+GetDatabaseInfo(dir,info) [] PUBLIC
+{
+ s System=""
+ if $length(dir,"^")>2 s System=$p(dir,"^",2),dir=$p(dir,"^",3,999)
+ if ((System'="") && ($system.ECP.GetClientIndex(System)'=-1)) {
+	s conn=$system.ECP.GetClientIndex(System)
+	s SystemStatus=$system.ECP.GetClientState(conn)
+	i ("3,4,6,7"[+SystemStatus) {
+		q $$Error^%apiOBJ(179,"<NETWORK>")
+	}
+	;; If connection state is not connected, reconnect/start the connection
+	Do:(+SystemStatus=1) $system.ECP.SetClientState(conn,3,0)
+	;; Update the connection state
+	s SystemStatus=$system.ECP.GetClientState(conn)
+	;; Wait up to 10 seconds for the connection to establish
+	s retry=100
+	while ((+SystemStatus '= 5)&&(retry>0)) { 
+		h .1
+		s retry=retry-1
+		set SystemStatus=$system.ECP.GetClientState(conn)
+	}
+	i "1,2,3,4,6"[+SystemStatus q $$Error^%apiOBJ(179,"<NETWORK>")
+	if $d(^|"^"_System_"^"_dir|Routine)
+	s sysnum=$p(SystemStatus,"^",2)
+	f i=1:1:15999 s x=$zu(49,i,3) q:((+x=sysnum)&&($p(x,"^",2)=dir))
+	if ((i < 15999)&&(+($p(x,"^",8))>0)) {
+		s DirectoryBlock=$p(x,"^",8)
+		s ResourceName=$p(x,"^",3)
+		s info=i_","_($p(x,"^",4)*1024)_",0,0,0,0,"_DirectoryBlock_",0,0,0,0,0,"_$p(x,"^",5)_",0,0,0,0,"_$p(x,"^",7)_",0,0,0,0,0,0,"_ResourceName
+		Quit 1
+	}
+ }
+ if System'="" s info="" Quit 1
+ if dir="^" {
+	 /* Private globals, look up where they're stored and set up
+	    dbinfo/DirectoryBlock accordingly */
+	s info=$ZU(21,0)  /* sfn^block */
+	s privsfn=+info
+	s DirectoryBlock=$P(info,"^",2)
+	if privsfn=$zu(40,0,41) q $$Error^%apiOBJ(184)
+	s Directory=$P($ZU(49,+privsfn,3),"^",2)  ; look up name
+	s info=$zu(49,Directory)  ; now get dir info
+	s $p(info,",",7)=DirectoryBlock
+ } else {
+    s info=$zu(49,dir)
+ }
+ If (+info)<0  {
+    Quit $$Error^%apiOBJ($case(+info,-1:300,-2:6046,:314),dir)
+ }
+ Quit 1
+}
+MountDatabase(dir,clustermode,readonly) [] PUBLIC
+{
+ Set dir=$zu(12,dir)
+ Set sc=1
+ Set dirinfo=$zu(49,dir)
+ If (+dirinfo)<-1 Quit $$Error^%apiOBJ(184)
+ If '$case($v($Piece(dirinfo,",",21)*$ZU(40,0,1)+$zu(40,2,128),-2,$ZU(40,0,1)),4294967295:0,:1) Quit $$Error^%apiOBJ(327,$Piece(dirinfo,",",2)\1024)
+ If $S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0) {
+    If $Get(clustermode)=1 {
+       Set nonetwork=$Select($Get(^NET(0,"INIT"))="":1,1:0)
+       If nonetwork Quit $$Error^%apiOBJ(322,dir)
+       Set enqstat=+$Zutil(59)
+       If 'enqstat If $$^STRTENQ()<1 Quit $$Error^%apiOBJ(323,dir)
+    }
+    Set rc=$Zutil(17,dir,$Get(clustermode,0),$Get(readonly,0))
+ }
+ Else {
+    Set rc=$Zutil(17,dir,0,$Get(readonly,0))
+ }
+ If rc<0 {
+    Set sc=$select(+sc:$$Error^%apiOBJ(178),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(178)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(-rc),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(-rc)))
+ }
+ Quit sc
+}
+ModifyDatabase(dir,uic,filsiz,expandby,maxfilsiz,gdir,gpblk,ggblk,freeze,readonly,clmode,nowait,collate) [] PUBLIC
+{
+ Set $Ztrap="errMod"
+ i $g(dir)']"" s dir=$zu(12,"")
+ Set info=$zu(49,dir) i (+info)<-1 Quit $$Error^%apiOBJ(184)
+ If '$Data(filsiz) Set filsiz=$Piece(info,",",4)
+ If '$Data(gdir) Set gdir=$Piece(info,",",7)
+ If '$Data(gpblk) Set gpblk=$Piece(info,",",8)
+ If '$Data(ggblk) Set ggblk=$Piece(info,",",11)
+ If '$Data(freeze) Set freeze=$Piece(info,",",12)
+ If '$Data(collate) Set collate=$Piece(info,",",3)
+ Set blksiz=$Piece(info,",",2)
+ If $Data(expandby)#10 {
+   Set expandby=$p(expandby,".",1)+$Case($p(expandby,".",2)>.5,1:1,:0)
+   Set expandby=(expandby*1048576)\blksiz
+ } Else {
+   Set expandby=$Piece(info,",",5)
+ }
+ If $Data(maxfilsiz) {
+   Set maxfilsiz=$p(maxfilsiz,".",1)+$Case($p(maxfilsiz,".",2)>.5,1:1,:0)
+   Set maxfilsiz=(maxfilsiz*1048576)\blksiz
+ }
+ Else {
+   Set maxfilsiz=$Piece(info,",",6)
+ }
+ If $Data(filsiz) {
+    Set filsiz=$p(filsiz,".",1)+$Case($p(filsiz,".",2)>.5,1:1,:0) ;$s($p(filsiz,".",2)>.5:1,0:0)
+ }
+ Set rc=$Zutil(1,dir,blksiz,0,filsiz,expandby,maxfilsiz,gdir,gpblk,0,0,ggblk,freeze,$g(readonly,0),$g(clmode,0),0,collate)
+ i rc<0 g ModErr
+ If +$Get(nowait) Quit 1
+ i '$$ModWait g ModErr 
+ If $Get(readonly) Set rc=$Zutil(3,dir)
+ If +$Zutil(49,dir)=-1,('+$$MountDatabase(dir)) Goto ModErr
+ Quit 1
+ModWait() ;wait while database is being modified 
+ s $ZT="ModW2" 
+ s X=$ZU(40,2,46)
+ f  s V=$V(X,-2,"1A") q:V'=1  h 1 ;continue until not 'running'
+ i V=2 q 0
+ModW2 s $ZT=""
+ i $G(X) d
+ . V X:-2:1:0 ;reset internal flag so others can use it
+ . I $V(X,-2,1)=2 V X:-2:1:0
+ q 1 ;having an error really doesn't mean anything
+ModErr 
+ Set sc=$$Error^%apiOBJ(313,dir)
+ Set sc=$select(+sc:$$Error^%apiOBJ(-rc),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(-rc)))
+ Quit sc
+errMod
+ Set $Ztrap="" Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+SetDatabaseVariables(dir,blksiz,uic,filsiz,expandby,maxfilsiz,gdir,gpblk,ggblk,rdirblk,rgblk,totvol,isbig,curblks,blkspermap,curmaps,freeze,collate,readonly,clmode) [] PUBLIC
+{
+ s info=$zu(49,dir) i (+info)<-1 Quit $$Error^%apiOBJ(184)
+ s blksiz=$Piece(info,",",2)
+ s uic=$p(info,",",3)
+ s filsiz=$p(info,",",4)
+ Set expval=$Piece(info,",",5)
+ s expandby=(expval*blksiz)\1048576
+ If blksiz=2048 Set expandby=expandby+(((expval*blksiz)/1048576)-((expval*blksiz)\1048576)>.5)
+ Set maxfil=$Piece(info,",",6)
+ s maxfilsiz=(maxfil*blksiz)\1048576
+ If blksiz=2048 Set maxfilsiz=maxfilsiz+(((maxfil*blksiz)/1048576)-((maxfil*blksiz)\1048576)>.5)
+ s gdir=$p(info,",",7)
+ s gpblk=$p(info,",",8)
+ s ggblk=$p(info,",",11)
+ s rdirblk=$p(info,",",9)
+ s rgblk=$p(info,",",10)
+ s totvol=$p(info,",",15)
+ s isbig=$p(info,",",21)
+ s curblks=$p(info,",",22)
+ s blkspermap=$p(info,",",23)
+ s curmaps=$p(info,",",24)
+ s freeze=$p(info,",",12)
+ s collate=$p(info,",",13)
+ s readonly=$zb(+$p(info,",",18),$zu(40,8,2),1)
+ s clmode=$Case($zb(+$p(info,",",17),$zu(40,8,15),1),0:$ZU(40,8,16),:$ZU(40,8,17))
+ Quit 1
+}
+GetDatabaseStatus(dir,state,mountflag) [] PUBLIC
+{
+ Set dir=$zu(12,dir)
+ Set info=$zu(49,dir)
+ Set rc=+info
+ Set state=1
+ Quit:rc>-1&(rc<$ZU(40,0,41)) 1    ; mounted
+ If rc=-2 Set state=0 Quit 1
+ If rc=$ZU(40,0,41),$ZB(+$Piece(info,",",16),$ZU(40,8,9),1) {
+    Set ^SYS("UCI",dir)="<SKELETON>",state=3
+    Quit $$Error^%apiOBJ(315)
+ }
+ If $g(mountflag) {
+    Set rc=$zu(17,dir)
+    If rc<0 {
+       Set state=2
+       Quit $select(+$$Error^%apiOBJ(350,dir):$$Error^%apiOBJ(-rc),1:$$AppendStatus^%occSystem($$Error^%apiOBJ(350,dir),$$Error^%apiOBJ(-rc)))
+    }
+    Quit 1
+ }
+ Set state=2 Quit 1
+}
+DeleteDatabase(dir) [] PUBLIC
+{
+ Set $Ztrap="errDel"
+ Set dir=$zu(12,dir)
+del1
+ Set rc=$Zutil(2,dir)
+ If rc<0 Quit $select(+$$Error^%apiOBJ(316,dir):$$Error^%apiOBJ(-rc),1:$$AppendStatus^%occSystem($$Error^%apiOBJ(316,dir),$$Error^%apiOBJ(-rc)))
+ s $zt="delok" o 63:"^^"_dir g delerr ;didn't get deleted if you can open it
+delok ;
+ Set $Ztrap=""
+delsec 
+ s sec=""
+ f  s sec=$o(^SYS("UCI",dir,sec)) q:sec=""  d
+ . s X=^(sec) k ^SYS("UCI",X) 
+ k ^SYS("UCI",dir)
+ Quit 1
+delerr 
+ c 63
+ s try=$g(try)+1
+ i try=1,+$ZU(49,dir)'=-1 h 1 g del1 
+ i try>1,+$ZU(49,dir)'=-1 Quit $$Error^%apiOBJ(317)
+ g delsec 
+errDel
+ Set $Ztrap="" Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+CreateDatabase(dir,blksiz,filsiz,uic,expandby,maxfilsiz,gdir,gpblk,ggblk,freeze,collation,sparsedb,reinit,clmntmode,enckeyid) [] PUBLIC 
+{
+ Set $Ztrap="errCreate"
+ Set dir=$zu(12,dir)
+ Set uic=0
+ If $Length(dir)>$ZU(40,0,78) Quit $$Error^%apiOBJ(15,dir)
+ if $e(dir,$l(dir))="\" s dir=$e(dir,1,$l(dir)-1)
+ If $zu(140,4,dir)=-2 Quit $$Error^%apiOBJ(41)
+ If $$IsMaxDBMounted Quit $$Error^%apiOBJ(68)
+ Set sc=1
+ If '$Get(blksiz) Set blksiz=$$GetDefaultBlockSize()
+ If '$case($v($Case(blksiz,2048:0,4096:1,8192:2,16384:3,32768:4,:5)*$ZU(40,0,1)+$zu(40,2,128),-2,$ZU(40,0,1)),4294967295:0,:1) Quit $$Error^%apiOBJ(327,blksiz\1024)
+ If $Data(filsiz) {
+    Set filsiz=$p(filsiz,".",1)+$Case($p(filsiz,".",2)>.5,1:1,:0) ;$s($p(filsiz,".",2)>.5:1,0:0)
+    If 'filsiz Set filsiz=1
+ }
+ If $G(enckeyid)'="" Do $zu(9,"","Encrypting "_dir_" with key "_enckeyid,(0>0),0)
+ If $G(reinit) {
+	 s dbobj=##class(SYS.Database).%OpenId(dir,,.status)
+	 if (''status) {
+		 if dbobj.Mounted {
+			 d dbobj.Dismount()
+		 }
+		 s dbobj=""
+	 }
+ }
+ Set rc=$zu(27,dir,dir,$g(blksiz),$g(filsiz),$G(sparsedb),$G(reinit),$G(enckeyid))
+ If $Length(rc,"^")<6 {
+    Set sc=$select(+sc:$$Error^%apiOBJ(320),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(320))) Quit $$packZU27Error(sc,rc)
+    Set dir=$p(rc,"^",1),blksiz=$p(rc,"^",6)
+ }
+ If '$Get(blksiz) Set blksiz=$Piece(rc,"^",6)
+ S ^SYS("UCI",$zu(12,dir))="<SKELETON>^"_$Piece(rc,"^",4)
+ If $Get(expandby) {
+   Set expandby=$p(expandby,".",1)+$Case($p(expandby,".",2)>.5,1:1,:0) ;$s($p(expandby,".",2)>.5:1,0:0)
+ }
+ If $Data(maxfilsiz) {
+   Set maxfilsiz=$p(maxfilsiz,".",1)+$Case($p(maxfilsiz,".",2)>.5,1:1,:0)
+ }
+ If $Data(maxfilsiz) Set maxfilsiz=(maxfilsiz*1048576)\blksiz
+ Else  Set maxfilsiz=0
+ If $Data(expandby) Set expandby=(expandby*1048576)\blksiz
+ Else  Set expandby=0
+ If '$Data(collation) Set collation=$Zutil(23,0)
+ if blksiz=2048 {
+    s rc=$zu(0,dir,blksiz,uic,0,expandby,maxfilsiz,$g(gdir,2),$g(gpblk),0,0,$g(ggblk),$g(freeze,1),0,$g(clmntmode,0),0,collation)
+ }
+ else {
+    s rc=$zu(0,dir,blksiz,uic,0,expandby,maxfilsiz,0,$g(gpblk,$zu(40,0,40)),0,0,$g(ggblk,50),$g(freeze,1),0,$g(clmntmode,0),0,collation)
+ }
+ i rc<0 Quit $$Error^%apiOBJ(-rc)
+ s rc=$zu(17,dir) 
+ i rc=-35 f  h 1 s rc=$zu(17,dir) q:rc'=-35
+ i 'rc!(rc<0) Set sc=1_$e($$Error^%apiOBJ(307,dir,rc),2,*)
+ e  d  
+ . s Collation=5
+ . s Protect=-1
+ . s Keep=1
+ . s Journal=0
+ . s PtrBlk=-1
+ . s GrowthBlk=-1
+ . f glo="ROUTINE","rBACKUP","rMAC","rMACSAVE","rINC","rINCSAVE","rINDEX","oddDEF","oddCOM","oddEXT","oddEXTR","oddMAP","oddPROC","oddPROJECT","oddPKG","oddSQL","oddStudioDocument","oddStudioMenu","rINDEXCLASS" d
+ . . Set rc=$zu(178,"^^"_dir,glo,Collation,Protect,Journal,Keep,PtrBlk,GrowthBlk)
+ . Set ^|"^^"_dir|rINDEX=$ztimestamp,^|"^^"_dir|rINDEXCLASS=$ztimestamp
+ . Set rc=$zu(178,"^^"_dir,"rOBJ",133,Protect,Journal,Keep,PtrBlk,GrowthBlk)
+ s ^SYS("UCI",$zu(12,dir))=""
+ Quit sc
+errCreate
+ Set $Ztrap="" Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+packZU27Error(sc,rc) 
+ Set dir=$Piece(rc,"|"),errnum=$Piece(rc,"|",2),code=$Piece(rc,"|",3)
+ Set sc=1
+ Set sc=$select(+sc:$$Error^%apiOBJ(70),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(70)))
+ Set sc=$select(+sc:$$Error^%apiOBJ(-errnum),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(-errnum)))
+ Set error=$Case(code,1:71,2:$case($Extract(dir,1,5),"/dev":72,:73),5:74,6:75,13:76,16:77,17:78,19:79,23:80,24:81,30:82,:83)
+ If error=83 Set sc=$select(+sc:$$Error^%apiOBJ(error,code),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(error,code)))
+ Quit sc
+GetDefaultBlockSize()
+ n ans,allowed
+ s allowed=$G(^SYS("DBSIZES","ALLOWED"))  ;JO1737
+ s ans=8192
+ q:'$L(allowed) ans  ;not restricted, use system default
+ q:allowed[(","_ans_",") ans      ;system default is allowed
+ ; system default is not allowed. Return the largest allowed
+ ; size as the default.
+ q $P(allowed,",",$L(allowed,",")-1)
+GetGlobalDirectoryInfo(NSP,save,tally,gsetflag) [] PUBLIC
+{
+ s rc=$$GetDatabaseInfo(NSP,.DBINFO)
+ i ('rc) q rc
+ Quit $$GetGlobalDirectoryInfoFromDBInfo(NSP,DBINFO,save,.tally,$G(gsetflag,0))
+}
+GetGlobalDirectoryInfoFromDBInfo(NSP,dbinfo,save,tally,gsetflag) [] PUBLIC
+{
+    Set remlock=0,$zt="errdir"
+    If dbinfo="" {
+	Set System=$p(NSP,"^",2)
+	i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"}  ;Verified 07/14/06 STC
+	Set oldval=$zu(68,7,0) 
+	Set oldver=$G(^|"^"_System_"^CACHESYS"|SYS("CACHESYSVersion"))
+	If oldver="" {
+	    Set remnode=$name(^|NSP|UTILITY("%GD"))
+	} Else {
+	    Set tempdir=$g(^|"^"_System_"^CACHESYS"|%SYS("CacheTempDir"),$g(^|"^"_System_"^CACHESYS"|%SYS("tmpdir")))
+	    Set remnode=$name(^|"^"_System_"^"_tempdir|CacheTempUtil("%GD"))
+	}
+	Do $zu(68,7,oldval)
+	Lock +@remnode:2
+	If '$t { Quit $$Error^%apiOBJ(179,"<NETWORK>") }
+	Set remlock=1
+	Kill @remnode
+	If oldver="" {
+	    Job RemJob^%GD[NSP]
+	} ElseIf oldver>5.2 {
+	    Job RemJobSys^%SYS.GD[NSP]
+	} Else {
+	    Job RemJob^%SYS.GD[NSP]
+	}
+	If $zchild=0 { s $ze="<REM JOB FAILS>" g errdir }
+	For t=.2:.2:10 {
+	    Hang t
+	    Quit:$d(@remnode)#2  ; wait for job to finish, hopefully
+	}
+	If '$d(@remnode)#2 { s $ze="<REM JOB FAILS>" g errdir }
+	If @remnode]"" { s $ze=@remnode g errdir } ; remote error report
+	Merge @save=@remnode
+	Kill @remnode
+	Lock -@remnode
+	Quit 1
+    }
+    If $Piece(dbinfo,",",2)=2048 { Quit $$Error^%apiOBJ(90) }
+    If NSP="^" {
+	s info=$ZU(49,+dbinfo,3)
+	if +info'=0 {  ;0=local, -2 = doesn't exist, 1=remote
+		set $ze="<SFN #"_+dbinfo_" IS NOT LOCAL>" 
+		goto errdir  
+	}
+	s DIR=$P(info,"^",2)  ; look up name
+	s NSP="^^"_DIR
+    } else {
+	s DIR=$p(NSP,"^",3,999)
+    }
+    Set GDBLOCK=+$p(dbinfo,",",7)
+    If GDBLOCK<0 { Quit $$Error^%apiOBJ(6075,GDBLOCK) }
+    Set ResourceName=$Piece(dbinfo,",",25)
+    Open 63:NSP 
+    Set tally=0
+    Do {
+	View GDBLOCK
+	If $v($zu(40,32,0),0,4) {
+	    For i=1:2 {
+		Set name=$e($v(i,-5),2,*)
+		Quit:name=""
+		Set viewstr=$v(i+1,-6)
+		Set tally=tally+1
+		If $g(gsetflag) {
+		    Set @save@(name)=$p(viewstr,",",4)_"^"_$p(viewstr,",",5)_"^"_$p(viewstr,",",2)_"^"_$p(viewstr,",",1)_"^"_$p(viewstr,",",3)_"^"_ResourceName
+		} Else {
+		    Set @save@(name)=$p(viewstr,",",5)_"^"_$p(viewstr,",",2)_"^"_$p(viewstr,",",1)_"^"_$p(viewstr,",",4)_"^"_$p(viewstr,",",3)_"^"_ResourceName
+		}
+	    }
+	}
+	Set GDBLOCK=$v($Zutil(40,32,4),0,4)
+    } While GDBLOCK
+    Close 63
+    Quit 1
+errdir s $zt="",errlog=$Get(errlog)+1,errlog(errlog)=$p($ze,">")_">"_NSP
+    Lock:remlock -@remnode
+    Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+InitCacheTemp(dir,debug) [QUIETLY] PUBLIC
+{
+ i '$d(debug) s debug=0
+ i debug d $zu(9,"","InitCacheTemp: starting",(1>0),1)
+ i $ZU(173)'=$ZU(40,0,41) d  q res
+ . s res=1
+ . i debug d $zu(9,"","InitCacheTemp: Cachetemp already defined, sfn="_$ZU(173),(1>0),1)
+ s reinit=1
+ s dirinfo=$zu(49,dir)
+ s sfn=+dirinfo
+ If sfn<=-2 {
+	Set reinit = 0
+	i '($zversion(1)=1),$e(dir,$l(dir))=$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"") s dir=$e(dir,1,$l(dir)-1)
+	Do $zu(9,"","Creating missing CACHETEMP database in "_dir,(0>0),0)
+	Set sc1=$zu(140,4,dir)
+	If sc1'=0 {
+		i '##Class(%Library.File).CreateDirectoryChain(dir) Do $zu(9,"","Failed to create CACHETEMP directory in "_dir,(3  /* Fatal */>0),3  /* Fatal */)
+	}
+ }
+ s is2kdatabase=$p(dirinfo,",",2)=2048
+ i debug d $zu(9,"","InitCacheTemp: "_dir_" mounted as sfn: "_sfn_" is2KB: "_is2kdatabase,(1>0),1)
+ i is2kdatabase d
+ . i $zu(17,dir)  ; try to mount it
+ . s dirinfo=$zu(49,dir),sfn=+dirinfo
+ i 'sfn q $$Error^%apiOBJ(310)
+ i (sfn>0)&(sfn<$ZU(40,0,41)) d  i ('res) q res
+ . s reinit=0
+ . s res=$$DeleteDatabase(dir)
+ . if debug d
+ . . if ('res) d  
+ . . . s msgtext=""
+ . . . d DecomposeStatus(res,msglist,0,"") For i=1:1:msglist s msgtext=msgtext_msglist(i)
+ . . . d $zu(9,"","InitCacheTemp: Failed to delete "_dir_": "_msgtext,(0>0),0)
+ . . e  d $zu(9,"","InitCacheTemp: deleted database "_dir,(1>0),1)
+ i reinit {
+	Set blksiz=$p(dirinfo,",",2)
+	Set expandby=$Piece(dirinfo,",",5)*blksiz\1048576
+	Set maxblocks=$Piece(dirinfo,",",6)*blksiz\1048576
+	Set filsiz=$Piece(dirinfo,",",4) ;already in MB
+	Set collation=$Piece(dirinfo,",",13) ; preserve collation if we changed it on restart
+	i debug d $zu(9,"","InitCacheTemp: reinitializing to size: "_filsiz_" expby: "_expandby_" max: "_maxblocks_" coll: "_collation,(1>0),1)
+	If filsiz>240 s filsiz=240
+ } else {
+	i debug d $zu(9,"","InitCacheTemp: cachetemp did not exist, creating new db",(1>0),1)
+	s filsiz=1     ; system will increase if this is too small
+	s expandby=0    ;0 means use system default of the larger of 10% or 10MB
+	s maxblocks=0   ; unlimited
+	s collation=$zu(23,0) ; System default
+	i debug d $zu(9,"","InitCacheTemp: cachetemp did not exist coll:"_collation,(1>0),1)
+ }
+ s blksiz=0      ; use system default
+ s uic=0         ; no owner
+ s gdir=0        ; use system default
+ s gpblk=0       ; use system default
+ s ggblk=0       ; use system default
+ s freeze=0      ; don't freeze on errors (also set by $ZU(173))
+ s sparsedb=1
+ s enckeyid=""
+ s $zt="skip"
+ s sys=##class(Security.System).%OpenId("SYSTEM")
+ i sys.DBEncCacheTemp s enckeyid=$System.Security.System.GetDBEncKeyID()
+skip s $zt=""
+ s res=$$CreateDatabase(dir,blksiz,filsiz,uic,expandby,maxblocks,gdir,gpblk,ggblk,freeze,collation,sparsedb,reinit,,enckeyid)
+ i ('res) d:debug  q res
+ . s msgtext=""
+ . d DecomposeStatus(res,.msglist,0,"") For i=1:1:msglist s msgtext=msgtext_msglist(i)
+ . d $zu(9,"","InitCacheTemp: Failed to create "_dir_": "_msgtext,(0>0),0)
+ i debug d $zu(9,"","InitCacheTemp: "_$S(reinit:"Reinitialized",1:"Created new")_" database for "_dir,(1>0),1)
+ s sfn=+$ZU(49,dir)
+ i (sfn<0)!(sfn=$ZU(40,0,41)) d:debug  Quit $$Error^%apiOBJ(312)
+ . d $zu(9,"","InitCacheTemp: Failed to lookup sfn for cachetemp",(1>0),1)
+ s res=$zu(173,sfn)
+ i 'res d:debug  q $$Error^%apiOBJ(311,dir)
+ . d $zu(9,"","InitCacheTemp: Failed to designate "_dir_" as cachetemp",(1>0),1)
+ i debug d $zu(9,"","InitCacheTemp: Marked "_dir_" as cachetemp",(1>0),1)
+ s sc=##Class(SYS.Database).ModifyDatabase(dir,,"%DB_"_"CACHETEMP")
+ Set sc=$$CreateGlobal(dir,"CacheTempClassDesc",5,,,1)
+ If ('sc) s $zt="afterstatus" Set sc=$System.Status.GetErrorText(sc) Do $zu(9,"",sc,(1>0),1)
+afterstatus s $zt="" s $ze=""
+ s ^%SYS("CacheTempDir")=$zu(12,dir)
+ s ^%SYS("tmpdir")=^%SYS("CacheTempDir")
+ q 1
+}
+MakeCacheTemp(dir,PrintMsg=0) [QUIETLY] PUBLIC
+{
+ i '$d(QUIETLY) n QUIETLY s QUIETLY=1
+ s res=$$InitCacheTemp(dir)
+ i PrintMsg d
+ . i +res d $zu(9,"",dir_" initialized as CACHETEMP",(0>0),0) q
+ . d DecomposeStatus(res,.msglist,0,"")
+ . s msg="" f msgi=1:1:msglist s msg=msglist(msgi)_$c(13,10)
+ . d $zu(9,"","MakeCacheTemp^"_$ZN_": "_$c(13,10)_msg,(1>0),1)
+ q res
+}
+MakeCache(dir) Public {
+ s $zt="skip" ;Security DB may not be initialized yet
+ s Encrypt=0
+ s sys=##class(Security.System).%OpenId("SYSTEM")
+ i sys.DBEncCacheTemp s Encrypt=1
+skip s $zt=""
+ s dirinfo=$zu(49,dir)
+ s sfn=+dirinfo
+ If sfn<=-2 {
+	d $zu(9,"","Creating CACHE database in "_dir,0,0  /* Informational message */)
+	Set sc1=$zu(140,4,dir)
+	If sc1'=0 {
+		i '##Class(%Library.File).CreateDirectoryChain(dir) {
+			q $$Error^%apiOBJ(5001,"Failed to create CACHE directory in "_dir)
+		}
+	}
+ } else {
+ 	s CurrentlyEncrypted=$Case($zb(+$p(dirinfo,",",16),$zu(40,8,27),1),0:0,:1)
+ 	i CurrentlyEncrypted=Encrypt q 1
+	s Status=$$DeleteCacheDB(dir)   ;##Class(SYS.Database).DeleteDatabase(dir)
+	i '(''Status) q Status
+	d $zu(9,"","Reinitializing CACHE database in "_dir,1 /* broadcast and log message*/,1  /* Warning */)
+ }
+ s Status=##Class(SYS.Database).CreateDatabase(dir,,,Encrypt,"%DB_CACHE",2 /* Not Journaled */)
+ i '(''Status) q Status
+ s Status=##Class(%Library.GlobalEdit).Create("^^"_dir,"%cspSession",5,,,1)
+ s Status=##Class(%Library.GlobalEdit).Create("^^"_dir,"%sqlcq",5,,,1)
+ s Status=##Class(%Library.GlobalEdit).Create("^^"_$zu(12),"%sqlcq",5,,,1)
+ q 1
+}
+DeleteCacheDB(dir) PRIVATE {
+ s $ZT="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") q $$Error^%apiOBJ(921,"%Admin_Manage"_":"_"USE")
+ s x=$zu(49,dir)
+ If x<-3 Quit $$Error^%apiOBJ(184)
+ i x=-3 q $$Error^%apiOBJ(42)
+ i x=-2 q $$Error^%apiOBJ(6046,dir)
+ s dir=$zu(12,dir)
+ s SFN=+$p(x,",",14)
+ Try {
+	i SFN=$zu(40,0,41) i $d(^|"^^"_dir|X)
+ } Catch {
+ }
+ Set rc=$Zutil(2,dir)
+ If rc<0 {
+	Set rc1=$Zutil(140,5,dir_"CACHE.DAT")
+	If rc1<0 {
+		Try {
+			i SFN=$zu(40,0,41) d $zu(3,dir)	 
+		} Catch {}
+		Quit $select(+$$Error^%apiOBJ(316,dir):$$Error^%apiOBJ(-rc),1:$$AppendStatus^%occSystem($$Error^%apiOBJ(316,dir),$$Error^%apiOBJ(-rc)))
+	}
+ }
+ s Sec="" f  s Sec=$o(^SYS("UCI",dir,Sec),1,X) q:Sec=""  k ^SYS("UCI",X) 
+ k ^SYS("UCI",dir)
+ Quit 1
+ERROR s $zt=""
+ i $G(SFN)=$zu(40,0,41) d $zu(3,dir)	 
+ Quit $$Error^%apiOBJ(5002,$ze)
+}
+GetKeepType(dir,global,val) [] PUBLIC
+{
+ Set $Ztrap="errGetKeep"
+ i $g(dir)']"" s dir=$zu(12,"")
+ s dirinfo=$zu(49,dir)
+ i +dirinfo<0 q $select(+$$Error^%apiOBJ(321,global):$$Error^%apiOBJ(184),1:$$AppendStatus^%occSystem($$Error^%apiOBJ(321,global),$$Error^%apiOBJ(184)))
+ s rc=$zu(167,6,1,dir,global)
+ if rc=-1 Quit $$Error^%apiOBJ(336,global)
+ if rc=-2 Quit $$Error^%apiOBJ(308,global)
+ if rc=-3 Quit $select(+$$Error^%apiOBJ(321,global):$$Error^%apiOBJ(184),1:$$AppendStatus^%occSystem($$Error^%apiOBJ(321,global),$$Error^%apiOBJ(184)))
+ s val=rc
+ Quit 1
+errGetKeep
+ Set $Ztrap="" Quit $$Error^%apiOBJ(179,$Zerror)
+}
+SetKeepType(dir,global,set) [] PUBLIC
+{
+ Set $Ztrap="errSetKeepType"
+ i $g(dir)']"" s dir=$zu(12,"")
+ s dirinfo=$zu(49,dir)
+ i +dirinfo<0 q $select(+$$Error^%apiOBJ(321,global):$$Error^%apiOBJ(184),1:$$AppendStatus^%occSystem($$Error^%apiOBJ(321,global),$$Error^%apiOBJ(184)))
+ s rc=$zu(167,6,1,dir,global,$s(set:$zu(40,0,57),1:0))
+ if rc=-1 Quit $$Error^%apiOBJ(336,global)
+ if rc=-2 Quit $$Error^%apiOBJ(308,global)
+ if rc=-3 Quit $select(+$$Error^%apiOBJ(321,global):$$Error^%apiOBJ(184),1:$$AppendStatus^%occSystem($$Error^%apiOBJ(321,global),$$Error^%apiOBJ(184)))
+ if rc=-4 Quit $$Error^%apiOBJ(348,set)
+ Do effectChange(global,dir,0)
+ If 'set,'$D(@global) Set @global=1 Kill @global
+ Quit 1
+errSetKeepType
+ Set $Ztrap="" Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+SetJournalType(dir,global,set) [] PUBLIC
+{
+ Set $Ztrap="errSetJournalType"
+ i $g(dir)']"" s dir=$zu(12,"")
+ Set dirinfo=$zu(49,dir)
+ If +dirinfo<0 Quit $select(+$$Error^%apiOBJ(325,global):$$Error^%apiOBJ(184),1:$$AppendStatus^%occSystem($$Error^%apiOBJ(325,global),$$Error^%apiOBJ(184)))
+ Quit 1
+errSetJournalType
+ Set $Ztrap="" Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+GetJournalType(dir,global,val) [] PUBLIC
+{
+ i $g(dir)']"" s dir=$zu(12,"")
+ Set dirinfo=$zu(49,dir)
+ If +dirinfo<0 q $$Error^%apiOBJ(184)
+ Set $Ztrap="errGetJournalType"
+ s val=0 Quit 1
+errGetJournalType
+ Set $Ztrap="" If $Zerror["<NOTOPEN>" Quit $$Error^%apiOBJ(184)
+ Quit $$Error^%apiOBJ(5002,$Zerror)
+} 
+GetCollationType(dir,global,val) [] PUBLIC
+{
+ i $g(dir)']"" s dir=$zu(12,"")
+ Set dirinfo=$zu(49,dir)
+ If +dirinfo<0 q $$Error^%apiOBJ(184)
+ Set $Ztrap="errGetCollation"
+ s rc=$zu(167,6,2,dir,global)
+ if rc=-1 Quit $$Error^%apiOBJ(336,global)
+ if rc=-2 Quit $$Error^%apiOBJ(308,global)
+ if rc=-3 Quit $$Error^%apiOBJ(184)
+ s val=rc
+ q 1
+errGetCollation
+ Quit $$Error^%apiOBJ(179,$Zerror)
+} 
+findTypeOffset(glo,dirinfo,blk) [] PRIVATE
+{
+    If '$Piece(dirinfo,",",21) { Quit $$Error^%apiOBJ(90) }
+    Set blk=$Piece(dirinfo,",",7)
+    If (blk\1'=blk)||(blk<1) {
+        Quit $$Error^%apiOBJ(6075,blk)
+    }
+    Set:$e(glo)'="^" glo="^"_glo
+    Do {
+	View blk
+	If $v($zu(40,32,0),0,4) {
+	    For i=1:2 {
+		Set name=$v(i,-5)
+		Quit:name=""
+		Goto:name=glo fin
+	    }
+	}
+	Set blk=$v($Zutil(40,32,4),0,4)
+    } While blk
+    Quit $$Error^%apiOBJ(308,glo)
+fin Set node=(i+1)/2
+    Set off=$zu(40,32,10),nodeinfo=$Zutil(167,0,0,$View(off,0,4))
+    For i=1:1:node-1 {
+        Set nodeinfo=$Zutil(167,0,0,$v(off,0,4)),len=$Piece(nodeinfo,"^",4)
+	Set off=off+len
+    }
+    Set nodeinfo=$Zutil(167,0,0,$View(off,0,4))
+    Set off=off+4 ; past the info word
+    Set off=off+$Piece(nodeinfo,"^",2)+$Piece(nodeinfo,"^",5)
+    If 'off { Quit $$Error^%apiOBJ(324) }
+    Quit off
+}
+CheckPointerIntegrity(dir,blk,errmaxperglobal,numblks,glo,&glolist) [errorLogged,errorreturn] PUBLIC {
+    New errorreturn
+    Quit $$CheckIntegrity(0,.numblks,dir,blk,.errmaxperglobal,.glo,.glolist)
+}
+CheckGlobalIntegrity(dir,glo,errmaxperglobal,
+                     &glototblks,&glopntblks,&glototbytes,&glopntbytes,
+                     &globigblks,&globigbytes,&globigstrings,&datasize,
+		     maperrflg,&errarr)
+                     [errorLogged,errorreturn] PUBLIC {
+    New errorLogged
+    Quit $$CheckIntegrity(1,0,dir,,.errmaxperglobal,glo,,,
+                          .glototblks,.glopntblks,.glototbytes,.glopntbytes,
+                          .globigblks,.globigbytes,.globigstrings,.datasize,
+			  .maperrflg,.errarr)
+}
+CheckDirIntegrity(dir,&%err,skipglobals,errmaxperglobal,errmaxperdir,globals) [errorLogged,errorreturn] PUBLIC {
+    New errorLogged,errorreturn
+    Set startdirtime=$zh
+    Set errdirtotal=0
+    Set skipglobals=$g(skipglobals)
+    Set errmaxperglobal=$g(errmaxperglobal,100)
+    Set errmaxperdir=$g(errmaxperdir,500)
+    Set globals=$g(globals)
+    Set out=$g(%err)
+    Set:out="" out="%err",%err=""
+    Set sc=1,scunexpected=1
+    Try {
+        Kill @out@(dir)
+    } Catch {
+        If $ZE["<SYNTAX" {
+	    Set sc=$$Error^%apiOBJ(216,out)
+	} ElseIf $ZE["<SUBSCRIPT" {
+	    Set sc=$$Error^%apiOBJ(5007,dir)
+	} Else {
+	    Set sc=$$Error^%apiOBJ(5002,$ZE)
+	}
+    }
+    Quit:('sc) sc
+    Set dirinfo=$zu(49,dir)
+    If dirinfo<0  {
+        If +dirinfo=-1,'$case($v($Piece(dirinfo,",",21)*$ZU(40,0,1)+$zu(40,2,128),-2,$ZU(40,0,1)),4294967295:0,:1) {
+	    Set sc=$$Error^%apiOBJ(327,$Piece(dirinfo,",",2)\1024)
+	} Else {
+	    Set sc=$$Error^%apiOBJ($case(+dirinfo,-1:300,-2:6046,:314),dir)
+	}
+	Set @out@(dir)=$lb(1,$lb($zh-startdirtime),$e(sc,3,*))
+	Quit sc
+    }
+    Set bigdb=$Piece(dirinfo,",",21)
+    If 'bigdb {
+        Set sc=$$Error^%apiOBJ(344)
+	Set @out@(dir)=$lb(1,$lb($zh-startdirtime),$e(sc,3,*))
+	Quit sc
+    }
+    Set scdir=$$GetDirGlobalsINTEG(dir,.glolist,.errs),sc=scdir
+    For i=1:1:errs { Set sc=$select(+sc:errs(i),1:$$AppendStatus^%occSystem(sc,errs(i))) }
+    Set errdirtotal=errdirtotal+errs 					// JPL1701
+    If 'scdir { Set @out@(dir)=$lb(,$lb($zh-startdirtime),$e(sc,3,*)) Quit scdir }
+    Set rc=$$CheckFreeCount(dir,.freecount)
+    If ('+rc) {
+	Set errdirtotal=errdirtotal+1
+	Set sc=$select(+sc:rc,1:$$AppendStatus^%occSystem(sc,rc))
+    }
+    Set rc=$$CheckMaps(dir)
+    If ('+rc) {
+        Set errdirtotal=errdirtotal+1
+	Set sc=$select(+sc:rc,1:$$AppendStatus^%occSystem(sc,rc))
+    }
+    Set dirpntbytes=0,
+	dirtotbytes=0,
+	dirpntblks=0,
+	dirtotblks=0,
+	dirbigbytes=0,
+	dirbigblks=0,
+	dirbigstrings=0
+    If globals'="" {
+        Merge oldlist=glolist
+	Kill glolist
+	For i=1:1:$ll(globals) {
+	    Set glo=$li(globals,i)
+	    Set glolist(glo)=$g(oldlist(glo))
+	}
+    }
+    Set glo=""
+    For {
+	Set glo=$o(glolist(glo))
+	Quit:glo=""
+	Continue:$LF(skipglobals,glo)
+	Set rc=$$CheckIntegrity(1,0,dir,,100,glo,.glolist,dirinfo,
+				.glototblks,.glopntblks,.glototbytes,.glopntbytes,
+				.globigblks,.globigbytes,.globigstrings,.datasize,
+				1,.%err)
+	If ('+rc) {
+	    Set errdirtotal=errdirtotal+1
+	    Set:errdirtotal'<500 errorreturn="abortdir"
+	    If ($system.Status.GetErrorCodes(rc)'=267) {
+	        Set scunexpected=$select(+scunexpected:rc,1:$$AppendStatus^%occSystem(scunexpected,rc))
+	        Set sc=$select(+sc:rc,1:$$AppendStatus^%occSystem(sc,rc))
+	    }
+	}
+	Set dirtotblks=dirtotblks+glototblks,
+	    dirtotbytes=dirtotbytes+glototbytes,
+	    dirpntblks=dirpntblks+glopntblks,
+	    dirpntbytes=dirpntbytes+glopntbytes,
+	    dirbigblks=dirbigblks+globigblks,
+	    dirbigbytes=dirbigbytes+globigbytes,
+	    dirbigstrings=dirbigstrings+globigstrings
+	Quit:$g(errorreturn)="abortdir"
+	Quit:$g(errorreturn)="abortsys"
+    }
+    Set tmp=$lb(errdirtotal,$lb($zh-startdirtime,freecount,dirtotblks,dirtotbytes,dirpntblks,dirpntbytes,dirbigblks,dirbigbytes,dirbigstrings))
+    Set:'sc tmp=tmp_$lb($e(sc,3,*))
+    Set @out@(dir)=tmp
+    Set:errdirtotal sc=$$Error^%apiOBJ(267)
+    Set:('scunexpected) sc=$select(+sc:scunexpected,1:$$AppendStatus^%occSystem(sc,scunexpected))
+    Quit sc
+}
+CheckIntegrity(startattop,numblks,dir,blk,errmaxperglobal,glo,&glolist,dirinfo,
+                &glototblks,&glopntblks,&glototbytes,&glopntbytes,
+                &globigblks,&globigbytes,&globigstrings,&datasize,
+		maperrflg,&%err)
+                [errorLogged,errorreturn] PUBLIC {
+    Set st=$ZH
+    Set:'$Data(errmaxperglobal) errmaxperglobal=1
+    Set:'$Data(numblks) numblks=1
+    Set blkchange=0	; Flag that errors only happened with block changes
+    Set $zt="errIntegrit"
+    Set topptr=0,sc=1,scmap=1,scmsg=1,scwar=1
+    Set errglobaltotal=0,maperrtotal=0		// JPL1701+
+    Set glototblks=0,glopntblks=0,glototbytes=0,glopntbytes=0,globigblks=0,
+        globigbytes=0,globigstrings=0		// JPL1701-
+    Set:'$D(dirinfo) dirinfo=$zu(49,dir)
+    If dirinfo<0 {
+	Set sc=$$Error^%apiOBJ(184)
+	Set errglobaltotal=errglobaltotal+1 			//JPL1701
+	Goto intdone
+    }
+    Set blksize=$p(dirinfo,",",2)
+    If blksize=2048 {
+	Set sc=$$Error^%apiOBJ(344)
+	Set errglobaltotal=errglobaltotal+1 			//JPL1701
+	Goto intdone
+    }
+    Set curblks=$p(dirinfo,",",22)
+    Set datasize=$Case(blksize,2048:2036,:(blksize-$zu(40,32,10)))
+    Set bigdatasize=datasize
+    Set big=$p(dirinfo,",",21)
+    Open 63:"^^"_dir
+    Set level=1
+    Set lowerblktype=""
+    Set errorreturn=""
+    Set errsave=0
+    Set integdebugflg=+$g(^CacheTemp.ISC.IntegDBG)
+    Set begtim=$h
+    If 'startattop {
+        If (blk\1'=blk)||(blk<1) {					// SJ2835+
+	    Set sc=$select(+sc:$$Error^%apiOBJ(6075,blk),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(6075,blk)))
+	    Set errglobaltotal=errglobaltotal+1				// JPL1701
+	    Goto intdone
+	}								// SJ2835-
+	View blk
+	Set:'($d(gcollate)#2) gcollate=$v($zu(40,32,2),0,1)
+	Set pntblktype=$v($Zutil(40,32,1),0,1)						// SJ2836+
+	If '($c(2,6,66,70)[$c(pntblktype)) {
+            Set sc=$select(+sc:$$Error^%apiOBJ(173,blk,pntblktype),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(173,blk,pntblktype)))
+	    Set errglobaltotal=errglobaltotal+1				// JPL1701
+	    Goto intdone
+	}								// SJ2836-
+	Set blkglo=$$GetGlobalName^|"%SYS"|DMREPAIR(1)
+	If '($d(glo)#2) {
+	    Set glo=blkglo
+	} ElseIf glo'=blkglo {
+	    Set sc=$$Error^%apiOBJ(211)
+	    Set errglobaltotal=errglobaltotal+1				// JPL1701
+   	    Goto intdone
+	}
+        If $g(glolist)'=dir {
+            Set sc=$$GetDirGlobalsINTEG(dir,.glolist)
+	    If ('sc) {
+	        Set errglobaltotal=errglobaltotal+1 			//JPL1701
+	        Goto intdone
+	    }
+	    Set glolist=dir
+        }
+        If '$LG($g(glolist(glo))) {
+	    Set sc=$$Error^%apiOBJ(172)
+	    Set errglobaltotal=errglobaltotal+1 			//JPL1701
+	    Goto intdone
+	}
+	Set col=$LG($g(glolist(glo)),2)
+	If gcollate'=col {
+	    Set sc=$$Error^%apiOBJ(252,col,gcollate)
+	    Set errglobaltotal=errglobaltotal+1 			//JPL1701
+	    Goto intdone
+	}
+	Set sc=$$IsBlockAllocated^|"%SYS"|DMREPAIR(dir,blk,.result)
+	If ('sc) {
+	    Set errglobaltotal=errglobaltotal+1 			//JPL1701
+	    Goto intdone
+	}
+	Open 63:"^^"_dir
+        View blk
+        Do newlevel
+        Set:'totblks totblks=1
+        Do:errorreturn="" writelevel(lowerblktype,totblks,totbytes,bigstrings,bigblks,bigbytes,blksize,datasize,bigdatasize,.scmsg,.inf)
+    } Else {
+        Set:$e(glo)="^" glo=$e(glo,2,*)
+        Set glototblks=0,glopntblks=0,glototbytes=0,glopntbytes=0,globigblks=0,
+            globigbytes=0,globigstrings=0
+        If '$d(glolist) {
+            Set sc=$$GetDirGlobalsINTEG(dir,.glolist)
+	    If ('sc) {
+	        Set errglobaltotal=errglobaltotal+1 			//JPL1701
+	        Goto intdone
+	    }
+        }
+        Set blk=+$LG($g(glolist(glo))),gcollate=$LG($g(glolist(glo)),2)
+        If 'blk {
+	    Set sc=$$Error^%apiOBJ(172)
+	    Set errglobaltotal=errglobaltotal+1 			//JPL1701
+	    Goto intdone
+	}
+        If (blk\1'=blk)||(blk<0) {				// SJ2912+
+	    Set sc=$$Error^%apiOBJ(6075,blk)
+	    Set errglobaltotal=errglobaltotal+1 			//JPL1701
+	    Goto intdone
+	}							// SJ2912-
+	Set sc=$$IsBlockAllocated^|"%SYS"|DMREPAIR(dir,blk,.result)
+	If ('sc) {
+	    Set errglobaltotal=errglobaltotal+1 			//JPL1701
+	    Goto intdone
+	}
+	Set:'result topptr=blk
+	Open 63:"^^"_dir
+        View blk
+        If $v($zu(40,32,10)+4,0,-$l(glo))'=glo {
+	    Set sc=$$Error^%apiOBJ(211)
+	    Set errglobaltotal=errglobaltotal+1 			//JPL1701
+	    Goto intdone
+        }
+	Set link=$v($Zutil(40,32,4),0,4)
+	If link {
+	    Set sc=$$Error^%apiOBJ(276,blk,link)
+	    Set errglobaltotal=errglobaltotal+1 			//JPL1701
+	    Goto intdone
+	}							// SJ3023-
+        Set glototblks=1,
+            glopntblks=1,
+            glototbytes=$v($zu(40,32,0),0,4),
+            glopntbytes=glototbytes
+        Do writelevel($v($Zutil(40,32,1),0,1),glopntblks,glopntbytes,0,0,0,blksize,datasize,bigdatasize,.scmsg,.inf)
+        Set startglotime=$zh
+	Set prevtotblks=(glototbytes+7)\8
+        For {
+            Do newlevel
+            Set:'totblks totblks=1
+	    Set prevtotblks=totblks
+            Quit:errorreturn'=""
+            Do writelevel(lowerblktype,totblks,totbytes,bigstrings,bigblks,bigbytes,blksize,datasize,bigdatasize,.scmsg,.inf)
+            Set glototblks=glototblks+totblks+bigblks,
+                glototbytes=glototbytes+totbytes+bigbytes,
+                globigblks=globigblks+bigblks,
+                globigbytes=globigbytes+bigbytes,
+                globigstrings=globigstrings+bigstrings
+            Set level=level+1
+            Quit:lowerblktype=8
+            Set glopntblks=glopntblks+totblks,
+                glopntbytes=glopntbytes+totbytes
+	    Set blk=nextlower
+	    If (blk\1'=blk)||(blk<1) {				// SJ2912+
+	        Set sc=$select(+sc:$$Error^%apiOBJ(6075,blk),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(6075,blk)))
+	        Set errglobaltotal=errglobaltotal+1 			//JPL1701
+		Set errorreturn="abortglo"
+		Quit
+	    }							// SJ2912-
+	    View blk
+        }
+        If errorreturn="" {
+            Set kb=glototblks*(blksize\1024),mb=0
+            Set:kb>10240 kb=kb\1024,mb=1
+            Set kb=$fn(kb,","),a=$fn(glototblks,",")
+            Set scmsg=$$AppendStatus^%occSystem(scmsg,1_$e($$Error^%apiOBJ($Select(mb:202,1:106),a,kb,(glototbytes\glototblks*100\datasize)),2,*))
+            Set scmsg=$$AppendStatus^%occSystem(scmsg,1_$e($$Error^%apiOBJ(107,$fn($zh-startglotime,"",1),$zdt($h,-1)),2,*))
+        }
+    }
+    Close 63
+intdone ; Save messages and return
+    If '$d(%err) {
+	If 'sc {
+	    // We have some global errors
+	    Set tmp=$$AppendStatus^%occSystem(scmap,scmsg)
+	    Set tmp=$$AppendStatus^%occSystem(tmp,1_$e($$Error^%apiOBJ(210),2,*))
+	    If blkchange {
+	        Set tmp=$$AppendStatus^%occSystem(tmp,$$Error^%apiOBJ(272,$Get(glo)))
+	        Set tmp=$$AppendStatus^%occSystem(tmp,$$Error^%apiOBJ(273))
+	    } Else {
+	        Set tmp=$$AppendStatus^%occSystem(tmp,$$Error^%apiOBJ(123,$Get(glo)))
+	    }
+	    Set:'scwar tmp=$$AppendStatus^%occSystem(tmp,scwar)
+	    Set sc=$$AppendStatus^%occSystem(tmp,sc)
+	} ElseIf scwar'=1 {	// Check if it is not simply 1 (i.e. has warning messages)
+	    // We have some global warnings, no errors
+	    Set tmp=$$AppendStatus^%occSystem(scmap,scmsg)
+	    Set tmp=$$AppendStatus^%occSystem(tmp,1_$e($$Error^%apiOBJ(210),2,*))
+	    Set tmp=$$AppendStatus^%occSystem(tmp,1_$e($$Error^%apiOBJ(271,$Get(glo)),2,*))
+	    Set sc=$$AppendStatus^%occSystem(tmp,scwar)
+	} Else {	// We may have some database map errors, or only messages
+	    Set sc=$$AppendStatus^%occSystem(scmap,scmsg)
+	}
+    } Else {
+	Set out=$s(%err="":"%err",1:%err)
+	Kill @out@(dir,glo)
+	Set @out@(dir,glo)=$lb(errglobaltotal-maperrtotal,$lb($zh-st,level,glototblks,glototbytes,glopntblks,glopntbytes,globigblks,globigbytes,globigstrings))_$g(inf)
+	If 'scmap {
+	    Set tmp=$g(@out@(dir)),tmpmap=$lg(tmp,3,1),tmpmap=$$remduperr($select(+tmpmap:scmap,1:$$AppendStatus^%occSystem(tmpmap,scmap)))
+	    Set maperrtotal=$ll(tmpmap),$li(tmp)=maperrtotal,$li(tmp,3)=tmpmap,@out@(dir)=tmp
+	}
+	Set @out@(dir,glo,0)=$e(scmsg,3,*)
+	Set:'scwar @out@(dir,glo,1)=$e(scwar,3,*)
+	If sc {
+	    Set sc=scmsg
+	} Else {
+	    Set @out@(dir,glo,2)=$e(sc,3,*)
+	    Set sc=$$Error^%apiOBJ(267)
+	}
+    }
+    Quit sc
+errIntegrit Set $Ztrap=""
+    Close 63
+    Quit:$ze["<NOTOPEN>" $$Error^%apiOBJ(184)
+    Quit $$Error^%apiOBJ(5002,$Zerror)
+newlevel ;
+    Set $zt="errtrap"
+    Set totblks=0,totbytes=0,bigblks=0,bigbytes=0,bigstrings=0
+    Set pntblktype=$v($Zutil(40,32,1),0,1)
+    If '($c(2,6,66,70)[$c(pntblktype)) {
+        Set sc=$select(+sc:$$Error^%apiOBJ(173,blk,pntblktype),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(173,blk,pntblktype)))
+        Goto endchk
+    }
+    If pntblktype'=66,pntblktype'=70 {
+	If level=1,startattop {
+	    Set sc=$select(+sc:$$Error^%apiOBJ(174,blk,pntblktype),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(174,blk,pntblktype)))
+	    Goto endchk
+	}
+    } ElseIf level>1 {
+        Set sc=$select(+sc:$$Error^%apiOBJ(175,blk,pntblktype),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(175,blk,pntblktype)))
+        Goto endchk
+    }
+    Quit:errorreturn'=""
+    Set lowerblktype=$case(pntblktype,6:8,70:8,:0)
+    Kill errsave Set errsave=0
+    Set gcol=$G(gcollate)*65536
+    If lowerblktype=8,startattop {
+	Set maxblks=$S(prevtotblks<32:64,prevtotblks<10000:2*prevtotblks,1:prevtotblks+10000)
+	Set value=$zu(92,0,blk,glo,gcollate,maxblks)
+	Set listp=0,rc=-1
+	If $listnext(value,listp,rc),$listnext(value,listp,totals) {
+	    Set totblks=$li(totals),totbytes=$li(totals,2),bigblks=$li(totals,3),bigbytes=$li(totals,4),bigstrings=$li(totals,5)
+	    While $listnext(value,listp,err) { Set errsave=errsave+1,errsave(errsave)=$LB(8)_err }
+	    For errpass=1:1:3 {
+		Quit:$D(errsave)=1
+		Do cluwdwait(dir)
+		For curerr=1:1:errsave {
+		    Continue:'$D(errsave(curerr),val)
+		    Continue:'$LISTVALID(val)
+		    Continue:$lg(val,8)=-1
+		    Set lowerblktype=$LI(val),
+		        eblk=$LI(val,2),
+			crc=$LI(val,3),
+			lowerlink=$LI(val,4),
+			nextlowergref=$LI(val,5),
+			oldval=$LG(val,7)
+		    // Don't try to read block if block number invalid
+		    Continue:eblk\1'=eblk			// SJ2912
+		    Continue:eblk<1				// SJ2912
+		    View eblk
+		    Set ncrc=$$calccrc(blksize)
+		    // Ignore block if no longer a pointer block
+		    Continue:'($c(2,6,66,70)[$c($v($Zutil(40,32,1),0,1)))		// SJ2913
+		    Set value=$v(lowerlink,-7,nextlowergref,lowerblktype+gcol)
+		    If 'value {
+update		        // Update counters
+			Set totblks=totblks+$p(value,",",2),
+			    totbytes=totbytes+$p(value,",",3),
+			    bigblks=bigblks+$p(value,",",7),
+			    bigbytes=bigbytes+$p(value,",",8),
+			    bigstrings=bigstrings+$p(value,",",9)
+			If ncrc=crc {
+			    Kill errsave(curerr)
+			} Else {
+			    Set errsave(curerr)=$LI(val,1,6)_$LB(0,-1)
+			}
+			Continue
+		    }
+		    Set prevpntblk=$li(val,6),prevval="",newval="",prevlink="",nextlowergref=""
+		    If prevpntblk {
+			// Don't try to read block if block number invalid
+			Continue:prevpntblk\1'=prevpntblk	// SJ2912
+			Continue:prevpntblk<1			// SJ2912
+			Try {
+			    View prevpntblk
+			    Set prevlink=$v($Zutil(40,32,4),0,4)
+			    Continue:'($c(2,6,66,70)[$c($v($Zutil(40,32,1),0,1)))	// SJ2913
+			    If prevlink=eblk {
+			        Set prevval=$v(0,-7,"",lowerblktype+gcol)
+				Set nextlowergref=$p(prevval,",",10,999)
+			    }
+			} Catch {
+			    // Just let it retry again
+			}
+		    }
+		    Try {
+				View eblk
+				Continue:'($c(2,6,66,70)[$c($v($Zutil(40,32,1),0,1)))	// SJ2913
+				Set newval=$v(lowerlink,-7,nextlowergref,lowerblktype+gcol)
+		    } Catch {
+				// Just let it retry again
+		    }
+		    Set:integdebugflg debug(level,$i(debug(level)))=$lb($h,errpass,curerr,errsave,ncrc,prevlink,value,prevval,newval)_val
+		    // Update nextlowergref for next attempt (for errors 3 or 4)
+		    If value>2,value<5 { Set $li(val,5)=nextlowergref }
+		    If newval'="" {
+		        Set value=newval
+			Goto:'newval update
+		    }
+		    Set:ncrc'=crc $LI(val,3)=ncrc,$LI(val,8)=1
+		    Set $li(val,7)=value,errsave(curerr)=val
+		}
+	    }
+	    If $d(errsave)>1 {
+	       For curerr=1:1:errsave {
+	           If $d(errsave(curerr),val) {
+		       Set value=+$lg(val,7)
+		       If $lg(val,8)'=1,value<3,value>4 {} Else { Goto restart }
+		   }
+	       }
+	    }
+	} ElseIf rc=1 {
+	    Set errorreturn="abortdir",
+	        errglobaltotal=errglobaltotal+1,
+		sc=$select(+sc:$$Error^%apiOBJ(111),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(111))),
+		sc=$select(+sc:$$Error^%apiOBJ(181),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(181)))
+	} ElseIf rc=2 {
+endchk	    Set errorreturn="abortglo",
+	        errglobaltotal=errglobaltotal+1,
+		sc=$select(+sc:$$Error^%apiOBJ(182),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(182)))
+	} ElseIf rc=3 {	// Interrupt caught in $v(,-8)
+	    Set $ZE="<INTERRUPT>"
+	    Goto errtrap
+	} Else { // rc=-1
+	    Goto retrylp ; Too many errors to return with $v(,-8,,) retry with $v(,-7,,) loop
+	}
+    } Else {
+retrylp Set nextlower=$v(2,-5)
+	Set prevpntblk=0,
+	    value=",,,,,,,,,"_glo,
+	    pntcount=1
+	Set lowerlink=0
+	Set:startattop maxblks=$S(prevtotblks<32:64,prevtotblks<10000:2*prevtotblks,1:prevtotblks+10000)
+	Kill oldblks
+	For {
+            Set:value lowerblktype=$p(value,",",6)
+	    Set nextlowergref=$p(value,",",10,999)
+	    Set crc=$$calccrc(blksize)
+	    Set value=$v(lowerlink,-7,nextlowergref,lowerblktype+gcol)
+	    If value {
+		If +value=1 {
+		    Set errorreturn="abortdir",
+		        errglobaltotal=errglobaltotal+1,
+			sc=$select(+sc:$$Error^%apiOBJ(111),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(111))),
+			sc=$select(+sc:$$Error^%apiOBJ(181),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(181)))
+		    Quit
+		}
+		For i=1:1:3 {
+		    Do cluwdwait(dir)
+		    View blk
+		    Set ncrc=$$calccrc(blksize)
+		    Set pntlink=$v($Zutil(40,32,4),0,4)
+		    Set oldval=value
+		    Set value=$v(lowerlink,-7,nextlowergref,lowerblktype+gcol)
+		    Set:integdebugflg debug(level,$i(debug(level)))=$lb($h,i,0,errsave,ncrc,prevlink,value,"","",lowerblktype,blk,crc,lowerlink,nextlowergref,prevpntblk)
+		    If 'value {
+			Set:crc'=ncrc errsave=errsave+1,errsave(errsave)=$LB(lowerblktype,blk,ncrc,lowerlink,nextlowergref,prevpntblk,0,-1)
+			Goto addblks
+		    }
+		    If ncrc=crc {
+		        Quit:value=oldval
+		    }
+		}
+		Set errsave=errsave+1
+		Set errsave(errsave)=$LB(lowerblktype,blk,ncrc,lowerlink,nextlowergref,prevpntblk,value,crc'=ncrc)
+		Quit:pntlink>curblks
+		Set lowerlink=0 ; We don't know what should be in this case
+		Set value=""
+	    } Else {
+addblks		Set totblks=totblks+$p(value,",",2),
+		    totbytes=totbytes+$p(value,",",3),
+		    pntlink=$p(value,",",4),
+		    lowerlink=$p(value,",",5),
+		    lowerblktype=$p(value,",",6),
+		    bigblks=bigblks+$p(value,",",7),
+		    bigbytes=bigbytes+$p(value,",",8),
+		    bigstrings=bigstrings+$p(value,",",9)
+	    }
+	    Quit:'pntlink
+	    If numblks { Set numblks=numblks-1 Quit:'numblks }
+	    Set prevpntblk=blk,blk=pntlink,pntcount=pntcount+1
+	    If (blk\1'=blk)||(blk<1) {				// SJ2912+
+	        Set sc=$select(+sc:$$Error^%apiOBJ(6075,blk),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(6075,blk)))
+	        Goto endchk
+	    }							// SJ2912-
+	    If startattop {					// SJ3037
+		If maxblks<2048 {				// SJ3023+
+		    If $d(oldblks(blk)) {
+			Set sc=$select(+sc:$$Error^%apiOBJ(278,level,prevpntblk,blk),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(278,level,prevpntblk,blk)))
+			Goto endchk
+		    }
+		    Set oldblks(blk)=""
+		}
+		If pntcount>maxblks {
+		    Set sc=$select(+sc:$$Error^%apiOBJ(277,level,prevtotblks,pntcount),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(277,level,prevtotblks,pntcount)))
+		    Goto endchk
+		}						// SJ3023-
+	    }							// SJ3037
+	    View blk
+	}
+    }
+    If integdebugflg,$d(debug) {
+        Set debug=$lb(begtim,dir,glo),ind=$i(^CacheTemp.ISC.IntegDBG(0))
+	Merge ^CacheTemp.ISC.IntegDBG(ind)=debug
+    }
+    Set:topptr sc=$select(+sc:$$Error^%apiOBJ(266,topptr),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(266,topptr))),errglobaltotal=errglobaltotal+1
+    Set errcnt=0,chgcnt=0
+    For curerr=1:1:$o(errsave(""),-1) {
+        Continue:'$D(errsave(curerr),val)
+	Set lowerblktype=$LI(val),
+	    blk=$LI(val,2),
+	    lowerlink=$LI(val,4),
+	    nextlowergref=$LI(val,5),
+	    prevpntblk=$LI(val,6),
+	    flg=$LG(val,8),
+	    val=$LI(val,7)
+	If flg {
+	    If flg=-1 {
+	       Set scwar=$select(+scwar:1_$e($$Error^%apiOBJ(210),2,*),1:$$AppendStatus^%occSystem(scwar,1_$e($$Error^%apiOBJ(210),2,*)))
+	       Set scwar=$select(+scwar:1_$e($$Error^%apiOBJ(255,blk),2,*),1:$$AppendStatus^%occSystem(scwar,1_$e($$Error^%apiOBJ(255,blk),2,*)))
+	       Continue
+	    }
+	    Set sc=$select(+sc:1_$e($$Error^%apiOBJ(210),2,*),1:$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ(210),2,*)))
+	    Set sc=$select(+sc:$$Error^%apiOBJ(256,blk),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(256,blk)))
+	    Set chgcnt=chgcnt+1
+	}
+	Set errcnt=errcnt+1
+	Set numerrs=$l(val,"^")
+	For errnum=1:1:numerrs { Set value=$p(val,"^",errnum) Do errorprc }
+	Quit:errorreturn'=""
+    }
+    Set:level=1 blkchange=1
+    Set:errcnt'=chgcnt blkchange=0
+    Set:errorreturn'="" blkchange=0
+    Quit
+restart ;
+    Kill errsave
+    Set errsave=0
+    Try {
+	If (blk\1'=blk)||(blk<1) {				// SJ2912+
+	    Set sc=$$Error^%apiOBJ(6075,blk)
+	    Goto endchk
+	}							// SJ2912-
+	View blk
+	Goto:glo'=$$GetGlobalName^|"%SYS"|DMREPAIR(1) reinit
+	Goto:gcollate'=$v($zu(40,32,2),0,1) reinit
+	Set sc=$$IsBlockAllocated^|"%SYS"|DMREPAIR(dir,blk,.result)
+	Goto:('sc) reinit
+	Open 63:"^^"_dir
+	View blk
+	Set totblks=0,totbytes=0,bigblks=0,bigbytes=0,bigstrings=0
+	Goto retrylp
+    } Catch {
+    }
+reinit ;
+    Try {
+	Set nsc=$$GetDirGlobalsINTEG(dir,.newglolist)
+	If ('nsc) { Set sc=$select(+sc:nsc,1:$$AppendStatus^%occSystem(sc,nsc)) Goto endchk }
+        Set blk=+$LG($g(newglolist(glo))),gcollate=$LG($g(newglolist(glo)),2)
+        If 'blk {
+	    Set sc=$select(+sc:$$Error^%apiOBJ(172),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(172)))
+	    Goto endchk
+	}
+	If (blk\1'=blk)||(blk<0) {				// SJ2912+
+	    Set sc=$select(+sc:$$Error^%apiOBJ(6075,blk),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(6075,blk)))
+	    Goto endchk
+	}							// SJ2912-
+	Set nsc=$$IsBlockAllocated^|"%SYS"|DMREPAIR(dir,blk,.result)
+	If ('nsc) { Set sc=$select(+sc:nsc,1:$$AppendStatus^%occSystem(sc,nsc)) Goto endchk }
+	Open 63:"^^"_dir
+        View blk
+        If $v($zu(40,32,10)+4,0,-$l(glo))'=glo {
+	    Set sc=$select(+sc:$$Error^%apiOBJ(211),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(211)))
+	    Goto endchk
+        }
+	// Walk down to level where we need to retry
+	For curlev=2:1:level {
+	    Set blk=$v(2,-5)
+	    If (blk\1'=blk)||(blk<1) {				// SJ2912+
+	        Set sc=$select(+sc:$$Error^%apiOBJ(6075,blk),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(6075,blk)))
+		Goto endchk
+	    }							// SJ2912-
+	    View blk
+	}
+    } Catch {
+        Set sc=$select(+sc:$$Error^%apiOBJ(5002,$ZE),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(5002,$ZE)))
+        Goto endchk
+    }
+    Set totblks=0,totbytes=0,bigblks=0,bigbytes=0,bigstrings=0
+    Goto retrylp
+errtrap Set $zt="errtrap1"
+    Set errsystotal=$g(errsystotal)+1
+    If $ze["INTERRUPT" { Do CheckInterrupt Quit:errorreturn'="" }
+    Set $zt=""
+    Set sc=$select(+sc:$$Error^%apiOBJ(5002,$ZE),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(5002,$ZE)))
+    Set:$ze'["INTERRUPT" sc=$select(+sc:$$Error^%apiOBJ(180,$Get(value)),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(180,$Get(value))))
+errtrap1 Goto errdone
+CheckInterrupt Set $zt="CheckInterrupt1"
+    Use 0
+    Write !,$p($SYSTEM.Status.GetErrorText($$Error^%apiOBJ(206)),":",2)
+    If $$YESNO(0) { Set errorreturn="abortsys" Quit }
+    Write !,$p($SYSTEM.Status.GetErrorText($$Error^%apiOBJ(207)),":",2)
+    If $$YESNO(0) { Set errorreturn="abortdir" Quit }
+    Write !,$p($SYSTEM.Status.GetErrorText($$Error^%apiOBJ(208)),":",2)
+    If $$YESNO(0) { Set errorreturn="abortglo" Quit }
+CheckInterrupt1 Quit
+errorprc ;
+    Set errcode=+value,
+        curnode=+$p(value,",",2),
+        errmapblk=+$p(value,",",3),
+        errvalue=+$p(value,",",4),
+	errdatblk=+$p(value,",",5)
+    If errcode=1 {
+        Set sc=$select(+sc:$$Error^%apiOBJ(111),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(111)))
+        Set errorreturn="abortdir"
+        Goto errdone
+    }
+    If errcode=20,$g(maperrflg) { Set value="",errorreturn="" Quit }
+    Set sc=$select(+sc:1_$e($$Error^%apiOBJ(210),2,*),1:$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ(210),2,*)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(108,errcode,blk),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(108,errcode,blk)))
+    If prevpntblk,big {
+        Set sc=$select(+sc:$$Error^%apiOBJ(113,prevpntblk),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(113,prevpntblk)))
+        Close 63  
+        If +$$FindLeftBlock^|"%SYS"|DMREPAIR(dir,prevpntblk,.left),'left {
+            Set sc=$select(+sc:$$Error^%apiOBJ(112),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(112)))
+        }
+        Open 63:"^^"_dir
+    }
+    If (blk\1'=blk)||(blk<1) {					// SJ2912+
+	Set sc=$select(+sc:$$Error^%apiOBJ(6075,blk),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(6075,blk)))
+	Set errorreturn="abortglo"
+	Goto errdone
+    }								// SJ2912-
+    View blk
+    Goto:errcode=8 err8
+    Goto:errcode=29 err29
+    If errdatblk {
+        If (errdatblk\1'=errdatblk)||(errdatblk<0) {		// SJ2912+
+	    Set sc=$select(+sc:$$Error^%apiOBJ(6075,errdatblk),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(6075,errdatblk)))
+	    Set errorreturn="abortglo"
+	    Goto errdone
+	}							// SJ2912-
+        View errdatblk
+        Set:('+$$GetNodeReferences^|"%SYS"|DMREPAIR(curnode-1*2+1,,.pntref)) pntref="..."
+        Set sc=$select(+sc:$$Error^%apiOBJ(109,curnode),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(109,curnode)))
+        Set sc=$select(+sc:$$Error^%apiOBJ(274,pntref,errdatblk),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(274,pntref,errdatblk)))
+    } ElseIf curnode {
+        Set:('+$$GetNodeReferences^|"%SYS"|DMREPAIR(curnode-1*2+1,,.pntref)) pntref="..."
+	Set sc=$select(+sc:$$Error^%apiOBJ(109,curnode),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(109,curnode)))
+	Try {							// SJ3022+
+	    Set pntvalue=$v(curnode*2,-5)
+	    Set sc=$select(+sc:$$Error^%apiOBJ(122,pntref,pntvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(122,pntref,pntvalue)))
+	} Catch {
+	    Set sc=$select(+sc:$$Error^%apiOBJ(275,pntref),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(275,pntref)))
+	}							// SJ3022-
+    } Else {
+        Set pntref="",pntvalue=""
+    }
+    Goto $Case(errcode,2:err2,3:err3,4:err4,5:err5,6:err6,7:err7,8:err8,9:err9,
+                       10:err10,11:err11,12:err12,13:err13,14:err14,15:err15,
+                       16:err16,17:err17,18:err18,19:err19,20:err20,21:err21,
+                       22:err22,23:err23,24:err24,25:err25,26:err26,27:err27,
+                       28:err28,30:err30,31:err31,32:err32,33:err33,34:err34,
+                       35:err35,36:err36,
+               :errdone)
+err2 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(116),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(116))) Goto errdone
+err3 ;
+    Set:('+$$GetNodeReferences^|"%SYS"|DMREPAIR(1,,.eref)) eref="..."
+    Set sc=$select(+sc:$$Error^%apiOBJ(117,eref,$v(2,-5),lowerlink),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(117,eref,$v(2,-5),lowerlink)))
+    Goto errdone
+err4 ;
+    Set:('+$$GetNodeReferences^|"%SYS"|DMREPAIR(1,,.eref)) eref="..."
+    Set sc=$select(+sc:$$Error^%apiOBJ(118,eref),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(118,eref)))
+    If lowerblktype=8 {
+        Set sc=$select(+sc:$$Error^%apiOBJ(120),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(120)))
+    } Else {
+        Set sc=$select(+sc:$$Error^%apiOBJ(119),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(119)))
+    }
+    Set sc=$select(+sc:$$Error^%apiOBJ(121,$$decodeReference(nextlowergref,$Zutil(70,1,$View($Zutil(40,32,2),0,1)))),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(121,$$decodeReference(nextlowergref,$Zutil(70,1,$View($Zutil(40,32,2),0,1))))))
+    Goto errdone
+err5 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(125,errvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(125,errvalue)))
+    Set sc=$select(+sc:$S(lowerblktype:$$Error^%apiOBJ(126,lowerblktype),1:$$Error^%apiOBJ(268)),1:$$AppendStatus^%occSystem(sc,$S(lowerblktype:$$Error^%apiOBJ(126,lowerblktype),1:$$Error^%apiOBJ(268))))
+    Goto errdone
+err6 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(128),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(128)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(130),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(130)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(132),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(132)))
+    Goto errdone
+err7 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(127),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(127)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(130),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(130)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(131),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(131)))
+    Goto errdone
+err8 ; 
+    Set sc=$select(+sc:$$Error^%apiOBJ(114),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(114)))
+    Goto errdone
+err9 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(115),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(115)))
+    Goto errdone
+err10 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(133),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(133)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(134),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(134)))
+    Goto errdone
+err11 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(133),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(133)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(135),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(135)))
+    Goto errdone
+err12 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(133),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(133)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(136),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(136)))
+    Goto errdone
+err13 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(133),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(133)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(138),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(138)))
+    Goto errdone
+err14 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(133),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(133)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(139),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(139)))
+    Goto errdone
+err15 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(140),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(140)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(142),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(142)))
+    Goto errdone
+err16 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(141),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(141)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(143),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(143)))
+    Goto errdone
+err17 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(115),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(115)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(144),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(144)))
+    Goto errdone
+err18 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(145,errvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(145,errvalue)))
+    Goto errdone
+err19 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(150),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(150)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(151),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(151)))
+    Goto errdone
+err20 ;
+    Set scmap=$select(+scmap:$$Error^%apiOBJ(152,errmapblk),1:$$AppendStatus^%occSystem(scmap,$$Error^%apiOBJ(152,errmapblk)))
+    Set maperrtotal=maperrtotal+1
+    Goto errdone
+err21 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(153,errvalue,errmapblk),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(153,errvalue,errmapblk)))
+    Goto errdone
+err22 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(154,errvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(154,errvalue)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(155,errmapblk),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(155,errmapblk)))
+    Goto errdone
+err23 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(156),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(156)))
+    Goto errdone
+err24 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(157),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(157)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(158),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(158)))
+    If lowerblktype=8 {
+        Set sc=$select(+sc:$$Error^%apiOBJ(160),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(160)))
+    } Else {
+        Set sc=$select(+sc:$$Error^%apiOBJ(159),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(159)))
+    }
+    If (pntvalue\1'=pntvalue)||(pntvalue<1) {			// SJ2912+
+	Set sc=$select(+sc:$$Error^%apiOBJ(6075,pntvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(6075,pntvalue)))
+	Set errorreturn="abortglo"
+	Goto errdone
+    }								// SJ2912-
+    Try { View pntvalue Set:('+$$GetNodeReferences^|"%SYS"|DMREPAIR(-1,,.eref)) eref="..." }
+    Catch { Set eref="..." }
+    Set sc=$select(+sc:$$Error^%apiOBJ(161,eref),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(161,eref)))
+    View blk
+    Set:('+$$GetNodeReferences^|"%SYS"|DMREPAIR(curnode*2+1,,.eref)) eref="..."
+    Set sc=$select(+sc:$$Error^%apiOBJ(162,eref),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(162,eref)))
+    Goto errdone
+err25 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(163),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(163)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(164),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(164)))
+    If (pntvalue\1'=pntvalue)||(pntvalue<1) {			// SJ2912+
+	Set sc=$select(+sc:$$Error^%apiOBJ(6075,pntvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(6075,pntvalue)))
+	Set errorreturn="abortglo"
+	Goto errdone
+    }								// SJ2912-
+    Try { View pntvalue Set:('+$$GetNodeReferences^|"%SYS"|DMREPAIR(0,,.eref)) eref="..." }
+    Catch { Set eref="..." }
+    If lowerblktype=8 {
+       Set sc=$select(+sc:$$Error^%apiOBJ(166),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(166)))
+       Set sc=$select(+sc:$$Error^%apiOBJ(167,eref),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(167,eref)))
+    } Else {
+       Set sc=$select(+sc:$$Error^%apiOBJ(165,eref),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(165,eref)))
+    }
+    Goto errdone
+err26 ;
+    View blk
+    Set sc=$select(+sc:$$Error^%apiOBJ(110,errvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(110,errvalue)))
+    Try {							// SJ3050+
+	Set pntvalue=$v(curnode+1*2,-5)
+	Set sc=$select(+sc:$$Error^%apiOBJ(168,pntvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(168,pntvalue)))
+    } Catch {
+	Set sc=$select(+sc:$$Error^%apiOBJ(279),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(279)))
+    }								// SJ3050-
+    Goto errdone
+err27 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(169,errvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(169,errvalue)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(170),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(170)))
+    Goto errdone
+err28 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(171,errvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(171,errvalue)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(170),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(170)))
+    Goto errdone
+err29 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(171,0),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(171,0)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(203,errvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(203,errvalue)))
+    Goto errdone
+err30 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(209,errmapblk,errvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(209,errmapblk,errvalue)))
+    Goto errdone
+err31 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(133),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(133)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(250),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(250)))
+    Goto errdone
+err32 ;
+    Set $ZT="err32a"
+    If (pntvalue\1'=pntvalue)||(pntvalue<1) {			// SJ2912+
+	Set sc=$select(+sc:$$Error^%apiOBJ(6075,pntvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(6075,pntvalue)))
+	Set errorreturn="abortglo"
+	Goto errdone
+    }								// SJ2912-
+    View pntvalue
+    For N=1:1 {
+	Set X=$V(N-1*2+1,-6)
+	Quit:X=""
+    }
+    Goto errdone
+err32a ;
+    Set $ZT=""
+    If $ZE["<FUNCTION" {
+        Set sc=$select(+sc:$$Error^%apiOBJ(251,N,pntvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(251,N,pntvalue)))
+    }
+    Goto errdone
+err33 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(252,errvalue,gcollate),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(252,errvalue,gcollate)))
+    Goto errdone
+err34 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(253,errmapblk,errvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(253,errmapblk,errvalue)))
+    Goto errdone
+err35 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(254,errmapblk,errvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(254,errmapblk,errvalue)))
+    Goto errdone
+err36 ;
+    Set sc=$select(+sc:$$Error^%apiOBJ(171,errvalue),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(171,errvalue)))
+    Set sc=$select(+sc:$$Error^%apiOBJ(203,0),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(203,0)))
+    Goto errdone
+ ;
+errdone ;
+    Set errglobaltotal=errglobaltotal+1
+    If errorreturn="abortdir" {
+        Set sc=$select(+sc:$$Error^%apiOBJ(181),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(181)))
+        Quit
+    }
+    Set:errglobaltotal'<errmaxperglobal errorreturn="abortglo"
+    If errorreturn="abortglo" {
+        Set sc=$select(+sc:$$Error^%apiOBJ(182),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(182)))
+        Quit
+    }
+    Set value="",errorreturn=""
+    Quit
+}
+remduperr(sc) PRIVATE {
+    Set sc=$e(sc,3,*)
+    For i=1:1:$ll(sc) {	Set tmp($li(sc,i))="" }
+    Set tmp=""
+    Set i="" For { Set i=$o(tmp(i)) Quit:i=""  Set tmp=tmp_i }
+    Quit tmp
+}
+calccrc(blksize) [] PRIVATE { Set crc=0 For i=0:2048:blksize-2048 { Set crc=$zcrc($v(i,0,-2048),7,crc) } Quit crc }
+cluwdwait(dir) PRIVATE {
+    If $S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0),$ZU(59),$P($ZU(49,dir,2),",",2) {
+        Set wdphase=$V($ZU(40,2,145),-2,4)
+        Set wdpass=$V($ZU(40,2,147),-2,4) ;non-zero = wd's in the middle of a cycle
+        Set:wdphase wdpass=wdpass+1  ;wait for this cycle and the next one
+        For {
+            Quit:$ZU(51,129)
+            Set curwdpass=$v($ZU(40,2,147),-2,4)
+            Quit:curwdpass>wdpass
+            Hang 1
+        }
+    } Else {
+        Hang .5
+    }
+}
+writelevel(blktype,totblks,totbytes,bigstrings,bigblks,bigbytes,blksize,datasize,bigdatasize,&sc,&inf) PRIVATE {
+    Set inf=$g(inf)_$lb($s(blktype=8:$lb(1,totblks,totbytes,bigstrings,bigblks,bigbytes),1:$lb(0,totblks,totbytes)))
+    Set kb=totblks*(blksize\1024),mb=0
+    Set:kb>10240 kb=kb\1024,mb=1
+    Set kb=$fn(kb,","),a=$fn(totblks,",")
+    If (blktype=8 || (blktype=9) || (blktype=12) || (blktype=24)) {
+        Set sc=$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ($Select(mb:201,1:105),a,kb,(totbytes\totblks*100\datasize)),2,*))
+    } ElseIf blktype=70 {
+        Set sc=$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ($Select(mb:200,1:104),a,kb,(totbytes\totblks*100\datasize)),2,*))
+    } ElseIf blktype=2 {
+        Set sc=$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ($Select(mb:199,1:103),a,kb,(totbytes\totblks*100\datasize)),2,*))
+    } ElseIf blktype=6 {
+        Set sc=$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ($Select(mb:198,1:102),a,kb,(totbytes\totblks*100\datasize)),2,*))
+    } ElseIf blktype=66 {
+        Set sc=$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ($Select(mb:197,1:101),a,kb,(totbytes\totblks*100\datasize)),2,*))
+    }
+    If bigstrings {
+        Set kb=bigblks*(blksize\1024),mb=0
+        Set:kb>10240 kb=kb\1024,mb=1
+        Set kb=$fn(kb,","),a=$fn(bigblks,",")
+        Set sc=$$AppendStatus^%occSystem(sc,1_$e($$Error^%apiOBJ($Select(mb:176,1:177),$fn(bigstrings,","),a,kb,bigbytes\bigblks*100\bigdatasize),2,*))
+    }
+}
+GetDirGlobals(dir,array) [temp] PUBLIC
+{
+ new temp
+ k array
+ if $e(dir)'="^"&&(dir'["^") s dir="^^"_dir
+ s rc=$$GetGlobalDirectoryInfo(dir,"temp",.tally,0)
+ Q:('rc) rc
+ s n="" f  s n=$o(temp(n),1,info) q:n=""  s array(n)=$p(info,"^",3)
+ q 1
+}
+GetDirGlobalsCol(dir,&array) PUBLIC {
+    New %
+    Kill array
+    If $e(dir)'="^",dir'["^" { Set dir="^^"_dir }
+    Set rc=$$GetGlobalDirectoryInfo(dir,"%",.tally,0)
+    Quit:('rc) rc
+    Set n=""
+    For {
+        Set n=$o(%(n),1,info)
+        Quit:n=""
+        Set ptrblk=+$p(info,"^",3)
+        Set:ptrblk array(n)=$LB(ptrblk,+$p(info,"^",5))
+    }
+    Quit 1
+}
+GetDirGlobalsINTEG(dir,&array,&errs) PUBLIC {
+    Kill array,errs Set errs=0
+    Set nsp="^^"_dir
+    Set rc=$$GetDatabaseInfo(nsp,.dbinfo)
+    Quit:('rc) rc
+    Set $zt="errdir"
+    Set gdblk=+$p(dbinfo,",",7)
+    If ($Piece(dbinfo,",",2)=2048) { Quit $$Error^%apiOBJ(344) }
+    Open 63:nsp
+    Do {
+	Set gdarr(gdblk)=""
+	If (gdblk\1'=gdblk)||(gdblk<1) {			// SJ2912+
+	    Set rc=$$Error^%apiOBJ(6075,gdblk)
+	    Goto endcls
+	}
+	Set prevblk=gdblk
+	Try { View gdblk }
+	Catch {
+	    Set rc=$$Error^%apiOBJ(257,gdblk)
+	    Goto endcls
+	}							// SJ2912-
+	If $v($Zutil(40,32,1),0,1)'=9 {
+	    Set rc=$$Error^%apiOBJ(270,gdblk,$v($Zutil(40,32,1),0,1))
+	    Goto endcls
+	}
+	If $v($zu(40,32,0),0,4) {
+	    Kill names,values
+	    Set rc=$$ParseRepairViewBuf^|"%SYS"|DMREPAIR(dir,,.names,,.values,,,,,,,.num,.type,.link)
+	    Goto:('rc) endlp
+	    Open 63:nsp ; Reopen view buffer (ParseRepairViewBuf closes it for some reason!)
+	    For i=1:1:num {
+		Set name=names(i),ptrblk=$p(values(i),",")
+		If '$zname(name,3) {
+		    Set errs=errs+1,errs(errs)=$$Error^%apiOBJ(258,name,i,gdblk)
+		} Else {
+		    Set:ptrblk array(name)=$LB(ptrblk,+$p(values(i),",",3))
+		}
+	    }
+	    Set gdblk=link
+	} Else { Set gdblk=$v($Zutil(40,32,4),0,4) }
+        If $d(gdarr(gdblk)) {
+	     Set rc=$$Error^%apiOBJ(269,prevblk,gdblk)
+	     Goto endcls
+	}
+    } While gdblk
+    Close 63
+    Quit 1
+endcls Close 63
+endlp Set $zt="" Quit rc
+errdir Set $Ztrap="" Quit:$Zerror["<NOTOPEN>" $$Error^%apiOBJ(184) Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+SetVars(dir) [dir] PUBLIC
+{
+ s dirinfo=$zu(49,dir) i (+dirinfo)<0 Quit $$Error^%apiOBJ(184)
+ s %blksize=$p(dirinfo,",",2)
+ s %uic=$p(dirinfo,",",3)
+ s %filesize=$p(dirinfo,",",4)
+ s %maxblks=$p(dirinfo,",",6)
+ s %gdirblk=$p(dirinfo,",",7)
+ s %gpblk=$p(dirinfo,",",8)
+ s %ggblk=$p(dirinfo,",",11)
+ s %totvol=$p(dirinfo,",",15)
+ s %isbigdb=$p(dirinfo,",",21)
+ s %curblks=$p(dirinfo,",",22)
+ s %blkspermap=$p(dirinfo,",",23)
+ s %curmaps=$p(dirinfo,",",24)
+ s %freeze=$p(dirinfo,",",12)
+ Quit 1
+}
+setMessage(msgname,msgcode,msgtext)
+ New locale Set locale="ENU"
+ Set global="^%Messages"
+ Set @global@(msgcode,"name")=msgname
+ Set @global@(msgcode,"text",locale)=msgtext
+ Quit  
+DecomposeStatus(sc,msglist,flag,locale) [] PUBLIC
+{
+ s $zt="errDecompose"
+ Set ans=$SYSTEM.Status.DecomposeStatus(sc,.msglist,$Case($g(flag),1:"d",:""),$Get(locale))
+ i '$d(msglist) s msglist=0 q ans
+ f i=1:1:msglist s msglist(i)=$e(msglist(i),$f(msglist(i),":"),$l(msglist(i)))
+ Quit ans
+errDecompose
+ Quit ""
+}
+getEnvironment()
+ Quit $zcvt($e($Get(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,5))@("LOCALE","CURRENT"),"ENU"),1,3),"U")
+Status(err,code,message1,message2,message3,message4)
+ q err_" "_$lb($lb(code,message1,message2,message3,message4))
+AppendStatus(sc1,sc2) ;
+ Set $Ztrap="appendErr"
+ q (+sc1&+sc2)_" "_$e(sc1,3,$l(sc1))_$e(sc2,3,$l(sc2))
+appendErr
+ Set $Ztrap="" 
+ I '$Get(errorLogged) i $zu(9,"","Error occurred while appending messages: "_$ze) Set errorLogged=1
+ s errorreturn="abortdir"
+ Quit sc1 
+ErrorGlobal(errorcode) ;
+ q "^%Messages"
+ ;  
+Import(filename,unicode) ;
+ n (filename,unicode)
+ ;
+ s unicode=+$g(unicode)
+ s mode=$s(unicode:"RK\UnicodeLittle\",1:"R")
+ ;
+ s $zt="ImportEOF"
+ o filename:mode:2 e  w "Can not open file to read: "_filename,! q
+ ;
+ i unicode u filename r header#1
+ ;
+ s locale="ENU"
+ ;
+ f  u filename r line d
+ . i $$parseerrorline(line,.errorname,.errortext,.errorcode,.locale)=0 q
+ . s global=$$ErrorGlobal(errorcode)
+ . s @global@(errorcode,"name")=errorname
+ . s @global@(errorcode,"text",locale)=errortext
+ . s @global@("name",errorname)=errorcode
+ ;
+ImportEOF ;
+ c filename
+ i $p($ze,">",1)'="<ENDOFFILE" w $ZE,!
+ ;
+ q
+ ;
+parseerrorline(line,name,text,code,locale) ;
+ n i,j,l,quote
+ s line=$tr(line,$c(9)," ")
+ i $tr(line,$c(32))="" q 0
+ i $e($tr(line,$c(32)),1,2)="#;" q 0
+ ;
+ i $e($tr(line,$c(32)),1,8)="#;locale" s locale=$e($tr(line,$c(32)),8,*),locale=$p(locale,"""",2) q 0
+ ;
+ s l=$l(line)+1
+ ;
+ s i=0 f j=i+1:1:l q:$e(line,j)'=" "
+ s i=j f j=i+1:1:l q:$e(line,j)=" "
+ s name=$e(line,i,j-1)
+ ;
+ s i=j f j=i+1:1:l q:$e(line,j)'=" "
+ s i=j f j=i+1:1:l q:$e(line,j)=" "
+ s code=+$e(line,i,j-1)
+ ;
+ s i=j f j=i+1:1:l q:$e(line,j)=""""
+ s i=j f j=i+1:1:l i $e(line,j)="""" q:$e(line,j+1)'=""""  s:$e(line,j+1)="""" j=j+1
+ ;
+ s quote=$e(line,i,j)
+ x "set text="_quote
+ ;
+ q 1
+GetFreeCount(dir,free,datafree) [] PUBLIC
+{
+ Set $Ztrap="errGetFreeCount"
+ n $namespace Do $zu(5,"%SYS")
+ i $g(dir)']"" s dir=$zu(12,"")
+ Set db=##class(SYS.Database).%OpenId(dir)
+ s free=0
+ Set sc=db.GetFreeSpace(dir,,.free)
+ Set datafree=free
+ Kill db
+ Quit sc
+errGetFreeCount
+ Set $Ztrap="" Kill db Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+CheckFreeCount(dir,freecount) [] PUBLIC
+{
+    Set $Ztrap="errCheckFreeCount"
+    If $g(dir)']"" { s dir=$zu(12,"") }
+    Set sc=1
+    Set info=$zu(49,dir)
+    If (+info)<-1 { Quit $$Error^%apiOBJ(184) }
+    Set blksiz=$Piece(info,",",2)
+    If blksiz=2048 { Quit $$Error^%apiOBJ(90) }
+    Set bigval=$Piece(info,",",21)
+    Set nummap=$Piece(info,",",24)
+    Set mapsiz=$Piece(info,",",23)
+    Set freecount=0
+    Open 63:"^^"_dir
+    Set curblks=$Piece(info,",",22)
+    Set size=blksiz\4096
+    Set off=$Zutil(40,0,51)+(size*4)
+    Set mapdataoff=off+(((size*32)-size-1)*4) ;macroize this
+    For map=0:1:nummap-1 {
+        Set mapblock=$$findMapBlock(map,bigval)
+	If (mapblock\1'=mapblock)||(mapblock<1) {		// SJ2912+
+	   Set sc=$$Error^%apiOBJ(6075,mapblock)
+	   Quit
+	}							// SJ2912-
+	View mapblock 
+	Set bitcount=0
+	If map=(nummap-1) {
+	    If curblks#mapsiz {Set numbytes=(curblks#mapsiz)\8}
+	    Else {Set numbytes=mapsiz\8}
+	} Else {
+	    Set numbytes=mapsiz\8
+	}
+	Set bits=$View(mapdataoff,0,-(numbytes))
+	Set bitcount=bitcount+$Zbitcount($c(0)_bits),freecount=freecount+$View($zu(40,32,10),0,4)
+	If bitcount'=$View($zu(40,32,10),0,4) Set sc=$select(+sc:$$Error^%apiOBJ(204,mapblock,$View($zu(40,32,10),0,4),bitcount),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(204,mapblock,$View($zu(40,32,10),0,4),bitcount)))
+    }
+    Close 63
+    Quit sc  
+errCheckFreeCount
+    Close 63
+    Set $Ztrap="" i $ze["<NOTOPEN>" q $$Error^%apiOBJ(184)
+    Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+findSATMapBlock(map,bigval) [] PUBLIC
+{
+ Quit $Case(map,0:(5+5),:$Case(bigval,1:(30*32*32)		/* 4kb */+(15*(5+1))+2,2:((31+30)*32*32)	/* 8kb */+(7*(5+1))+2,3:0,4:0,5:0)+map-1)
+}
+findMapBlock(map,bigval) [] PUBLIC
+{
+ If 'bigval Quit map*$Case(bigval,0:400,1:30720,2:62464,3:125952,4:252928,5:506880)+$Case(bigval,0:1,:2)
+ Else  If 'map Quit $Case(bigval,0:1,:2)
+ Set mapsiz=$Case(bigval,0:400,1:30720,2:62464,3:125952,4:252928,5:506880)
+ Set contigcount=$Case(bigval,0:0,1:16,2:8,3:4,4:2,5:1)
+ If map<contigcount {
+    Quit mapsiz+map+1
+ }
+ Else {
+    Set modval=map#contigcount
+    Quit ((map-modval)*mapsiz)+modval+2
+ }
+}
+CheckMaps(dir) [] PUBLIC
+{
+    Set sc=1
+    Try {
+	Set info=$zu(49,dir)
+	If +info<-1 { Set sc=$$Error^%apiOBJ(184) Quit }
+	Set bigval=$Piece(info,",",21)
+	If 'bigval { Set sc=$$Error^%apiOBJ(344) Quit }
+	Set nummap=$Piece(info,",",24)
+	Set mapsiz=$Case(bigval,0:400,1:30720,2:62464,3:125952,4:252928,5:506880)
+	Do GetBitmaps(nummap,bigval,.bitmapsm,.bitmapss,.bitmapsi,.bitmapsI)
+	Open 63:"^^"_dir
+	// get gfcreatedatelow/high from gfstruct in the label block
+	View 1
+	Set datelow=$v(1128,0,4)
+	Set datehigh=$v(1128+4,0,4)
+	// Check Map blocks
+	Set i=""
+	For {
+	    Set i=$o(bitmapsm(i)) Quit:i=""
+	    Do chkmap(.sc,bitmapsm(i),bigval,"m",datelow,datehigh,i)
+	}
+	// Check SATMAP blocks
+	For {
+	    Set i=$o(bitmapss(i)) Quit:i=""
+	    Do chkmap(.sc,bitmapss(i),bigval,"s",datelow,datehigh)
+	}
+	// Check Incremental Bitmap blocks
+	For {
+	    Set i=$o(bitmapsi(i)) Quit:i=""
+	    For j=0:1:5-1 {
+	        Do chkmap(.sc,bitmapsi(i,j),bigval,"i",datelow,datehigh,i,j)
+	    }
+	}
+	// Check Secondary Incremental Bitmap blocks
+	For {
+	    Set i=$o(bitmapsI(i)) Quit:i=""
+	    For j=0:1:5-1 {
+		Do chkmap(.sc,bitmapsI(i,j),bigval,"I",datelow,datehigh,,j)
+	    }
+	}
+    } Catch {
+	Set sc=$select(+sc:$s($ze["<NOTOPEN>":$$Error^%apiOBJ(184),1:$$Error^%apiOBJ(5002,$Zerror)),1:$$AppendStatus^%occSystem(sc,$s($ze["<NOTOPEN>":$$Error^%apiOBJ(184),1:$$Error^%apiOBJ(5002,$Zerror))))
+    }
+    Close 63
+    Quit sc
+}
+GetBitmaps(curmaps,bigval,&bitmapsm,&bitmapss,&bitmapsi,&bitmapsI) PUBLIC {
+    Set contigmaps=$case(bigval,1:16,2:8,3:4,4:2,5:1)
+    Set maxsatblks=$case(bigval,1:5,2:2,3:1,4:1,5:1)
+    Set mapsiz=$case(bigval,1:(30*32*32)		/* 4kb */,2:((31+30)*32*32)	/* 8kb */,3:((31*3+30)*32*32)	/* 16kb */,4:((31*7+30)*32*32)	/* 32kb */,5:((31*15+30)*32*32)	/* 64kb */)
+    If (curmaps=1) {
+        Set lastmap=0
+    } ElseIf (curmaps<contigmaps) {
+        Set lastmap=contigmaps-1
+    } Else {
+	set lastmap=((curmaps\contigmaps+''(curmaps#contigmaps))*contigmaps)-1
+    }
+    ; handle first map special case
+    Set bitmapsm(0)=2 ; first map block is block two
+    For file=0:1:5-1 {
+        Set bitmapsi(0,file)=5+file ; first incrbk is block five
+    }
+    Set bitmapss(0)=bitmapsi(0,0)+5 ; first sat map after incrbks
+    For file=0:1:5-1 {
+        Set bitmapsI(0,file)=bitmapss(0)+1+file
+    }
+    ; second map in first map region special case
+    Quit:'lastmap
+    For i=1:1:maxsatblks-1 {
+        Set bitmapss(i)=mapsiz+2+(i-1)+((contigmaps-1)*(5+1))
+    }
+    Set ms=maxsatblks-1,bitss=bitmapss(ms)+1
+    For i=1:1:maxsatblks-1 {
+        For file=0:1:5-1 {
+	    Set bitmapsI(i,file)=bitss+(file*ms)
+	}
+    }
+    For i=1:1:(contigmaps-1) {
+        Set bitmapsm(i)=mapsiz+i+1
+	For file=0:1:5-1 {
+	    Set bitmapsi(i,file)=mapsiz+2+(i-1)+((file+1)*(contigmaps-1))
+	}
+    }
+    ; done with special first map region, the rest is the general case
+    For i=contigmaps:1:lastmap {
+        Set bitmapsm(i)=(i#contigmaps)+2+(mapsiz*contigmaps*(i\contigmaps))
+	For file=0:1:5-1 {
+	    Set bitmapsi(i,file)=bitmapsm(i)+((file+1)*contigmaps)
+	}
+    }
+}
+blktyp(t) { Quit $case(t,"m":"Map","s":"SATMAP","i":"Incremental Bitmap","I":"Secondary Incremental Bitmap") }
+chkmap(&sc,block,bigval,type,datelow,datehigh,mapnum,filenum) {
+    If (block\1'=block)||(block<1) {				// SJ2912+
+	Set sc=$select(+sc:$$Error^%apiOBJ(6075,block),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(6075,block)))
+	Quit
+    }								// SJ2912-
+    View block
+    If $v(4,0,1)'=16 {
+        Set sc=$select(+sc:$$Error^%apiOBJ(260,$$blktyp(type),block),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(260,$$blktyp(type),block)))
+    }
+    If $v((28+4),0,-9)'=("CacheMap"_type) {
+        Set sc=$select(+sc:$$Error^%apiOBJ(261,$$blktyp(type),block),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(261,$$blktyp(type),block)))
+    }
+    If ((type="m")||(type="i")),($v((28+16),0,4)'=mapnum) {
+	Set sc=$select(+sc:$$Error^%apiOBJ(262,$$blktyp(type),block),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(262,$$blktyp(type),block)))
+    }
+    If ((type="i")||(type="I")),($v((28+13),0,1)'=filenum) {
+	Set sc=$select(+sc:$$Error^%apiOBJ(263,$$blktyp(type),block),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(263,$$blktyp(type),block)))
+    }
+    If (($v((28+24),0,4)'=datelow) ||
+	($v((28+28),0,4)'=datehigh)) {
+	Set sc=$select(+sc:$$Error^%apiOBJ(264,$$blktyp(type),block),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(264,$$blktyp(type),block)))
+    }
+    If $v((28+14),0,1) {
+        Set sc=$select(+sc:$$Error^%apiOBJ(265,$$blktyp(type),block),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(265,$$blktyp(type),block)))
+    }
+    If '$zu(196) {
+        Set sc=$select(+sc:$$Error^%apiOBJ(259,$$blktyp(type),block),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(259,$$blktyp(type),block)))
+    }
+}
+IsMaxDBMounted() [] PUBLIC
+{
+ Set maxdb=$System.License.MaxDB() if maxdb=0 Quit 0
+ Set ndb=0 f i=0:1:($v($zu(40,2,176),-2,4)-1) s t=$zu(49,i,3) i +t>-1 s gfstatus=$p(t,"^",7) i '$zb(+gfstatus,$ZU(40,8,4)+$zu(40,8,10),1) s ndb=ndb+1
+ Quit ndb>=maxdb
+}
+GetGlobalPointers(dir,global,top,firstdata,nodata) [] PUBLIC
+{
+    Set $Ztrap="errGetPointers"
+    Set:$g(dir)']"" dir=$zu(12,"")
+    Set:$Extract(global)="^" global=$Extract(global,2,*)
+    Set gloref="^|"_"""^^"_dir_"""|"_global
+    Set nodata='($Data(@gloref))
+    Set gvec=$zu(208),top=$li(gvec,5),firstdata=+$lg(gvec,24)
+    Quit 1
+errGetPointers
+    Quit $$Error^%apiOBJ(5002,$Zerror)
+}
+CreateGlobal(ns,glo,collation,protect,journal,keep,ptrblk,growthblk) [] PUBLIC {
+ Set $Ztrap="errCreateGlobal"
+ If ns="" Set ns="^^"_$zu(12,"")
+ If $Extract(ns,1,2)'="^^" {
+   Set $Ztrap="errNs" 
+   Set index=$zu(90,3,1,$zcvt(ns,"U"))
+   If 'index s ns="^^"_ns
+ }
+afterNs
+ Set sc=1
+ if $e(glo)="^" s glo=$e(glo,2,$l(glo))
+ Set rc=$Zutil(178,ns,glo,$Case($Data(collation),1:collation,:-1),$Case($Data(protect),1:protect,:-1),-1,$Case($Data(keep),1:keep,:-1),$Case($Data(ptrblk),1:ptrblk,:-1),$Case($Data(growthblk),1:growthblk,:-1))
+ If rc=1 Quit 1
+ If ('rc) Quit $$Error^%apiOBJ(334,glo)
+ If rc=-1 Quit $$Error^%apiOBJ(333,glo)
+ If rc=-2 Quit $$Error^%apiOBJ(335,glo)
+errNs
+ Set $zt="errCreateGlobal",$ze=""
+ Goto afterNs
+errCreateGlobal 
+ Set $Ztrap=""
+ Quit $select(+sc:$$Error^%apiOBJ(5002,$Zerror),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(5002,$Zerror)))
+}
+SystemDatabaseList(dblist) [] PUBLIC {
+	;Returns a list of all directories containing primary
+	;(CACHE.DAT) and secondary (CACHE.EXT) files for the
+	;entire system
+	;
+	;Results returned in dblist, passed by reference
+	;
+	;dblist is killed on entry
+	;
+	;results are:
+	;  dblist(<dir>)=<# of secondary volumes>
+	;  dblist(<dir>,1)=<secondary volume #1>
+	;  dblist(<dir>,2)=<secondary volume #2>
+	;  .
+	;  .
+	;  .
+	;  dblist(<dir>,n)=<secondary volume #n>
+	k dblist
+	f sfn=0:1:$ZU(40,0,41)-1 {
+	   s dbinfo=$ZU(49,+sfn,3)     ; Returns -2 for deleted database
+	   if '+dbinfo {  ;local database
+	      s dbname=$P(dbinfo,"^",2)
+                  do getvolinfo(.dblist,dbname)
+	   }
+	}
+}
+GetGloInt() [] Public {
+    Quit $li($zu(208),14)_$c(0)
+}
+%FREECOUNT(Type="") PUBLIC {
+ s $zt="Error"
+ i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"}
+ Set dir=$zu(12,"")
+ n $namespace d $zu(5,"%SYS")
+ i Type="" {
+	Do FREECOUNT^DATABASE($Case(dir=$zu(12),0:dir,:""))
+ } else {
+	Do FREECOUNT^DATABASE(Type)
+ }
+ q
+Error s $zt=""
+ w !,"Error: "_$ze
+ q
+}
+NSPDatabaseList(NSP,dblist) PUBLIC {
+	;Returns a list of all directories containing primary
+	;(CACHE.DAT) and secondary (CACHE.EXT) files which are
+	;involved in the specified namespace.
+	;
+	;Results returned in dblist, passed by reference
+	;
+	;dblist is killed on entry
+	;
+	;results are:
+	;  dblist(<dir>)=<# of secondary volumes>
+	;  dblist(<dir>,1)=<secondary volume #1>
+	;  dblist(<dir>,2)=<secondary volume #2>
+	;  .
+	;  .
+	;  .
+	;  dblist(<dir>,n)=<secondary volume #n>
+	s NSP=$ZCVT(NSP,"u")
+	new %data  ;must be % variable so %GXLINFO can see it
+	k dblist
+	s trans=$name(%data)
+	do 
+	. n (%data)
+	. do TRANSNSP^%SYS.GXLINFO(trans,NSP)
+	s d=$O(@trans@(NSP,"("))
+	f  {
+		q:"(["'[$E(d_"X")
+		s dir=@trans@(NSP,d,"I")
+		q:$E(dir,3,4)'="^^"  ; not a local database  
+		s db=$E(dir,5,$L(dir)-2)
+		s dblist(db)=""
+		s d=$O(@trans@(NSP,d))
+	}
+	s:'$L(@trans@(NSP,"defsys")) dblist(@trans@(NSP,"defdir"))=""
+	s:'$L(@trans@(NSP,"syssys")) dblist(@trans@(NSP,"sysdir"))=""
+	s n=@trans@(NSP,"#")
+	f i=1:1:n {
+		s ent=$O(@trans@(NSP,"#",i,"slm",0,""))
+		while ($L(ent)) {
+		   s targid=@trans@(NSP,"#",i,"slm",0,ent,"implid")
+		   ; if its local, record the db name
+		   if targid,'$ZU(90,6,targid) s dblist($ZU(90,7,targid))=""
+		   s ent=$O(@trans@(NSP,"#",i,"slm",0,ent))
+		}
+	}
+	k @trans
+	; dblist() is a list of databases, mapped by this namespace,
+	; now check for 2ndary volumes
+	s d=""
+	f  s d=$O(dblist(d)) q:d=""  do getvolinfo(.dblist,d)
+}
+getvolinfo(dblist,dbname) {
+	; Subroutine which takes a database name and generates a
+	; dblist() entry with that name, the # of 2ndary volumes
+	; and the list of directories containing the 2ndary volumes
+	; (if there are any).
+	; 
+	s dbinfo2=$ZU(49,dbname)
+	s volcnt=$P(dbinfo2,",",15)
+	s volcnt=volcnt-1
+	s dblist(dbname)=volcnt
+	if (volcnt) {
+	   if +$P(dbinfo2,",",2)'=2048 {
+	      // New format database
+	      for i=1:1:volcnt {
+		     s dblist(dbname,i)=$ZU(36,dbname,0,i)
+	      }
+	   } else {
+		  // Old format 2KB database
+		  s nextvol=$ZU(36,dbname,0,1)
+		  for i=1:1:volcnt {
+		     s dblist(dbname,i)=nextvol
+			 s nextvol=$ZU(36,nextvol,1,1)
+	      }
+       } 	   
+    }
+}
+decodeReference(iref,colrule)
+ New i,len,ref,start
+ Set len=$Length(iref)
+ Set (i,start)=1
+ Set ref=""
+ Set $Ztrap="errdecodeRef"
+ For i=start:1:len Quit:'$Ascii(iref,i)
+ Set ref=$Extract(iref,start,i-1)_"("""
+ Set start=i+1
+ While (i<len) {
+    For i=start:1:len Quit:'$Ascii(iref,i)  
+    If i=len Set ref=ref_$Zutil(70,3,$Extract(iref,start,i),colrule)_""")"
+    Else  Set ref=ref_$Zutil(70,3,$Extract(iref,start,i-1),colrule)_""","
+    Set start=i+1
+ }
+ Quit ref
+errdecodeRef Set $Zerror="" Quit ref_"..."
+CreateMessagesInc
+ w !,"This routine will create the MESSAGES.INC file from MESSAGES.TXT"
+ w !!,"Add debug messages? No=> " r yn:5 s yn=$zcvt(yn,"U")
+ i yn="Y" s debug=1 
+ e  s debug=0
+ s f="messages.txt",LINES=0,SIZE=0
+ s $zt="EOF"
+ o f u f f  r x d
+ . s LINES=LINES+1
+ . i ($e(x,1,2)="#;")!($tr($tr(x,$c(9)," ")," ","")="") s ^rINC("MESSAGES",0,LINES)=x,SIZE=SIZE+$l(x) q
+ . s x="#define "_$p(x,"""",1) i debug s x=x_"/*"_$p(x,"""",2)_"*/"
+ . s ^rINC("MESSAGES",0,LINES)=x,SIZE=SIZE+$l(x)
+ q
+EOF s $zt=""
+ c f
+ i $ze'["ENDOFFILE" w !,"Error creating MESSAGES.INC - "_$ZE h 10 q
+ s ^rINC("MESSAGES",0,0)=LINES
+ s ^rINC("MESSAGES","SIZE")=SIZE
+ s ^rINC("MESSAGES",0)=$H
+ q
+effectChange(global,dir,typeoff) ;
+ Do  If $Zutil(154)
+ . Set $zt="erreffectChange" If $Get(@("^|""^^"_dir_"""|"_global))
+ Quit
+erreffectChange ;
+ Quit
+RemJob() Public { s $zt="errRemJob"
+ d $zu(5,"%SYS")
+ s save=$name(^CacheTempUtil("REMOTEDIRS"))
+ i +$g(^SYS("CACHESYSVersion"))>=2009.1 {
+	Set Rset = ##class(%Library.ResultSet).%New("Config.Databases:List")
+	d Rset.Execute(,,1)
+	While (Rset.Next()) {
+    	s dir=Rset.Get("Directory")
+    	i '($zversion(1)=1) If $e(dir,$l(dir))=$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"") Set dir=$e(dir,1,$l(dir)-1)
+    	s @save@("Directory",dir)=""
+		k DBList
+		Set rc=##class(Config.Databases).DatabasesByDirectory("",dir,.DBList)
+    	i +rc,DBList'="" s @save@("Directory",dir,$li(DBList))=""
+    	e  s @save@("Directory",dir,"unknown")=""
+ 	}
+ } else {
+	Set Rset = ##class(%Library.ResultSet).%New("SYS.Database:List")
+	d Rset.Execute()
+	While (Rset.Next()) {
+    	s dir=Rset.Get("Directory")
+    	i '($zversion(1)=1) If $e(dir,$l(dir))=$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"") Set dir=$e(dir,1,$l(dir)-1)
+    	s @save@("Directory",dir)=Rset.Get("Status")
+		k DBList
+		Set rc=##class(Config.Databases).DatabasesByDirectory("",dir,.DBList)
+    	i +rc,DBList'="" s @save@("Directory",dir,$li(DBList))=""
+    	e  s @save@("Directory",dir,"unknown")=""
+ 	}
+ }
+ s @save=""
+errRemJob
+ s $zt=""
+ s @save=""
+ Quit ;$$$ERROR($$$CacheError,$Zerror)
+}
+RemJobM() Public { s $zt="errRemJobM"
+ d $zu(5,"%SYS")
+ s save=$name(^CacheTempUtil("REMOTEDIRS"))
+ s mirname=##class(Config.Mirrors).GetMirrorName()
+ s ds=$o(^%SYS("DBRefByName",""),1,dbinfo)
+ s mirrorbit=+$ZU(40,8,28)
+ while ds'="" {
+	 if $p(dbinfo,"^",2)="" {
+		 s info=$ZU(49,$p(dbinfo,"^",3,999))
+		 if +info<-1 {
+			 s ds=$o(^%SYS("DBRefByName",ds),1,dbinfo)
+			 continue
+		 }
+		 s dbattrib=+$p(info,",",17)  ;even when not mounted, $ZU(49) data is returned
+		 if $zb(+dbattrib,+mirrorbit,1)&&(mirname'="") {
+			 s info=$SYSTEM.Mirror.DBGetInfoByName(0,$p(dbinfo,"^",3,999))
+			 if info="DOWN" {
+				 s ds=$o(^%SYS("DBRefByName",ds),1,dbinfo)
+				 continue
+			 }
+			 if ((info="") || (mirname'=$P(info,"^",8))) {
+				 s ds=$o(^%SYS("DBRefByName",ds),1,dbinfo)
+				 continue
+			 }
+			 s dir=":mirror:"_mirname_":"_$P(info,"^",2)
+		 } else {
+			 s dir=":ds:"_ds
+		 }
+		 s @save@("Directory",dir)=""
+		 s @save@("Directory",dir,ds)=""
+	 }
+	 s ds=$o(^%SYS("DBRefByName",ds),1,dbinfo)
+ }
+errRemJobM
+ s $zt=""
+ s @save=""
+ Quit ;$$$ERROR($$$CacheError,$Zerror)
+}
+RemJobGblLst() Public { s $zt="errRemJobGblLst"
+ d $zu(5,"%SYS")
+ s save=$name(^CacheTempUtil("REMOTEGBLS"))
+ s dir=@save@(0) k @save@(0)
+ d GetDirGlobals(dir,.array)
+ m @save=array
+errRemJobGblLst
+ s $zt=""
+ s @save=""
+ Quit ;$$$ERROR($$$CacheError,$Zerror)
+}
+YESNO(default)
+ n a,b,x,v
+ s x=$x
+ s a=$s(default=0:$s($e("%CHUI.YesNo")="%":$g(^%qCacheMsg("%CHUI.YesNo",$s($mvv(58)="":"en",1:$mvv(58)),"NO"),$g(^%qCacheMsg("%CHUI.YesNo","en","NO"),"No message found. Domain: "_"%CHUI.YesNo"_" Id: "_"NO")),1:$g(^CacheMsg("%CHUI.YesNo",$s($mvv(58)="":"en",1:$mvv(58)),"NO"),$g(^CacheMsg("%CHUI.YesNo","en","NO"),"No message found. Domain: "_"%CHUI.YesNo"_" Id: "_"NO"))),1:$s($e("%CHUI.YesNo")="%":$g(^%qCacheMsg("%CHUI.YesNo",$s($mvv(58)="":"en",1:$mvv(58)),"YES"),$g(^%qCacheMsg("%CHUI.YesNo","en","YES"),"No message found. Domain: "_"%CHUI.YesNo"_" Id: "_"YES")),1:$g(^CacheMsg("%CHUI.YesNo",$s($mvv(58)="":"en",1:$mvv(58)),"YES"),$g(^CacheMsg("%CHUI.YesNo","en","YES"),"No message found. Domain: "_"%CHUI.YesNo"_" Id: "_"YES"))))
+ F  DO  Q:$D(v)
+ . W *-1," "_a_" => " R b I b="" S b=a
+ . S b=$zcvt($e(b),"U") 
+ . i b=$s($e("%CHUI.YesNo")="%":$g(^%qCacheMsg("%CHUI.YesNo",$s($mvv(58)="":"en",1:$mvv(58)),"NOAbbreviated"),$g(^%qCacheMsg("%CHUI.YesNo","en","NOAbbreviated"),"No message found. Domain: "_"%CHUI.YesNo"_" Id: "_"NOAbbreviated")),1:$g(^CacheMsg("%CHUI.YesNo",$s($mvv(58)="":"en",1:$mvv(58)),"NOAbbreviated"),$g(^CacheMsg("%CHUI.YesNo","en","NOAbbreviated"),"No message found. Domain: "_"%CHUI.YesNo"_" Id: "_"NOAbbreviated"))) s v=0 q
+ . i b=$s($e("%CHUI.YesNo")="%":$g(^%qCacheMsg("%CHUI.YesNo",$s($mvv(58)="":"en",1:$mvv(58)),"YESAbbreviated"),$g(^%qCacheMsg("%CHUI.YesNo","en","YESAbbreviated"),"No message found. Domain: "_"%CHUI.YesNo"_" Id: "_"YESAbbreviated")),1:$g(^CacheMsg("%CHUI.YesNo",$s($mvv(58)="":"en",1:$mvv(58)),"YESAbbreviated"),$g(^CacheMsg("%CHUI.YesNo","en","YESAbbreviated"),"No message found. Domain: "_"%CHUI.YesNo"_" Id: "_"YESAbbreviated"))) s v=1 q
+ . W *7," "_$s($e("%CHUI.YesNo")="%":$g(^%qCacheMsg("%CHUI.YesNo",$s($mvv(58)="":"en",1:$mvv(58)),"YESNOAnswer"),$g(^%qCacheMsg("%CHUI.YesNo","en","YESNOAnswer"),"No message found. Domain: "_"%CHUI.YesNo"_" Id: "_"YESNOAnswer")),1:$g(^CacheMsg("%CHUI.YesNo",$s($mvv(58)="":"en",1:$mvv(58)),"YESNOAnswer"),$g(^CacheMsg("%CHUI.YesNo","en","YESNOAnswer"),"No message found. Domain: "_"%CHUI.YesNo"_" Id: "_"YESNOAnswer"))),!,?x
+ Q v

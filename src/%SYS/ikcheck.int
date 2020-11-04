@@ -1,0 +1,406 @@
+ROUTINE %SYS.ikcheck [Type=INT]
+%SYSIKCHECK ; 
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+	Quit
+globals(domid) public {
+	new %glob, %domid, %error, %sortfield
+	set %error=0
+	set %domid=domid
+	set %glob="^CacheTemp.ISC.IK.IKCheckReport"
+	set %sortfield=^ISC.IK.Sys.Params(%domid,"SortField")
+	k @%glob@($j)
+	do entities
+	do showreport
+	do literals
+	do showreport
+	do crcs
+	do showreport
+	quit 1
+entities
+	set %error=0
+	do addmessage(0,"Entities","","")
+	set uniCnt=0
+	set occCnt=0
+	set uniId=""
+	for {
+		set uniId=$o(^ISC.IK.EntUniId(%domid,uniId),1,uni)
+		q:uniId=""
+		set uniCnt=uniCnt+1
+		// EntUni and EntUniHash
+		if ($l(uni) > 150) {
+			set hash=$zcrc(uni,7)
+			do:'$d(^ISC.IK.EntUniHash(%domid,hash,uniId)) adderror(2,"No entry for entity: "_uniId,"","^ISC.IK.EntUniHash")
+		} else {
+			set ref=$g(^ISC.IK.EntUni(%domid," "_uni))
+			if (ref="") {
+				do adderror(2,"No entry for entity: "_uniId,"","^ISC.IK.EntUni")
+			} elseif (ref'=uniId) {
+				do adderror(2,"Invalid entry for entity: "_uniId,"","^ISC.IK.EntUni")
+			}
+		}
+		// Frequency and spread indices
+		set details=$g(^ISC.IK.EntUniDetails(%domid,uniId))
+		do:details="" adderror(2,"No details for entity: "_uniId,"","^ISC.IK.EntUniDetails")
+		set cfreq=$list(details), rfreq=$list(details,2)
+		set spread=$list(details,3), cspread=$list(details,4), rspread=$list(details,5)
+		if (cfreq'=0) do:'$d(^ISC.IK.EntUniIdFreq(%domid,0,-cfreq,uniId)) adderror(2,"Frequency mismatch for concept: "_uniId,"","^ISC.IK.EntUniIdFreq")
+		if (rfreq'=0) do:'$d(^ISC.IK.EntUniIdFreq(%domid,1,-rfreq,uniId)) adderror(2,"Frequency mismatch for relation: "_uniId,"","^ISC.IK.EntUniIdFreq")
+		if (cspread'=0) do:'$d(^ISC.IK.EntUniIdSpread(%domid,0,-cspread,uniId)) adderror(2,"Spread mismatch for concept: "_uniId,"","^ISC.IK.EntUniIdSpread")
+		if (rspread'=0) do:'$d(^ISC.IK.EntUniIdSpread(%domid,1,-rspread,uniId)) adderror(2,"Spread mismatch for relation: "_uniId,"","^ISC.IK.EntUniIdSpread")
+		// Entity parts
+		set sort=-$s(%sortfield=0:(cfreq+rfreq),1:spread)
+		Set start=1
+        Do {
+	        Set part=$E(uni,start,*)
+	        continue:part=""
+	        Continue:$E(part)=" "
+	        set bucket=" "_$e(part_"  ",1,3)
+	        do:'$d(^ISC.IK.EntParts(%domid,bucket,sort,uniId,start)) adderror(2,"Entity part """_part_""" not found for entity: "_uniId,"","^ISC.IK.EntParts")
+	        Set start=$F(uni," ",start)
+        } While start
+        // Ngrams
+        if ($s($get(^ISC.IK.Sys.Params(+%domid,"EnableNgrams"))'="":^("EnableNgrams"),1:$get(^ISC.IK.Sys.NSParams("EnableNgrams")))) {
+	       For p=1:1:$length(uni)-2 {
+                Set ngram=" "_$extract(uni,p,p+2)
+                do:'$d(^ISC.IK.EntNgrams(%domid,ngram,sort,uniId)) adderror(2,"Ngram """_ngram_""" not found for entity: "_uniId,"","^ISC.IK.EntNgrams")
+            }
+        }
+		// Occurences
+		do:'$d(^ISC.IK.EntUniToOccBit(%domid,uniId)) adderror(2,"No entry for entity: "_uniId,"","^ISC.IK.EntUniToOccBit")
+		set cnt=0,ccnt=0,rcnt=0,cocccnt=0,rocccnt=0
+		set offset=""
+		for {
+			set offset=$o(^ISC.IK.EntUniToOccBit(%domid,uniId,offset),1,bitstring)
+			q:offset=""
+			set cnt=cnt+$bitcount(bitstring,1)
+			set rmask=$g(^ISC.IK.EntTypeToOccBit(%domid,0,offset))
+			set rmask=$bitlogic(rmask,$bitcount(bitstring))
+			set cmask=$bitlogic(~rmask)
+			set cbitstring=$bitlogic(bitstring&cmask)
+			set rbitstring=$bitlogic(bitstring&rmask)
+			set ccnt=ccnt+$bitcount(cbitstring,1)
+			set rcnt=rcnt+$bitcount(rbitstring,1)
+			set pos=0
+			for {
+				set pos=$bitfind(bitstring,1,pos+1)
+				q:pos=0
+				set occId=""
+				Set occId=((offset-1)*64000)+pos-1
+				set occDetails=$g(^ISC.IK.EntOccId(%domid,occId))
+				do:occDetails="" adderror(2,"Occurrence "_occId_" not found for entity: "_uniId,"","^ISC.IK.EntOccId")
+				set occUniId=$list(occDetails)
+				set occType=$list(occDetails,2)
+				set:occType=0 cocccnt=cocccnt+1
+				set:occType=1 rocccnt=rocccnt+1
+				do:occUniId'=uniId adderror(2,"Occurrence "_occId_" references entity: "_occUniId_", should be: "_uniId,"","^ISC.IK.EntOccId")
+			}
+			set occCnt=occCnt+cnt
+		}
+		do:cnt'=(cfreq+rfreq) adderror(2,"Frequency mismatch with occurrences for entity: "_uniId,"","^ISC.IK.EntUniToOccBit")
+		do:ccnt'=cfreq adderror(2,"Frequency mismatch with concept occurrences for entity: "_uniId,"","^ISC.IK.EntUniToOccBit | ^ISC.IK.EntTypeToOccBit")
+		do:rcnt'=rfreq adderror(2,"Frequency mismatch with relation occurrences for entity: "_uniId,"","^ISC.IK.EntUniToOccBit | ^ISC.IK.EntTypeToOccBit")
+		do:cocccnt'=cfreq adderror(2,"Frequency mismatch with concept occurrences for entity: "_uniId,"","^ISC.IK.EntOccId")
+		do:rocccnt'=rfreq adderror(2,"Frequency mismatch with relation occurrences for entity: "_uniId,"","^ISC.IK.EntOccId")
+	}
+	do addmessage(2,"Total unique entities:",uniCnt,"")
+	do addmessage(2,"Total entity occurrences:",occCnt,"")
+	if ('%error) {
+		do addmessage(0,"No errors found for entities","","")
+	} else {
+		do addmessage(0,"Errors found for entities","","")
+	}
+	do addmessage(0,"","","")
+	quit
+literals
+	set %error=0
+	do addmessage(0,"Literals","","")
+	set litCnt=0
+	set litId=""
+	for {
+		set litId=$o(^ISC.IK.LitUniId(%domid,litId),1,lit)
+		q:litId=""
+		set litCnt=litCnt+1
+		// LitUni and LitUniHash
+		if ($l(lit) > 150) {
+			set hash=$zcrc(lit,7)
+			do:'$d(^ISC.IK.LitUniHash(%domid,hash,litId)) adderror(2,"No entry for literal: "_litId,"","^ISC.IK.LitUniHash")
+		} else {
+			do:$g(^ISC.IK.LitUni(%domid," "_lit))'=litId adderror(2,"No entry for literal: "_litId,"","^ISC.IK.LitUni")
+		}
+		set uniId=$g(^ISC.IK.LitEntUniMap(%domid,litId))
+		do:uniId="" adderror(2,"No entry for literal: "_litId,lit,"^ISC.IK.LitEntUniMap")
+		do:uniId=0 adderror(2,"Invalid entry for literal: "_litId,lit,"^ISC.IK.LitEntUniMap")
+	}
+	do addmessage(2,"Total literals:",litCnt,"")
+	if ('%error) {
+		do addmessage(0,"No errors found for literals","","")
+	} else {
+		do addmessage(0,"Errors found for literals",%error,"")
+	}
+	do addmessage(0,"","","")
+	quit
+crcs
+	set %error=0
+	do addmessage(0,"CRCs and CCs","","")
+	set crcCnt=0
+	set occCnt=0
+	set uniId=""
+	for {
+		set uniId=$o(^ISC.IK.CrcUniId(%domid,uniId),1,crcData)
+		q:uniId=""
+		set crcCnt=crcCnt+1
+		set uniM=$list(crcData), uniR=$list(crcData,2), uniS=$list(crcData,3)
+		set ref=$g(^ISC.IK.CrcUni(%domid,uniM,uniR,uniS))
+		if (ref="") {
+			do adderror(2,"No entry for crc: "_uniId,uniM_"|"_uniR_"|"_uniS,"^ISC.IK.CrcUni")
+		} elseif (ref'=uniId) {
+			do adderror(2,"Invalid entry for crc: "_uniId,uniM_"|"_uniR_"|"_uniS,"^ISC.IK.CrcUni")
+		}
+		if (uniM'=0) {
+			do:'$d(^ISC.IK.EntUniId(%domid,uniM)) adderror(2,"Master entity not found for crc: "_uniId,uniM,"^ISC.IK.EntUniId")
+		}
+		do:'$d(^ISC.IK.EntUniId(%domid,uniR)) adderror(2,"Relation entity not found for crc: "_uniId,uniR,"^ISC.IK.EntUniId")
+		if (uniS'=0) {
+			do:'$d(^ISC.IK.EntUniId(%domid,uniS)) adderror(2,"Slave entity not found for crc: "_uniId,uniS,"^ISC.IK.EntUniId")
+		}
+		set crcDetails=$g(^ISC.IK.CrcUniDetails(%domid,uniId))
+		do:crcDetails="" adderror(2,"No details for crc: "_uniId,"","^ISC.IK.CrcUniDetails")
+		set freq=$list(crcDetails), spread=$list(crcDetails,2)
+		do:'$d(^ISC.IK.CrcUniIdFreq(%domid,-freq,uniId)) adderror(2,"Frequency mismatch for crc: "_uniId,"","^ISC.IK.CrcUniIdFreq")
+		do:'$d(^ISC.IK.CrcUniIdSpread(%domid,-spread,uniId)) adderror(2,"Spread mismatch for crc: "_uniId,"","^ISC.IK.CrcUniIdSpread")
+		if (uniM'=0) {
+			set fbit=$g(^ISC.IK.CrcEntUniFreq(%domid,uniM,-freq,uniId))
+			set sbit=$g(^ISC.IK.CrcEntUniSpread(%domid,uniM,-spread,uniId))
+			if (fbit'=1)&&(fbit'=3)&&(fbit'=5)&&(fbit'=7) {
+				do adderror(2,"Invalid master bit indication for crc: "_uniId,"","^ISC.IK.CrcEntUniFreq")
+			}
+			if (sbit'=1)&&(fbit'=3)&&(fbit'=5)&&(fbit'=7) {
+				do adderror(2,"Invalid master bit indication for crc: "_uniId,"","^ISC.IK.CrcEntUniSpread")
+			}
+		}
+		set fbit=$g(^ISC.IK.CrcEntUniFreq(%domid,uniR,-freq,uniId))
+		set sbit=$g(^ISC.IK.CrcEntUniSpread(%domid,uniR,-spread,uniId))
+		if (fbit'=2)&&(fbit'=3)&&(fbit'=6)&&(fbit'=7) {
+			do adderror(2,"Invalid relation bit indication for crc: "_uniId,"","^ISC.IK.CrcEntUniFreq")
+		}
+		if (sbit'=2)&&(fbit'=3)&&(fbit'=6)&&(fbit'=7) {
+			do adderror(2,"Invalid relation bit indication for crc: "_uniId,"","^ISC.IK.CrcEntUniSpread")
+		}
+		if (uniS'=0) {
+			set fbit=$g(^ISC.IK.CrcEntUniFreq(%domid,uniS,-freq,uniId))
+			set sbit=$g(^ISC.IK.CrcEntUniSpread(%domid,uniS,-spread,uniId))
+			if (fbit'=4)&&(fbit'=6)&&(fbit'=5)&&(fbit'=7) {
+				do adderror(2,"Invalid slave bit indication for crc: "_uniId,"","^ISC.IK.CrcEntUniFreq")
+			}
+			if (sbit'=4)&&(fbit'=6)&&(fbit'=5)&&(fbit'=7) {
+				do adderror(2,"Invalid slave bit indication for crc: "_uniId,"","^ISC.IK.CrcEntUniSpread")
+			}
+		}
+		set uniOff=0
+		set uniPos=0
+		Set uniOff=(uniId\64000)+1,uniPos=(uniId#64000)+1
+		if (uniM'=0) {
+			set bitstring=$g(^ISC.IK.EntUniMToCrcUniBit(%domid,uniM,uniOff))
+			do:$bit(bitstring,uniPos)'=1 adderror(2,"Invalid bit in master bitstring for crc: "_uniId,"","^ISC.IK.EntUniMToCrcUniBit")
+		}
+		set bitstring=$g(^ISC.IK.EntUniRToCrcUniBit(%domid,uniR,uniOff))
+		do:$bit(bitstring,uniPos)'=1 adderror(2,"Invalid bit in relation bitstring for crc: "_uniId,"","^ISC.IK.EntUniRToCrcUniBit")
+		if (uniS'=0) {
+			set bitstring=$g(^ISC.IK.EntUniSToCrcUniBit(%domid,uniS,uniOff))
+			do:$bit(bitstring,uniPos)'=1 adderror(2,"Invalid bit in slave bitstring for crc: "_uniId,"","^ISC.IK.EntUniSToCrcUniBit")
+		}
+		// Occurrences
+		set cnt=0
+		do:'$d(^ISC.IK.CrcUniToOccBit(%domid,uniId)) adderror(2,"No entry for crc: "_uniId,"","^ISC.IK.CrcUniToOccBit")
+		set offset=""
+		for {
+			set offset=$o(^ISC.IK.CrcUniToOccBit(%domid,uniId,offset),1,bitstring)
+			q:offset=""
+			set cnt=cnt+$bitcount(bitstring,1)
+			set pos=0
+			for {
+				set pos=$bitfind(bitstring,1,pos+1)
+				q:pos=0
+				set occId=""
+				Set occId=((offset-1)*64000)+pos-1
+				set occDetails=$g(^ISC.IK.CrcOccId(%domid,occId))
+				do:occDetails="" adderror(2,"Occurrence "_occId_" not found for crc: "_uniId,"","^ISC.IK.CrcOccId")
+				set ref=$list(occDetails), occM=$list(occDetails,2), occR=$list(occDetails,3), occS=$list(occDetails,4)
+				do:ref'=uniId adderror(2,"Invalid reference to crc for occurrence "_occId_" of crc: "_uniId,"","^ISC.IK.CrcOccId")
+				if (occM'=0) {
+					do:'$d(^ISC.IK.EntOccId(%domid,occM)) adderror(2,"Master occurrence not found for crc: "_uniId,occId_"|"_occM,"^ISC.IK.CrcOccId")
+					set refM=$lg(^ISC.IK.EntOccId(%domid,occM))
+					do:refM'=uniM adderror(2,"Master occurrence not corresponding with master entity for crc: "_uniId,"","^ISC.IK.CrcOccId")
+				}
+				do:'$d(^ISC.IK.EntOccId(%domid,occR)) adderror(2,"Relation occurrence not found for crc: "_uniId,occId_"|"_occR,"^ISC.IK.CrcOccId")
+				set refR=$lg(^ISC.IK.EntOccId(%domid,occR))
+				do:refR'=uniR adderror(2,"Relation occurrence not corresponding with relation entity for crc: "_uniId,"","^ISC.IK.CrcOccId")
+				if (occS'=0) {
+					do:'$d(^ISC.IK.EntOccId(%domid,occS)) adderror(2,"Slave occurrence not found for crc: "_uniId,occId_"|"_occS,"^ISC.IK.CrcOccId")
+					set refS=$lg(^ISC.IK.EntOccId(%domid,occS))
+					do:refS'=uniS adderror(2,"Slave occurrence not corresponding with slave entity for crc: "_uniId,"","^ISC.IK.CrcOccId")
+				}				
+			}
+		}
+		set occCnt=occCnt+cnt
+		// CCs
+		if (uniM'=0) && (uniS'=0) {
+			set ccDetails=$g(^ISC.IK.CcUniDetails(%domid,uniM,uniS))
+			d:ccDetails="" adderror(2,"No CC entry for crc: "_uniId,uniM_"|"_uniS,"^ISC.IK.CcUniDetails")
+			set low=$s(uniM<uniS:uniM,1:uniS)
+			set high=$s(uniM>uniS:uniM,1:uniS)
+			set combiDetails=$g(^ISC.IK.CcCombiDetails(%domid,low,high))
+			d:combiDetails="" adderror(2,"No CC combi entry for crc: "_uniId,low_"|"_high,"^ISC.IK.CcCombiDetails")
+			set:ccDetails'="" ccFreq=$list(ccDetails), ccSpread=$list(ccDetails,2)
+			set:combiDetails'="" combiFreq=$list(combiDetails), combiSpread=$list(combiDetails,2)
+			if (combiDetails'="") {
+				do:'$d(^ISC.IK.CcCombiFreq(%domid,uniM,-combiFreq,uniS)) adderror(2,"Frequency mismatch for CC: "_uniM_", "_uniS,"","^ISC.IK.CcCombiFreq")
+				do:'$d(^ISC.IK.CcCombiFreq(%domid,uniS,-combiFreq,uniM)) adderror(2,"Frequency mismatch for CC: "_uniS_", "_uniM,"","^ISC.IK.CcCombiFreq")
+				do:'$d(^ISC.IK.CcCombiSpread(%domid,uniM,-combiSpread,uniS)) adderror(2,"Spread mismatch for CC: "_uniM_", "_uniS,"","^ISC.IK.CcCombiSpread")
+				do:'$d(^ISC.IK.CcCombiSpread(%domid,uniS,-combiSpread,uniM)) adderror(2,"Spread mismatch for CC: "_uniS_", "_uniM,"","^ISC.IK.CcCombiSpread")
+			}
+		}
+	}
+	// CC frequencies and spread
+	set uniM=""
+	for {
+		set uniM=$o(^ISC.IK.CcUniDetails(%domid,uniM))
+		q:uniM=""
+		set moff=""
+		set mpos=""
+		Set moff=(uniM\64000)+1,mpos=(uniM#64000)+1
+		set uniS=""
+		for {
+			set uniS=$o(^ISC.IK.CcUniDetails(%domid,uniM,uniS),1,ccDetails)
+			q:uniS=""
+			set soff=""
+			set spos=""
+			Set soff=(uniS\64000)+1,spos=(uniS#64000)+1
+			do:'$bit(^ISC.IK.EntUniMToEntUniSBit(%domid,uniM,soff),spos)=1 adderror(2,"No link from master to slave for cc: "_uniM_"|"_uniS,"","^ISC.IK.EntUniMToEntUniSBit")
+			do:'$bit(^ISC.IK.EntUniSToEntUniMBit(%domid,uniS,moff),mpos)=1 adderror(2,"No link from slave to master for cc: "_uniM_"|"_uniS,"","^ISC.IK.EntUniSToEntUniMBit")
+			set freq=$list(ccDetails), spread=$list(ccDetails,2)
+			set crcFreq=0
+			set crcSpread=0
+			set uniR=""
+			for {
+				set uniR=$o(^ISC.IK.CrcUni(%domid,uniM,uniR))
+				q:uniR=""
+				set crcId=$g(^ISC.IK.CrcUni(%domid,uniM,uniR,uniS))
+				if (crcId'="") {
+					set crcFreq=crcFreq+$list(^ISC.IK.CrcUniDetails(%domid,crcId))
+					set offset=""
+					for {
+						set offset=$o(^ISC.IK.CrcUniToSrcBit(%domid,crcId,offset),1,bitstring)
+						q:offset=""
+						set crcSpread=crcSpread+$bitcount(bitstring,1)
+					}
+				}
+			}
+			do:freq'=crcFreq adderror(2,"Frequency mismatch between crcs and cc: "_uniM_", "_uniS,freq_"|"_crcFreq,"^ISC.IK.CcUniDetails")
+			do:spread'=crcSpread adderror(2,"Spread mismatch between crcs and cc: "_uniM_", "_uniS,spread_"|"_crcSprea,"^ISC.IK.CrcUniDetails")
+		}
+	}
+	// CC combi frequencies and spread
+	set low=""
+	for {
+		set low=$o(^ISC.IK.CcCombiDetails(%domid,low))
+		q:low=""
+		set high=""
+		for {
+			set high=$o(^ISC.IK.CcCombiDetails(%domid,low,high),1,combiDetails)
+			q:high=""
+			set freq=$list(combiDetails), spread=$list(combiDetails,2)
+			set crcFreq=0
+			set crcSpread=0
+			k bitstrings
+			set uniR=""
+			for {
+				set uniR=$o(^ISC.IK.CrcUni(%domid,low,uniR))
+				q:uniR=""
+				set crcId=$g(^ISC.IK.CrcUni(%domid,low,uniR,high))
+				if (crcId'="") {
+					set crcFreq=crcFreq+$list(^ISC.IK.CrcUniDetails(%domid,crcId))
+					set offset=""
+					for {
+						set offset=$o(^ISC.IK.CrcUniToSrcBit(%domid,crcId,offset),1,bitstring)
+						q:offset=""
+						set ref=$g(bitstrings(offset))
+						set bitstrings(offset)=$bitlogic(ref|bitstring)
+					}
+				}
+			}
+			if (low'=high) {
+				set uniR=""
+				for {
+					set uniR=$o(^ISC.IK.CrcUni(%domid,high,uniR))
+					q:uniR=""
+					set crcId=$g(^ISC.IK.CrcUni(%domid,high,uniR,low))
+					if (crcId'="") {
+						set crcFreq=crcFreq+$list(^ISC.IK.CrcUniDetails(%domid,crcId))
+						set offset=""
+						for {
+							set offset=$o(^ISC.IK.CrcUniToSrcBit(%domid,crcId,offset),1,bitstring)
+							q:offset=""
+							set ref=$g(bitstrings(offset))
+							set bitstrings(offset)=$bitlogic(ref|bitstring)
+						}
+					}
+				}
+			}
+			do:freq'=crcFreq adderror(2,"Frequency mismatch between crcs and cc combi: "_low_", "_high,freq_"|"_crcFreq,"^ISC.IK.CcCombiDetails")
+			set offset=""
+			for {
+				set offset=$o(bitstrings(offset),1,bitstring)
+				q:offset=""
+				set crcSpread=crcSpread+$bitcount(bitstring,1)
+			}
+			k bitstrings
+			do:spread'=crcSpread adderror(2,"Spread mismatch between crcs and cc combi: "_low_", "_high,spread_"|"_crcSprea,"^ISC.IK.CrcUniDetails")
+		}
+	}
+	do addmessage(2,"Total unique crcs:",crcCnt,"")
+	do addmessage(2,"Total crc occurrences:",occCnt,"")
+	if ('%error) {
+		do addmessage(0,"No errors found for crcs and ccs","","")
+	} else {
+		do addmessage(0,"Errors found for crcs and ccs",%error,"")
+	}
+	do addmessage(0,"","","")
+	quit
+addmessage(offset,message,value,glob)
+	set @%glob@($j,$i(@%glob@($j)))=$lb(offset,message,value,glob)
+	quit
+adderror(offset,message,value,glob)
+	set %error=%error+1
+	do addmessage(offset,"ERROR: "_message,value,glob)
+	quit 	
+showreport
+	set i=""
+	for {
+		set i=$o(@%glob@($j,i),1,data)
+		q:i=""
+		set offset=$list(data)
+		set message=$list(data,2)
+		set value=$list(data,3)
+		set glob=$list(data,4)
+		w !,?(offset),message,?(70),value
+		w:glob'="" !,?(20),glob
+	}
+	k @%glob@($j)
+	quit
+}

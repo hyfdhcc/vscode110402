@@ -1,0 +1,1620 @@
+ROUTINE ECPRecovery [Type=INT]
+ECPRecovery() [] public {  ;Manage ECP Recovery ;$Change$
+	; Revision: $Id$
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+ ;=========================================
+ ;
+ ;ECP Recovery consists of three phases that must be synchronized
+ ;between the different ECP clients.  The phases are coordinated
+ ;by mserver_lockphase, controlled by $ZU(87,10).  We start out in
+ ;phase 1 automatically, and move through them one at a time.
+ ;
+	If ($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0)) {
+	   Set ecpclu=$system.ECP.GetProperty("MountsClusterDB")
+	   Set clustat=$zu(59)
+	   If (ecpclu = 2) {
+	      Set ns="^^"_$p(clustat,",",13)
+	      Do:('$$ECPCluCanContinue(ns,+$p(clustat,",",3))) BACK^%ETN
+	   } Elseif (ecpclu = 1) {
+	     Do $zu(9,"","WARNING: Cluster didn't start, preserved ECP sessions.",(0>0),0)
+	     if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"ECPRecovery: ENQ is not up ignore ECP clients") }
+	     Quit
+	   } Else {
+	     Set ns=""
+	   }
+	} Else {
+	   Set ns=""
+	}
+	s jrnstat=$$CURRENT^%SYS.NOJRN() i 'jrnstat d ENABLE^%SYS.NOJRN
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"ECPRecovery started") }
+	s nphases=2 ; Must change the protocol if ever the number of phases changes.
+	For oldstate=1:1:nphases {
+		Do $Zutil(87,10,oldstate) ; Now set system to the new phase
+		Do WaitSynchPoint(oldstate,$system.ECP.GetProperty("ECPRecoveryTimout"),ns) ; GK304
+	}
+	; Mark that if this system should crash, we should start over with
+	; a new recovery rather than redoing the old one.
+	Do $System.ECP.SetLastGUID()
+	TSTART ; Make sure this gets to the journal
+	Kill ^[ns]%SYS("JOURNAL","ROLLBACK") 
+	Kill ^[ns]%SYS("SERVICE","SaveECP")
+	set ^|ns|%SYS("SERVICE","ECPSessionVersion")=2
+	TCOMMIT
+	; $ZU(87,10) sets mserver_lockphase to 0 in the caller, when DCP recovery
+	; has also completed, and new work can be allowed from all comers.
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"ECPRecovery finished.") }
+	i 'jrnstat d DISABLE^%SYS.NOJRN  ;restore journaling state of the job
+}
+ ;GK304+
+ ;=========================================
+ ; AnyECPOpenSession -- Mounts the cluster common dir read only
+ ;			and then validates the DB state.
+AnyECPOpenSession(Directory) [QUIETLY] public {
+	Set $ZT="StateEr"
+	If ('##class(SYS.DLM).isMember()) {
+	   Quit 0
+	}
+	set comp=0
+ 	set sc=##class(SYS.Database).MountDatabase(Directory,1,0) ;; dir,<readonly flag>,<cluster flag>
+	if '('sc) {
+	   set ns="^^"_Directory
+	   s comp=+$g(^[ns]%SYS("JOURNAL","ROLLBACK","ECPRecover"),0)
+	   d ##class(SYS.Database).DismountDatabase(Directory)
+	} else {
+	  Set sc=$System.Status.GetErrorText(sc)
+	  if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"AnyECPOpenSession failed to mount clu DB readonly - err: "_sc) }
+	  Goto bailout
+	}
+StateEr
+	Set $ZT="bailout"
+	if (($d(sc)) && ('('sc))) d ##class(SYS.Database).DismountDatabase(Directory)
+bailout
+	q comp
+}
+ ;=========================================
+ ; CheckECPCluState -- during startup to see if the cluster
+ ;			    has any ECP Work to
+CheckECPCluState() [QUIETLY] public {
+	Set $ZT="StateEr"
+	s Directory=$p($zu(59),",",13)
+	q:($$AnyECPOpenSession(Directory)=0) 0
+	s sc=##class(SYS.Database).MountDatabase(Directory,0,1)
+	if '('sc) {
+	   f i=1:1:60 s:$P($zu(59),",",3)'=4294967295 status=1 q:status  h 1
+	   q (('('sc))&&($P($zu(59),",",3)'=4294967295))
+	} else {
+	  Set sc=$System.Status.GetErrorText(sc)
+	  if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"CheckECPCluState failed to cluster mount clu DB - err: "_sc) }
+	  Goto bailout
+	}
+StateEr
+	Set $ZT="bailout"
+	if (($d(sc)) && ('('sc))) d ##class(SYS.Database).DismountDatabase(Directory)
+bailout
+	q 0
+} ; GK304-
+ ;
+ ;=========================================
+ ; RegisterClientRecovery -- called by STUCNFG or STURECOV after network shared memory 
+ ; has been initialized and before allowing any ECP incoming connections.
+ ;
+ ;noterm used to tell it whether to commit suicide
+ ;with $ZU(4) to abort STU and leave Cache' in single user mode or whether
+ ;it should return. Its set to 0 during STU and 1 by STURECOV.
+RegisterClientRecovery(noterm) [QUIETLY] public {
+	s $ZT="RegisterEr"
+	if ('$d(QUIETLY)) n QUIETLY s QUIETLY=0
+	s jrnstat=$$CURRENT^%SYS.NOJRN() i 'jrnstat d ENABLE^%SYS.NOJRN
+	if ($g(^%SYS("SERVICE","ECPMaxNumWorkDmn"))) {
+		Do ECPMaxNumWorkDmn(^%SYS("SERVICE","ECPMaxNumWorkDmn"))
+	}
+	if ($g(^%SYS("SERVICE","ECPMaxBackServers"))) {
+		Do ECPMaxBackServers(^%SYS("SERVICE","ECPMaxBackServers"))
+	}
+        set sesver=$g(^%SYS("SERVICE","ECPSessionVersion"),0)
+	if (sesver > 2) {
+	    ; ECP session(s) are from a newer/incompatible version of the product
+	    Do $zu(9,"","WARNING: Dropping ECP sessions.. they are from an incompatible version."_sesver,(0>0),0)
+	    Do RollbackAllClientRecoveryNS("","ECP")
+	    Kill ^%SYS("SERVICE","ECP")
+	    K ^STU("required","ECPTRANS")
+	    Quit
+	}
+	if ($g(^%SYS("SERVICE","ECPNoRecovery"))) {
+	    ; ECP jrn sync was disabled.. 
+	    ; abandon transactions from old incoming connections 
+	    Do $zu(9,"","Dropping ECP sessions.. ECP durability was disabled for performance",(0>0),0)
+	    Do RollbackAllClientRecoveryNS("","ECP")
+	    s mode=^%SYS("SERVICE","ECPNoRecovery")
+	    Kill ^%SYS("SERVICE","ECP")
+	    if $$ECPJrnSync(mode)
+	    K ^STU("required","ECPTRANS")	// GK894
+	    Quit
+	}
+	If ($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0)) {
+retry
+	   Set clustat=$zu(59)
+	   Set saveecpclutrans=$system.ECP.GetProperty("MountsClusterDB")
+	   Set ns=""
+	   Set cluns="^^"_$p(clustat,",",13)
+	   Set clutype=+$p(clustat,",",3)
+	   if ($g(^%SYS("SERVICE","ECPCluster"),0) && $d(^%SYS("JOURNAL","ROLLBACK")) && ($Order(^%SYS("SERVICE","ECP",""))="")) {
+	      TSTART
+	      Kill ^%SYS("JOURNAL","ROLLBACK")
+	      TCOMMIT
+	      if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"^%SYS('JOURNAL','ROLLBACK') goodies are ignored (killed)!!") }
+	   }
+	   If (clutype=0) { ; If cluster slave 
+	      Do RollbackAllClientRecoveryNS("","ECP") //  GK385
+	      Set ^%SYS("SERVICE","ECPCluster")=1 ; remmeber this node was memeber of a cluster
+	      Quit
+	   } Elseif (clutype=1) { ;#; if cluster master
+	      Do RollbackAllClientRecoveryNS("","ECP") ; cleanup old connections (if any)  //  GK385
+	      Set ^%SYS("SERVICE","ECPCluster")=1 ; remmeber this node was memeber of a cluster
+	      Set ns=cluns
+	   } else {
+	      If (cluns'="^^")&&($$CheckECPCluState()) g retry
+	      If (saveecpclutrans) {
+		 Do RollbackAllClientRecoveryNS("","ECP") //  GK385
+		 Set ^%SYS("SERVICE","ECPCluster")=1 ; remmeber this node was member of a cluster
+		 Do $zu(9,"","Failed to join the cluster: ECP server services is disabled.",(0>0),0)
+		 Quit ; failed to join the cluster... 
+	      } else {
+		 Set ^%SYS("SERVICE","ECPCluster")=0
+	      }
+	   }
+	} else {
+	   Set saveecpclutrans=0
+	   Set ^%SYS("SERVICE","ECPCluster")=0
+	}
+	If '$$MaxServerConnections() {
+	    ; Networking did not come up or no ECP server defined -- 
+	    ; abandon transactions from old incoming connections 
+	    Do RollbackAllClientRecoveryNS("","ECP") //  GK385
+	    K ^STU("required","ECPTRANS")
+	    Quit
+	}		
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"RegisterClientRecovery started.") }
+	; Activesys(conn)=# of active transactions from each remsysid
+	Merge activesys=^%SYS("JOURNAL","ROLLBACK","transsys")
+	; register local ECP sessions.
+	Set conn=""
+	for  {
+		Set conn=$Order(^%SYS("SERVICE","ECP",conn),+1,conndata)
+		Quit:conn=""  
+		s lastreq=$G(^%SYS("JOURNAL","ROLLBACK","transbufnum",conn),$listget(conndata,3,0))
+		if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"RegisterClientRecovery: register client conn="_conn_"."_lastreq) }
+		If $System.ECP.RegisterClientRecovery(conn,$list(conndata,1,2),$G(activesys(conn),0),lastreq)	Kill activesys(conn)
+	}
+	; Trigger rollback for any systems that show up in transactions in the
+	; journal that did not show up as active systems needing recovery.  In theory,
+	; there should be no such systems, but we prefer to do a complete job.
+	If $D(activesys) {
+		if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"RegisterClientRecovery: lingering transaction.. starting->"_$O(activesys(""))) }
+		Set conn=""
+		For  {
+		    Set conn=$O(activesys(conn))
+		    Quit:conn=""
+		    if (($O(^%SYS("JOURNAL","ROLLBACK","ECPTransactions",conn,""),+1,addr)'="") || ($O(^%SYS("JOURNAL","ROLLBACK","ECPTransactions",$zu(34,23,conn),""),+1,addr)'="")) {
+			Do:($i(msg)=1) $zu(9,"",$ZN_": WARNING: Rolling back incoming transactions for which there is no active connection.",(0>0),0)
+			Do RollbackClientRecovery($zu(34,22,conn),"","ECP")
+		    }
+		    Kill activesys(conn)
+		}
+	}
+	; Re-register the incoming transactions.  The routine ROLL^JRNROLL set
+	; these into a global ^%SYS("JOURNAL","ROLLBACK","ECPTransactions")
+ 	Set conn=""
+	For  {
+		Set conn=$Order(^%SYS("JOURNAL","ROLLBACK","ECPTransactions",conn))
+		Quit:conn=""
+		Set pid=""
+		For  {
+			Set pid=$Order(^%SYS("JOURNAL","ROLLBACK","ECPTransactions",conn,pid),+1,addr)
+			Quit:pid=""
+			; Now addr=transindex,filename,fileindex
+			if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"RegisterTransaction, conn=0x"_$zh(+conn)_" pid="_pid_" index="_$p(addr,",")_" filecnt="_$p(addr,",",3)_".") }
+			set opentrans(+$p(addr,",",3),+$p(addr,",",1))=conn_","_pid
+			; Register the opened sub-transaction.
+			Set level="",expected=2
+			For {
+				Set level=$Order(^%SYS("JOURNAL","ROLLBACK","ECPTransactions",conn,pid,level),+1,addr)
+				Quit:level=""
+				If level'=expected Do $zu(9,"",$ZN_": WARNING: Rolling back a unexpected level: "_level_" expected: "_expected,(0>0),0)
+				if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"RegisterTransaction, level="_level_" conn=0x"_$zh(+conn)_" pid="_pid_" index="_$p(addr,",")_" filecnt="_$p(addr,",",2)_".") }
+				Set expected=level+1
+				set opentrans(+$p(addr,",",2),+$p(addr,",",1))=conn_","_pid
+			}
+		}
+	}
+	set filecnt=""
+	For {
+	    s filecnt=$o(opentrans(filecnt))
+	    q:(filecnt="")
+	    set tranidx=""
+	    For {
+		s tranidx=$o(opentrans(filecnt,tranidx),1,val)
+		q:(tranidx="")
+		Do $System.ECP.ReRegisterTransaction($p(val,",",1),$p(val,",",2),tranidx,filecnt)
+	    }
+	}
+	If (saveecpclutrans) {
+	   if ('$$RecoverCluECPSessions(ns)) g RegisterEr 
+	   set errmsg=$$DupCluECPOpenTrans(ns,-1)
+	   if (errmsg'="") {
+		Do $ZU(9,"",errmsg)
+		Goto RegisterEr
+	   }
+	   d RegisterCluECPOpenTrans(ns)
+	}
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"RegisterClientRecovery finished.") }
+	K ^STU("required","ECPTRANS")
+	i 'jrnstat d DISABLE^%SYS.NOJRN  ;restore journaling state of the job
+	Quit
+RegisterEr ;
+	S $ZT="RegisterEr0"
+	i ($d(jrnstat) && 'jrnstat) d DISABLE^%SYS.NOJRN  ;restore journaling state of the job
+	Do ERR("Error in ECP RegisterClientRecovery: "_$ZE)
+	s ^STU("required","ECPTRANS")="Error in ECP RegisterClientRecovery" // GK395
+	Do BACK^%ETN
+	;If noterm is set then return to caller
+	Quit:$g(noterm)
+	do $ZU(4,$J)  ;commit suicide in a way that tells cstart 
+	              ;we did not complete
+RegisterEr0
+	Do ^%ET
+}
+ ;=========================================
+ ; MaxServerConnections -- return maximum number of incoming ECP connections
+MaxServerConnections() [] public {
+ S $Zt="MaxEr"
+ Quit $System.ECP.MaxServerConnections()
+MaxEr
+ Quit 0
+}
+ ;=========================================
+ ; DiscardECPPendingTrans -- Discard pending ECP transactions
+DiscardECPPendingTrans() [QUIETLY] public {
+	d $ZU(9,"","Discarding ECP open transactions")
+	Kill ^%SYS("JOURNAL","ROLLBACK","transsys")
+	Kill ^%SYS("JOURNAL","ROLLBACK","ECPTransactions")
+	Kill ^STU("required","ECPTRANS")
+	Set $zt="mounterr"
+	;; If cluster configuration, check and cleanup sessions in cluster common DB.
+	If ($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0)) {
+	   Set ecpclu=$system.ECP.GetProperty("MountsClusterDB")
+	   Set clustat=$zu(59)
+	   Set Directory=$p(clustat,",",13)
+	   If (+ecpclu = 2) {
+	      if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"ECP Cluster is active: leave ECP session alone!! ") }
+	      q:(+$p(clustat,",",3)=0)
+	   }
+	   ;; If cluster config (pij dir specified)
+	   if ((Directory'="") && (##Class(%Library.File).DirectoryExists(Directory))) {
+	      if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"Clean up ECP Cluster sessions @ "_Directory) }
+	      Set db=##Class(SYS.Database).%OpenId(Directory,,.sc)
+	      if ('sc) {
+		  Set sc=$System.Status.GetErrorText(sc)
+		  d $ZU(9,"","ECP rollback failed to mount clu common DB("_Directory_") - err: "_sc)
+		  Quit
+	      }
+	      s mounted=db.Mounted
+	      if ('mounted) {
+		 ;; Mount for read write
+		 Set sc=##class(SYS.Database).Mount(Directory,0,0) ;; dir,<readonly flag>,<cluster flag>
+		 if ('sc) {
+		     Set sc=$System.Status.GetErrorText(sc)
+		     d $ZU(9,"","ECP rollback all failed to mount clu DB("_Directory_") - err: "_sc)
+		     Quit
+		 }
+	      }
+	      Set ns="^^"_Directory
+	      ;; Drop everything we captured...
+	      ;; Note: The duplicate records are still in journals!!
+	      Kill ^[ns]%SYS("JOURNAL","ROLLBACK")
+	      Do:('mounted) db.Dismount()
+	   }
+	}
+	q
+mounterr ;
+    s $ZT="mounterr2"
+    d $ZU(9,"","mount cluster common DB ("_Directory_") failed from: "_$zu(56,2)) ; GK339
+    d $ZU(9,"","   Warning: unable to mount "_Directory) ; GK339
+mounterr2 ;
+    q
+}
+ ;=========================================
+ ; RollbackAllClientRecovery -- give up on all incoming connections 
+ ; Should be called when giving up on an incoming connection after
+ ; delaying incoming transactions for that connection and before 
+ ; ReRegistering those transactions.
+ ; Cleanup/remove all (local + cluster) ECP server transactional details + sessions
+RollbackAllClientRecovery() [QUIETLY] public {
+	;; Cleanup local ECP sessions (if any)
+	d RollbackAllClientRecoveryNS("","ECP")
+	Set $zt="mounterr"
+	;; If cluster configuration, check and cleanup sessions in cluster common DB.
+	If ($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0)) {
+	   Set ecpclu=$system.ECP.GetProperty("MountsClusterDB")
+	   Set clustat=$zu(59)
+	   Set Directory=$p(clustat,",",13)
+	   If (+ecpclu = 2) {
+	      if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"ECP Cluster is active: leave ECP session alone!! ") }
+	      q:(+$p(clustat,",",3)=0)
+	   }
+	   ;; If cluster config (pij dir specified)
+	   if ((Directory'="") && (##Class(%Library.File).DirectoryExists(Directory))) {
+	      if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"Clean up ECP Cluster sessions @ "_Directory) }
+	      Set db=##Class(SYS.Database).%OpenId(Directory,,.sc)
+	      if ('sc) {
+		  Set sc=$System.Status.GetErrorText(sc)
+		  d $ZU(9,"","ECP rollback failed to mount clu common DB - err: "_sc)
+		  Quit
+	      }
+	      s mounted=db.Mounted
+	      if ('mounted) {
+		 ;; Mount for read write
+		 Set sc=##class(SYS.Database).Mount(Directory,0,0) ;; dir,<readonly flag>,<cluster flag>
+		 if ('sc) {
+		     Set sc=$System.Status.GetErrorText(sc)
+		     d $ZU(9,"","ECP rollback all failed to mount clu DB - err: "_sc)
+		     Quit
+		 }
+	      }
+	      d RollbackAllClientRecoveryNS("^^"_Directory,"ECP")
+	      d:('mounted) db.Dismount()
+	   }
+	}
+	q
+mounterr ;
+    s $ZT="mounterr2"
+    d $ZU(9,"","mount cluster common DB ("_Directory_") failed from: "_$zu(56,2)) ; GK339
+    d $ZU(9,"","   Warning: unable to mount "_Directory) ; GK339
+mounterr2 ;
+    q
+}
+ ;=========================================
+ ; RollbackAllClientRecovery -- give up on all incoming connections 
+ ; Should be called when giving up on an incoming connection after
+ ; delaying incoming transactions for that connection and before 
+ ; ReRegistering those transactions.
+RollbackAllClientRecoveryNS(ns,tree) [QUIETLY] public { // GK385
+ S $ZT="RollbackAllEr"
+ s logged = 0
+ For  {
+     Set conn=$Order(^[ns]%SYS("JOURNAL","ROLLBACK","ECPTransactions","")) // GK385
+     Quit:conn=""
+     i 'logged {
+         Set logged = 1
+         Do $zu(9,"","Rolling back transactions from all old incoming ECP connections",(0>0),0)
+     }
+     Do RollbackClientRecovery($zu(34,22,conn),ns,tree) //  GK385
+    ; Does a kill of ^[ns]%SYS("JOURNAL","ROLLBACK","ECPTransactions",conn)
+ }
+ For  {
+     Set conn=$Order(^[ns]%SYS("SERVICE",tree,""))  // GK385
+     Quit:conn=""
+     i 'logged {
+         Set logged = 1
+         Do $zu(9,"","Rolling back transactions from all old incoming ECP connections",(0>0),0)
+     }
+     Do RollbackClientRecovery(conn,ns,tree) //  GK385
+ }
+ Quit
+RollbackAllEr
+ Do ^%ET
+}
+ ;
+ ;=========================================
+ ; RollbackClientRecovery -- call this when a client's transactions have been
+ ; "delayed" successfully, but for some reason we cannot register those
+ ; transactions so ECP will be responsible for them
+RollbackClientRecovery(conn,ns,tree) [] public {
+ s try=0
+ S $ZT="RollbackEr"
+ Do $zu(9,"","Rolling back client recovery for incoming connection "_conn,(1  /* Warning */>0),1  /* Warning */)
+checkpids 
+ Set pid=""
+ For  {
+    Set pid=$Order(^[ns]%SYS("JOURNAL","ROLLBACK","ECPTransactions",conn,pid),+1,addr) //  GK385
+    Quit:pid=""
+    ; Now addr=transindex,filename,fileindex
+    I $zu(34,13,1)  ; Set ptransindex so rollback could write to the journal.
+    S code=$$tpservone^ROLLBACK(0,$p(addr,",",1)_"^"_$p(addr,",",3)_"^"_pid_"^"_conn,"TROLLBACK")+1
+    I $zu(34,13,0)  ; clear ptransidnex
+    If code'=2,$G(^NET(0,"DODEMON","LOG")) Do $zu(9,"","ECP Back Svr: ERROR: Unexpected or Illegal ROLLBACK result="_code,1,1)
+    TSTART
+    Kill ^[ns]%SYS("JOURNAL","ROLLBACK","ECPTransactions",conn,pid) //  GK385
+    TCOMMIT
+ } 
+ TSTART
+ Kill ^[ns]%SYS("JOURNAL","ROLLBACK","transsys",conn) //  GK385+
+ Kill ^[ns]%SYS("JOURNAL","ROLLBACK","transbufnum",conn)
+ Kill ^[ns]%SYS("JOURNAL","ROLLBACK","ECPTransactions",conn)
+ if (try = 0) {
+     Kill ^[ns]%SYS("SERVICE",tree,conn) ; Prevent recovering these in the future. //  GK385-
+     TCOMMIT
+     set try=1
+     set conn=$zu(34,23,conn)
+     goto checkpids
+ } else {
+     TCOMMIT
+ }
+ Quit
+RollbackEr
+ Do ^%ET
+}
+ ;
+ ;=========================================
+ ; FailClientRecovery -- call this once all a client's transactions have been
+ ; registered to clean them all up.
+FailClientRecovery(conn,ns) [QUIETLY] public {
+	Set $ZT="FailEr"
+	;Once we get here, these transactions will definitely be rolled back, 
+	; even if the system should crash right away.
+	s opentrans=0
+	s pid="" f  s pid=$Order(^[ns]%SYS("JOURNAL","ROLLBACK","ECPTransactions",conn,pid)) q:pid=""  if $i(opentrans)
+	s pid="" f  s pid=$Order(^[ns]%SYS("JOURNAL","ROLLBACK","ECPTransactions",$zu(34,23,conn),pid)) q:pid=""  if $i(opentrans)
+	s pid="" f  s pid=$Order(^[ns]%SYS("JOURNAL","ROLLBACK","NewECPTransactions",conn,pid)) q:pid=""  if $i(opentrans)
+	s pid="" f  s pid=$Order(^[ns]%SYS("JOURNAL","ROLLBACK","NewECPTransactions",$zu(34,23,conn),pid)) q:pid=""  if $i(opentrans)
+	// start enough worker dmns for concurrent rollback
+	do startWorkerDmn(opentrans)
+	TSTART
+	if (ns'="") {
+	   Kill ^[ns]%SYS("JOURNAL","ROLLBACK","Newtranssys",conn)
+	   Kill ^[ns]%SYS("JOURNAL","ROLLBACK","NewECPTransactions",conn)
+	   Kill ^[ns]%SYS("JOURNAL","ROLLBACK","Newtranssys",$zu(34,23,conn))
+	   Kill ^[ns]%SYS("JOURNAL","ROLLBACK","NewECPTransactions",$zu(34,23,conn))
+	}
+	Kill ^[ns]%SYS("JOURNAL","ROLLBACK","transsys",conn)
+	Kill ^[ns]%SYS("JOURNAL","ROLLBACK","transbufnum",conn)
+	Kill ^[ns]%SYS("JOURNAL","ROLLBACK","ECPTransactions",conn)
+	Kill ^[ns]%SYS("JOURNAL","ROLLBACK","ECPTransactions",$zu(34,23,conn))
+	TCOMMIT
+	Do $System.ECP.SetServerState(conn,1,1) ; Reset the connection (will roll back transactions)
+	Quit 
+FailEr  ;
+	S $ZT="FailEr0"
+	Do $zu(9,"",$ZN_": Error in FailClientRecovery for conn="_conn_" $ZE="_$ZE,(1>0),1)
+	Do BACK^%ETN
+	Quit
+FailEr0
+	Do ^%ET
+ }
+ ;
+ ;=========================================
+CompleteClientRecovery(conn) [QUIETLY] public {
+ ; All Transactions should have been resolved by now, either in or out.
+        TSTART
+	Kill ^%SYS("JOURNAL","ROLLBACK","transsys",conn)
+	Kill ^%SYS("JOURNAL","ROLLBACK","transbufnum",conn)
+	Kill ^%SYS("JOURNAL","ROLLBACK","ECPTransactions",conn)
+	Kill ^%SYS("JOURNAL","ROLLBACK","ECPTransactions",$zu(34,23,conn))
+	TCOMMIT
+ }
+ ;
+ ;=========================================
+ ;
+FailAllClientRecovery(ns) [QUIETLY] public {
+	For conn=1:1:$System.ECP.MaxServerConnections() {
+	   if (+$system.ECP.GetServerState(conn) > 1) Do FailClientRecovery(conn,ns)
+	}
+ }
+ ;
+ ;=========================================
+ ;
+WaitSynchPoint(state,timeout,ns) [QUIETLY] public {
+	if $g(QUIETLY)="" n QUIETLY s QUIETLY=0
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"WaitSynchPoint waiting for state="_state_" at timeout="_timeout) }
+	set inititalactivities=$$GetRecoveryActivity()
+	set initialtimeout=timeout
+	For  {
+		If (state'=$ZU(87,10)) {
+			Do $zu(9,"",$ZN_" Illegal or Changed Synch Point "_state_" vs "_$ZU(87,10)_".  Resetting all incoming ECP connections.",(1>0),1)
+			Do FailAllClientRecovery(ns)
+			Quit
+		}
+		Set waiters=$$FindWaiters(state,ns)
+		Quit:waiters=0
+		// If the server is active
+		if (inititalactivities'=$$GetRecoveryActivity()) {
+		   set timeout = initialtimeout
+		   set inititalactivities=$$GetRecoveryActivity()
+		   if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"WaitSynchPoint sys busy, state="_state_" reset timeout->"_initialtimeout) }
+		}
+		If (timeout < 1) {
+			Set newstate=state+1
+			Do $zu(9,"",$ZN_": "_waiters_" incoming ECP connections failed to reach recovery phase "_newstate_". Resetting those connections.",(0>0),0)
+			;Out of time to wait -- Kill off non-responding jobs.  
+			;By using FindWaiters with an state of the 
+			;new synchpoint we are looking for, any waiters 
+			;older than the new synch point will be asked to
+			;reset themselves.
+			Do FindWaiters(newstate,ns)
+			Quit  ;Exit the For loop
+		}
+		Hang 1
+		Set timeout=timeout-1 ; GK316
+	}
+	;Now we are done waiting -- Caller will set mserver_lockphase to new state.
+}
+ ;
+ ;=========================================
+ ;
+ ;;FindWaiters -- returns the number of nodes that have not reached the
+ ;; next state
+FindWaiters(curstate,ns) [QUIETLY] public { ; GK304 added arg(ns)
+	if $g(QUIETLY)="" n QUIETLY s QUIETLY=0
+	Set oldstate=curstate-1
+	set conn="",waiters=0
+	for  {
+		Set conn=$Order(^[ns]%SYS("SERVICE","ECP",conn))
+		Quit:conn=""
+		Set connstate=$System.ECP.GetServerState(conn)
+		if (+connstate > 0) {
+			/* This node should be included in the synchronization. */
+			Set nodestate=$System.ECP.SynchState(conn)
+			If (nodestate=oldstate) {
+				;This node is still on the old synch point.
+			   	;Count this node as a waiter.
+	     			Set waiters=waiters+1
+			} elseif (nodestate=curstate) {
+				;Nothing to do -- this one is not a waiter
+			} else {
+				; This client conn is in the wrong 
+				; starting state, so just reset it.
+				Do $zu(9,"",$ZN_": Incoming Conn "_conn_" at state "_nodestate_" failed to synchronize at state "_oldstate_" -- Resetting Connection",(0>0),0)
+				Do FailClientRecovery(conn,ns)
+			} 
+		}
+	}
+	Quit waiters
+}
+ ;
+ ;=========================================
+ ;
+ ;;RecoverCluECPSessions -- allocate/register ECP sessions
+ ;			 Usually called by cluster recovery or startup
+RecoverCluECPSessions(ns) [QUIETLY] public {
+	; Called from RCRVRYDMN.MAC after journal restore/transaction
+	; rollback phases of cluster failover when we're the new master
+	quit $$RecoverECPSessions(ns,"ECP")
+}
+RecoverECPSessions(ns,tree) [QUIETLY] public {
+	; tree is "ECPMIRs" if we're doing mirror recovery.
+	; Otherwise it is "ECP". ECP connections to a mirror
+	; are accepted into "ECPMIRs" which is replicated across
+	; the mirror.
+    TSTART
+    Set ^[ns]%SYS("JOURNAL","ROLLBACK","ECPStartedRecovery")=1
+    Set failed=0
+    If ($d(^[ns]%SYS("SERVICE","SaveECP"))) {
+       if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"RecoverECPSessions:("_tree_") Using %SYS('SERVICE','SaveECP')") }
+	   Kill ^[ns]%SYS("SERVICE",tree)
+	   Merge ^[ns]%SYS("SERVICE",tree)=^[ns]%SYS("SERVICE","SaveECP")
+	   Kill ^[ns]%SYS("SERVICE","SaveECP")
+    }
+    TCOMMIT
+    set sesver=$g(^|ns|%SYS("SERVICE","PrimaryECPSessionVersion"),$g(^[ns]%SYS("SERVICE","ECPSessionVersion"),0))
+    if (sesver > 2) {
+        ; ECP session(s) are from a newer/incompatible version of the product
+        Do $zu(9,"","WARNING: Dropping ECP sessions.. they are from an incompatible version."_sesver,(0>0),0)
+        Do RollbackAllClientRecoveryNS(ns,tree)
+        Kill ^[ns]%SYS("SERVICE",tree)
+	Quit 'failed
+    }
+     ;PWCDEBUG
+    Set x=""
+    s conn=0  ;assign new session # in RegisterClientRecovery()
+    For  {
+       S x=$O(^[ns]%SYS("SERVICE",tree,x),+1,value)
+       Q:(x="")
+       s lastreq=$G(^[ns]%SYS("JOURNAL","ROLLBACK","transbufnum",x),$listget(value,3,0))
+       if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"+++ Found ECP conn("_x_") last req num("_lastreq_") trannum("_$G(^[ns]%SYS("JOURNAL","ROLLBACK","transsys",x),0)_")") }
+       if tree="ECPMIRs" s conn=x
+       s ecpconn(x)=$System.ECP.RegisterClientRecovery(conn,$list(value,1,2),$G(^[ns]%SYS("JOURNAL","ROLLBACK","transsys",x),0),lastreq)
+       If 'ecpconn(x) {
+	      D $zu(9,"","ERROR: Failed to recover ECP session #"_x,(0>0),0) 
+	      if conn {
+		      if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"+++ Failed to register client recovery conn("_x_"), MaxServerConnection is "_$System.ECP.MaxServerConnections()) }
+		      d NukeECPConnection(ns,tree,x)
+		      k ecpconn(x)
+		      continue
+	      } else {
+		      s failed=1
+	      }
+       }
+       if (ecpconn(x)) {
+	   s SYS("SERVICE",tree,ecpconn(x))=$List(value,1,2)
+	   // defined sys IDs with and without pid mapping
+	  set ecpconn($zu(34,23,x))=$zu(34,23,ecpconn(x))
+       }
+       if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"+++ Registered ECP connection("_x_"-->"_ecpconn(x)_")") }
+    }
+    if ($d(ecpconn)) {
+        Kill ^[ns]%SYS("JOURNAL","ROLLBACK","ECPconn")
+	    Merge ^[ns]%SYS("JOURNAL","ROLLBACK","ECPconn")=ecpconn
+	    TSTART
+	    Merge ^[ns]%SYS("SERVICE","SaveECP")=^[ns]%SYS("SERVICE",tree)
+	    Kill ^[ns]%SYS("SERVICE",tree)
+	    Merge ^[ns]%SYS("SERVICE",tree)=SYS("SERVICE",tree)
+	    TCOMMIT
+   }
+   q 'failed
+ }
+ ;
+ ;=========================================
+ ;
+ ;;NukeECPConnection -- Cleanup a cluster ECP server session
+ ;                invoked during cluster failover, by the recovery dmn to 
+ ;		          reset/rollback dead ecp sessions and on a new primary
+ ;                mirror server during mirror failover for the same purpose.
+NukeECPConnection(ns,tree,conn) [QUIETLY] public {
+    s try=0
+    Set pid=""
+    Set cname=$listget($g(^[ns]%SYS("SERVICE",tree,conn),$LB("<unknown conn# "_conn_">")),1,"")
+    if tree="ECPMIRs" {
+	    s tree="ECPTransactions"
+    } else {
+	    s tree="NewECPTransactions"
+    }
+    Do $zu(9,"","ECP connections from("_cname_") failed to recover. Resetting connection.",(0>0),0)
+checkpids
+    Goto:('$d(^[ns]%SYS("JOURNAL","ROLLBACK",tree,conn))) skipRollBack
+    Set pid=""
+    For  {
+	 Set pid=$Order(^[ns]%SYS("JOURNAL","ROLLBACK",tree,conn,pid),+1,addr)
+	 Quit:pid=""
+	 ; Now addr=transindex,filename,fileindex
+	 s offset=+$p(addr,",",1)
+	 s fnum=+$p(addr,",",3)
+	 if ('$d(firstoffset)) {
+	    s firstoffset=offset
+	    s firstfnum=fnum
+	 } elseif ((firstfnum > fnum) || ((firstfnum = fnum) && (firstoffset > offset))) {
+	    s firstoffset=offset
+	    s firstfnum=fnum
+	 }
+	 set trans(pid,conn)=fnum_","_offset
+    }
+skipRollBack 
+    if (try = 0) {
+	set try=1
+	set conn=$zu(34,23,conn)
+	goto checkpids
+    }
+    if ($d(trans)) {
+        Set firstindex=firstoffset_"^"_firstfnum // the oldset transaction location <offset>^<jrn-file num>
+	// set %jrnfile to the current jrn file name and get the current file num and the last jrn index
+ i '$zu(78,22) s lastindex=0,%jrnfile="",currfnum=$zu(9,"","journaling not enabled during rollback"),currfnum=-1 i 1 
+ e  f  s currfnum=$ZU(78,26) d  s %jrnfile=$zu(78,3) q:currfnum=$ZU(78,26) 
+ . f  s lastindex=$zu(78,29) q:lastindex  H 1  ;flush buffers until success
+	Set lastindex=lastindex_"^"_currfnum // the current jrn position <offset>^<jrn-file num>
+	do startall^ROLLBACK(.trans, firstindex, lastindex, -1 /* maxdel */,
+	   		     1 /* checkerr */, 0 /* reporter */, "TROLLBACK")
+    }
+    // Clean up the registered server 
+    if $zu(34,22,conn)<=$System.ECP.MaxServerConnections() Do $System.ECP.SetServerState($zu(34,22,conn),1,1)
+    k ^[ns]%SYS("JOURNAL","ROLLBACK",tree,conn)  ;JO2353
+    k ^[ns]%SYS("JOURNAL","ROLLBACK",tree,$zu(34,22,conn))
+    k ^[ns]%SYS("JOURNAL","ROLLBACK","savenn",$zu(34,22,conn))
+ }
+ ;
+ ;=========================================
+ ;
+ ;;CheckECPServerState --  Cleanup inactive sessions
+ ;
+CheckECPServerState(ns,tree,synclevel) [QUIETLY] public {
+    For conn=1:1:$System.ECP.MaxServerConnections() {
+	   s st=$system.ECP.GetServerState(conn)
+	   if ((+st > 1) && (+$p(st,"^",9) < synclevel) && ('+$p(st,"^",7))) {
+	      if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"CheckCluServerState("_tree_") reset conn #"_conn_" state("_st_")") }
+	      d NukeECPConnection(ns,tree,conn)
+	   }
+    }
+ }
+ ;
+ ;=========================================
+ ;
+ ;;WaitForECPConnections -- wait for all ECP connections to connect and upload their
+ ;		     locks 
+ ;
+WaitForCluECPConn(ns) [QUIETLY] public {
+	; Called from RCVRYDMN.MAC after mserver_lockphase is set to 1
+	; to wait for the ECP clients to upload their granted locks (I think) 
+	do WaitForECPConnections(ns,"ECP")
+}
+WaitForECPConnections(ns,tree) [QUIETLY] public {
+    S x=""
+    for  {
+       S x=$O(^[ns]%SYS("SERVICE",tree,x))
+       Q:(x="")
+       s srvstate=$system.ECP.GetServerState(x)
+       // If (unknown session) || (app-server dropped the session)
+       if ((+srvstate<=0) || ($p(srvstate,"^",9) < 0)) {
+	      if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"+++ Found unegistered ECP conn("_x_") == "_$system.ECP.GetServerState(x)) }
+	      d NukeECPConnection(ns,tree,x)
+       }
+    }
+    if ($$WaitForECPRecoveryLockPhase(1)) {
+	   d CheckECPServerState(ns,tree,1)
+    }
+    QUIT
+ }
+ ;
+ ;=========================================
+ ;
+ ;;WaitForCluECPRecoverComp -- wait for all ECP connections to recover
+ ;	wait for completion of uploading of delocks
+ ;
+WaitForCluECPRecoverComp(ns) [QUIETLY] public {
+	; Called from RCVRYDMN.MAC during cluster failover after the
+	; recovery dmn has set mserver_lockphase to DELOCK_MSG_DONE
+	do WaitForECPRecoverComplete(ns,"ECP")
+}
+WaitForECPRecoverComplete(ns,tree) [QUIETLY] public {
+    if ($$WaitForECPRecoveryLockPhase(2)) {
+	   d CheckECPServerState(ns,tree,2)
+    }
+    Do $System.ECP.SetLastGUID()
+    if tree="ECPMIRs" {
+	   d RegisterMirECPOpenTrans()
+    } else {
+       d RegisterCluECPOpenTrans(ns)
+    }
+    TSTART ; Make sure this gets to the journal
+    Kill ^[ns]%SYS("JOURNAL","ROLLBACK") 
+    Kill ^[ns]%SYS("SERVICE","SaveECP")
+    ;; GK894 update session version
+    set ^|ns|%SYS("SERVICE","ECPSessionVersion")=2
+    ;; GK910 drop the old primary version (if any)
+    kill ^|ns|%SYS("SERVICE","PrimaryECPSessionVersion")
+    TCOMMIT
+    QUIT
+ }
+ ;
+ ;=========================================
+ ;
+ ;;WaitForECPRecoveryLockPhase -- wait for all ECP connections to reach 
+ ;         the specified mserver_lockphase (currently phases are 1 and 2)
+ ;
+WaitForECPRecoveryLockPhase(lphase) [QUIETLY] public {
+    Set (inittime,starttime)=$zh
+    set now=starttime
+    set inititalactivities=$$GetRecoveryActivity()
+    set timeout=$system.ECP.GetProperty("ECPRecoveryTimout") ; GK302
+    set numfailed=0
+    set nextmsg=60
+    set CLUMembers=2
+    while (((now-starttime) < timeout) || (CLUMembers > 0)) {
+	   set CLUMembers=$system.ECP.GetProperty("NumClusterMembers")
+	   set numConn=$system.ECP.NumServerConnections()
+	   For conn=1:1:$System.ECP.MaxServerConnections() {
+	      s state=$system.ECP.GetServerState(conn)
+	      s clp=$System.ECP.SynchState(conn)
+	      s:clp<0 numfailed=1
+	      if (+$P(state,"^",7) && ((+state=1) || (clp=-1) || (clp=lphase) || (+$P(state,"^",8)=1) )) s CLUMembers=CLUMembers-1
+	      if ((+state=1) || (clp=-1) || (clp=lphase) || (+$P(state,"^",7)&&(+$P(state,"^",8)=1))) s numConn=numConn-1
+  	   }
+	   q:((numConn<1)&&(CLUMembers<1)) 
+	   if ((now-inittime)>nextmsg) && ($SYSTEM.Mirror.GetInfo()["PRIMARY") {
+		  d $zu(9,"","Wait for ECP recovery lockphase still waiting for "_numConn_" additional connections",0,0  /* Informational message */)
+		  do $SYSTEM.Mirror.UpdateTransitionTime()
+		  set nextmsg=nextmsg+60
+	   }
+	   s now=now+.5
+	   hang .5
+	   if (inititalactivities'=$$GetRecoveryActivity()) {
+		set inititalactivities=$$GetRecoveryActivity()
+		set starttime=now
+		if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"WaitForECPRecoveryLockPhase sys busy, reset timeout.. duration="_($zh-inittime)) }
+	   }
+    }
+    Q (numConn+numfailed)
+ }
+ ;=========================================
+ ;
+ ;;EdirMirOpenTrans() - Correct journal file # in open transaction array
+EditMirOpenTrans() [QUIETLY] {
+    new %ecptran,%savenn,%ref
+    s jrfilecnt=+$G(^%SYS("JOURNAL","ROLLBACK","jrfilecnt"))
+    if 'jrfilecnt quit 1 ;no pending transactions, nothing to do
+    s filename=$G(^%SYS("JOURNAL","ROLLBACK","filelist",jrfilecnt))
+    if filename="" {
+	   do $zu(9,"","Edit Mirror Transactions failed to find journal file name for file #"_jrfilecnt,(0>0),0)
+	   quit 0
+    }
+    s info=$zu(78,22,filename,99)
+	if '+info {
+	   do $zu(9,"","Edit Mirror Transactions failed to read header of "_filename_" (file #"_jrfilecnt_")",(0>0),0)
+	   quit 0
+	}
+	s mirjrncnt=+$P(info,",",13+1)  ;+1 to skip status code
+	if 'mirjrncnt {
+	   do $zu(9,"","Edit Mirror Transactions "_filename_" is not a mirror journal file",(0>0),0)
+	   quit 0
+	}
+	s curmirjrncnt=+$SYSTEM.Mirror.GetInfo(2)  ;current mirjrnfilecnt
+	s curlocaljrncnt=+$ZU(78,26)  ;current jrnmast.jrnfilecnt
+	while (curmirjrncnt '= +$SYSTEM.Mirror.GetInfo(2)) {
+		; its important that curmirjrncnt and curlocaljrncnt are
+		; from the same file
+		s curmirjrncnt=+$SYSTEM.Mirror.GetInfo(2)  ;current mirjrnfilecnt
+		s curlocaljrncnt=+$ZU(78,26)  ;current jrnmast.jrnfilecnt
+	}
+	s diff=curmirjrncnt-mirjrncnt
+	;
+	; now go through the "filelist" array and regenerate it using
+	; "local" equivilents of the local file #. All the files listed
+	; should be mirror journal files.
+	k filelist
+    s filecnt=$O(^%SYS("JOURNAL","ROLLBACK","filelist",""),1,filename)
+	while (filecnt'="") {
+	   s newfilecnt=curlocaljrncnt - (jrfilecnt - filecnt + diff)
+	   s filelist(newfilecnt)=filename
+       s filecnt=$O(^%SYS("JOURNAL","ROLLBACK","filelist",filecnt),1,filename)
+	}
+    Merge %ecptran=^%SYS("JOURNAL","ROLLBACK","ECPTransactions")
+    s %ref=$Q(%ecptran(""),1,info)
+	while %ref'="" {
+		;info is offset,short filename,file #
+		s loc=$s($QL(%ref)=2:3,1:2)
+		s filecnt=$P(info,",",loc)
+		s newfilecnt=curlocaljrncnt - (jrfilecnt - filecnt + diff)
+		s $P(info,",",loc)=newfilecnt
+		s @%ref=info
+		s %ref=$Q(@%ref,1,info)
+	}
+	merge %savenn=^%SYS("JOURNAL","ROLLBACK","savenn")  ;=<offset>,<short name>,<local filecnt>
+    s %ref=$Q(%savenn(""),1,info)
+	while %ref'="" {
+		;info is offset,short filename,file #
+		s filecnt=$P(info,",",3)
+		s newfilecnt=curlocaljrncnt - (jrfilecnt - filecnt + diff)
+		s $P(info,",",3)=newfilecnt
+		s @%ref=info
+		s %ref=$Q(@%ref,1,info)
+	}
+	;
+	tstart
+	k ^%SYS("JOURNAL","ROLLBACK","filelist")
+	k ^%SYS("JOURNAL","ROLLBACK","ECPTransactions")
+	k ^%SYS("JOURNAL","ROLLBACK","savenn")
+	merge ^%SYS("JOURNAL","ROLLBACK","filelist")=filelist
+	merge ^%SYS("JOURNAL","ROLLBACK","ECPTransactions")=%ecptran
+	merge ^%SYS("JOURNAL","ROLLBACK","savenn")=%savenn
+	s ^%SYS("JOURNAL","ROLLBACK","jrfilecnt")=curlocaljrncnt-1
+	TCOMMIT
+	quit 1  ;success
+}
+ ;
+ ;=========================================
+ ;
+ ;;DUPJRNRECORD -- Duplicate an ECP jrn record
+ ;
+ ; 
+ ; Input: current address, and remoteid
+ ; Duplicate a record from the current address to the new journal with new SFN, and remote sys number.
+ ; It raises error if the SFN in not mounted!!
+DUPJRNRECORD(addr,newremsysid) [QUIETLY] public {
+    s dir=$zu(78,12,addr)
+    if (dir="") {
+	   Do $ZU(9,"","ECP Unknown DB for jrn rec @("_addr_")!!",1,2) 
+	   Quit 0
+    }
+    s sfn=$zu(49,dir) 
+    if (+sfn<0)||(+sfn=$zu(40,0,41)) {
+	   Do $ZU(9,"","ECP jrn record @("_addr_") require ("_dir_") DB which is not mounted")
+       set sc=##class(SYS.Database).MountDatabase(dir,0,1) ;; dir,<readonly flag>,<cluster flag>
+	   if ('sc) {
+	      Do $ZU(9,"","ECP: failed to cluster mount ("_dir_") DB",1,2) 
+	      s $ECODE=", Failed to cluster mount "_dir_","
+	      q 0
+	   }
+	   s sfn=$zu(49,dir) 
+    }
+    if (+sfn<1)||(+sfn=$zu(40,0,41)) {
+	   Do $ZU(9,"","ECP JRN rec dup: unexpected sfn - dir("_dir_"::"_sfn_")",1,2)
+	   q 0
+    }
+    s rc=$zu(78,61,addr,newremsysid,sfn) ;copy/duplicate a jrn record
+    q rc
+ }
+ ;=========================================
+ ;
+ ;;DUPTranJRNRECORD -- Duplicate an ECP transaction level record
+ ;
+ ; 
+ ; Input: current address, and remoteid
+ ; Duplicate a record from the current address to the new journal with new remote sys number.
+DUPTranJRNRECORD(addr,newremsysid) [QUIETLY] public {
+    s rc=$zu(78,61,addr,newremsysid,$zu(40,0,41)) ;copy/duplicate a jrn record with no SFN
+    q rc
+ }
+ ;
+ ;=========================================
+ ;
+ ;;DupCluECPOpenTrans -- duplicate ECP open transactions.
+ ;
+ ; Called from RCVRYDMN.MAC during cluster failover after
+ ; recovering the cluster ECP sessions to copy journal records
+ ; for any open transactions from the journal file on the old
+ ; cluster master into our journal file (the new cluster master).
+ ; This is because rollback will occur from our journal file, not
+ ; the old cluster master's. 
+DupCluECPOpenTrans(ns,crashcsn) [QUIETLY,STU] public {
+    Set $ZT="failed"
+    If ('$d(^[ns]%SYS("JOURNAL","ROLLBACK","ECPconn"))) {
+        if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"DupECPOpenTrans bailout ... No ECP sessions "_$d(tranopen)) } 
+	Q ""
+    }
+    Merge ecpconn=^[ns]%SYS("JOURNAL","ROLLBACK","ECPconn")
+    Merge ecptran=^[ns]%SYS("JOURNAL","ROLLBACK","ECPTransactions")
+    Merge transsys=^[ns]%SYS("JOURNAL","ROLLBACK","transsys")
+    Merge transbufnum=^[ns]%SYS("JOURNAL","ROLLBACK","transbufnum")
+    s x="" 
+    f  {
+	   s x=$o(transbufnum(x),+1,val) q:(x="")
+	   s increqbufnum(x)=$system.ECP.GetProperty("ECPNNReqBufNum",val)
+       if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"DupECPOpenTrans dup for $Inc recovery - session("_x_") NN="_increqbufnum(x)_" jrn idx "_$g(^[ns]%SYS("JOURNAL","ROLLBACK","ECPJrnIndex"),"<empty>")) }
+    }
+    if ($D(ecptran) || $o(increqbufnum(""))) {
+       Merge filelist=^[ns]%SYS("JOURNAL","ROLLBACK","filelist")
+	   Set jrfilecnt=^[ns]%SYS("JOURNAL","ROLLBACK","jrfilecnt")  ;JO2141
+	   s transid=$g(^[ns]%SYS("JOURNAL","ROLLBACK","ECPJrnIndex")),transfc=+$P(transid,",",2)
+	   // start scanning from the oldest open transaction jrn offset!!
+	   s ecpjroff=+$p(transid,",",1)
+	   s StopMark=$p(^[ns]%SYS("JOURNAL","ROLLBACK","ECPRecover"),",",2)
+	   if (StopMark="") {
+	      s StopMark=$system.Util.CreateGUID()
+	      d $zu(78,34,0,-4,StopMark)
+	      Set ^[ns]%SYS("JOURNAL","ROLLBACK","ECPRecover")=^[ns]%SYS("JOURNAL","ROLLBACK","ECPRecover")_","_StopMark
+	   }
+	   ; Clusters worry about cluster journal sequence #'s
+	   If ($G(STU)="S")&&($g(^[ns]%SYS("JOURNAL","ROLLBACK","JrnSeqNum"),0)>$zu(78,41,0)) {
+	      if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"Restored jrn seq # from "_$zu(78,41,0)_"->"_(^[ns]%SYS("JOURNAL","ROLLBACK","JrnSeqNum")+1)) }
+	      d $zu(78,41,0,^[ns]%SYS("JOURNAL","ROLLBACK","JrnSeqNum")+1)
+	   } else {
+		  if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"Didn't reset jrn seq # STU("_$G(STU,"<empty>")_") cur->"_$zu(78,41,0)_" saved ->"_$g(^[ns]%SYS("JOURNAL","ROLLBACK","JrnSeqNum"),"<none>")) }
+       }
+    ;
+	s remsysid=""
+	s numopen=0
+    FOR  {
+	  s remsysid=$o(ecptran(remsysid))
+	  q:(remsysid="")
+	  s pid=""
+      For  {
+	     s pid=$o(ecptran(remsysid,pid),+1,tmp)
+	     q:('$g(ecpconn(remsysid)) || (pid=""))
+	     if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"+++ Insert ST for sys("_$g(ecpconn(remsysid),"<unknown>")_") pid("_pid_")") }
+	     If $ZU(34,9,pid,ecpconn(remsysid))
+	     TSTART
+	     s numopen=numopen+1
+	     s tmp=$zu(34)
+	     S ecpopentrannewindex(remsysid,pid)=$p(tmp,",",1)_","_$case($ZBITGET($ZVERSION(0),46),0:$case($f($zu(78,3),";"),0:$e($zu(78,3),*-8-$l($p($zu(78,3),".",$l($zu(78,3),"."))),*),:$e($zu(78,3),*-8-$l($p($zu(78,3),".",$l($zu(78,3),"."))),$f($zu(78,3),";")-2)),:$zu(78,3))_","_$p(tmp,",",2)
+	     s level=""
+	     f  {
+		    s level=$o(ecptran(remsysid,pid,level))
+		    q:(level="")
+		    k ecptran(remsysid,pid,level)
+	     }
+	     If $zu(34,18,0) ; Set the $TLEVEL to 0
+	     If $zu(34,13,0) ; clear ptransindex // GK394
+	     if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"+++ sys("_$g(ecpconn(remsysid),"<unknown>")_"), pid("_pid_") old tran("_ecptran(remsysid,pid)_") new trans("_ecpopentrannewindex(remsysid,pid)_") offsets") }
+      }
+    }
+    If $ZU(34,9)
+	K translevel
+     ;; GKdebug
+    F i=transfc:1:jrfilecnt {
+       S chan=$zu(78,5,filelist(i),0)
+       if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"+++ Scan for ecp trans: chan="_chan_" filelist("_i_")="_filelist(i)) }
+       If chan=-1 {
+          D $zu(9,"","JRNUSE: Failed to open jrnfilelist("_i_")="_filelist(i),1,2)
+	      Set errmsg=",Failed to open ("_filelist(i)_") journal,"
+          Goto failed
+       }
+       S x=$zu(78,6,chan),addr=0
+       IF ecpjroff s addr=$zu(78,18,ecpjroff),ecpjroff=0
+       F  {
+     	 S addr=$zu(78,17,addr)
+      	 Q:addr'>0
+       	 for  {
+       	    S type=$zu(78,80,addr) 
+	        if (type=13) {
+		       Set minfo=$ZU(78,35,addr)
+			   If (($p(minfo,",",3)=-4) && ($p(minfo,",",4,$l(minfo))=StopMark)) {
+			      if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"Terminating jrn duplicate - Found marker @ ADDR="_addr) }
+			      Set x=$zu(78,7,chan)
+			      Goto endduplication
+			   }
+		 	   Quit
+		    }
+        	S remsysid=$ZU(78,25,addr) // GK637
+		s ecpsysid=$zu(34,22,remsysid)
+        	q:(('ecpsysid) ||'$g(ecpconn(ecpsysid)))
+		    if (type=15) {
+			   if ('$g(saveNN(ecpsysid),0) && (($zu(78,45,addr)) > $g(increqbufnum(ecpsysid),2147483647))) {
+			      s saveNN(ecpsysid)=1,saveINC(ecpsysid)=1
+			   }
+			   if ($g(saveNN(ecpsysid),0)) {
+			      s newaddr=$$DUPTranJRNRECORD(addr,ecpconn(remsysid))
+		          if ('newaddr) {
+			         Set errmsg="Failed to duplicate ECP NN journal entry from "_addr_":"_filelist(i)
+			         Goto failed
+			      }
+			   }
+			   Quit
+		    }
+        	S pid=$zu(78,10,addr)
+        	If (type=4) {
+        	   if ($g(ecptran(remsysid,pid))=(addr_","_$case($ZBITGET($ZVERSION(0),46),0:$case($f(filelist(i),";"),0:$e(filelist(i),*-8-$l($p(filelist(i),".",$l(filelist(i),"."))),*),:$e(filelist(i),*-8-$l($p(filelist(i),".",$l(filelist(i),"."))),$f(filelist(i),";")-2)),:filelist(i))_","_i)) {
+        	      s ecpopentrans(pid,remsysid)=1,saveNN(ecpsysid)=1 // GK637
+        	   }
+        	   Quit ; check next rec
+        	}
+		    if ($g(saveINC(ecpsysid),0)) 
+        	q:('$g(ecpopentrans(pid,remsysid)) && ('$g(saveINC(ecpsysid)) || '(type=(128+6))))
+        	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"DUP in transaction or $INC record - JRNTYPE="_type_", @ADDR="_addr) }
+		    if (type=16) {
+		       s newaddr=$$DUPTranJRNRECORD(addr,ecpconn(remsysid))
+		       if ('newaddr) {
+			      Set errmsg="Failed to duplicate ECP BTL journal entry from "_addr
+			      Goto failed
+		       }
+		       s trlev=$zu(78,60,+addr)
+		       S translevel(ecpconn(remsysid),pid,trlev)=newaddr_","_$zu(78,26)
+		    } elseif (type=18)||(type=17) {
+		       s newaddr=$$DUPTranJRNRECORD(addr,ecpconn(remsysid))
+		       if ('newaddr) {
+			      Set errmsg="Failed to duplicate ECP CTL journal entry from "_addr
+			      Goto failed
+		       }
+		       s trlev=$zu(78,60,+addr)
+		       Kill translevel(ecpconn(remsysid),pid,trlev)
+		    } elseif (type=21) { 
+		       s newaddr=$$DUPTranJRNRECORD(addr,ecpconn(remsysid))
+		       if ('newaddr) {
+			      Set errmsg="Failed to duplicate ECP TROLEVEL journal entry from "_addr
+			      Goto failed
+		       }
+		    } else {
+		       s newaddr=$$DUPJRNRECORD(addr,ecpconn(remsysid))
+		       if ('newaddr) {
+			      Set errmsg=",Failed to duplicate ECP journal entry from "_addr
+			      Goto failed
+		       }
+		    }
+        	Quit
+          }
+       }
+       S x=$zu(78,7,chan)
+       If (addr<0) {
+          Do $ZU(9,"","Record error in "_filelist(i))
+          Do $ZU(9,"","Due to that, we cannot use this file for rollback.")
+          q
+       }
+    }
+endduplication
+    k ecpopentrans
+    } else {
+    }
+    d $zu(78,34,0,-3,$LB($g(crashcsn,-1),$s($D(ecptran):filelist(jrfilecnt),1:"")))
+    if ($d(transsys)) {
+       set x="" f  s x=$o(transsys(x),+1,value) q:(x="")  if (x)&&$g(ecpconn(x))&&(ecpconn(x)'=x) { s ntranssys(ecpconn(x))=value k transsys(x) }
+       m transsys=ntranssys
+       k ntranssys
+    }
+    if ($d(ecptran)) {
+       s remsysid="" 
+       f  {
+	  s remsysid=$o(ecptran(remsysid)) 
+	  q:(remsysid="")
+	  set pid="" 
+	  f  { 
+	     s pid=$o(ecptran(remsysid,pid))
+	     q:(pid="")
+	     s necptran(ecpconn(remsysid),pid)=ecpopentrannewindex(remsysid,pid) 
+	     k ecptran(remsysid,pid)
+	  }
+       }
+       Merge ecptran=necptran
+       k necptran
+    }
+    k ecpopentrannewindex
+    If ($d(transbufnum)) {
+       set x="" f  s x=$o(transbufnum(x),+1,value) q:(x="")  if x&&$g(ecpconn(x),0)&&(ecpconn(x)'=x) { s ntransbufnum(ecpconn(x))=value k transbufnum(x) }
+       Kill transbufnum
+       Merge transbufnum=ntransbufnum
+       Kill ntransbufnum
+    }
+    Kill ^[ns]%SYS("JOURNAL","ROLLBACK","NewECPTransactions")
+    Kill ^[ns]%SYS("JOURNAL","ROLLBACK","Newtranssys")
+    Kill ^[ns]%SYS("JOURNAL","ROLLBACK","Newtransbufnum")
+    Merge ^[ns]%SYS("JOURNAL","ROLLBACK","NewECPTransactions")=ecptran
+    Merge ^[ns]%SYS("JOURNAL","ROLLBACK","NewECPTransactions")=translevel
+    Merge ^[ns]%SYS("JOURNAL","ROLLBACK","Newtranssys")=transsys
+    Merge ^[ns]%SYS("JOURNAL","ROLLBACK","Newtransbufnum")=transbufnum
+    Quit ""
+failed
+    S $ZT="fatal"
+    Set:('$d(errmsg)) errmsg="Fatal Error "_$ZE_" during ECP recovery "_$ZU(56,2)_" -- Exiting"
+    Set:(crashcsn=-1) $ze=errmsg
+    Quit errmsg
+fatal
+    Do ^%ET
+}
+ ;
+ ;=========================================
+ ;
+ ;;RegisterCluECPOpenTrans -- Register ECP duplicated open transactions
+ ;
+RegisterCluECPOpenTrans(ns) [QUIETLY] public {
+	do RegisterECPOpenTrans("CLU",ns)
+	quit
+}
+RegisterMirECPOpenTrans() [QUIETLY] public {
+	do RegisterECPOpenTrans("MIR","")  ;ns="" (local %SYS)
+	quit
+}
+RegisterECPOpenTrans(caller,ns) [QUIETLY] {
+    if caller="MIR" {
+	    s tree="ECPTransactions"
+    } else {
+	    s tree="NewECPTransactions"
+    }
+    Set conn=""
+    For	 {
+	   Set conn=$Order(^[ns]%SYS("JOURNAL","ROLLBACK",tree,conn))  ;JO2344
+	   Quit:conn=""
+	   Set pid=""
+  	   For  {
+	     Set pid=$Order(^[ns]%SYS("JOURNAL","ROLLBACK",tree,conn,pid),+1,addr)  ;JO2344
+	     Quit:pid=""
+	     ; Now addr=transindex,filename,fileindex
+	     set opentrans(+$p(addr,",",3),+$p(addr,",",1))=conn_","_pid
+	     ; Register the opened sub-transaction.
+	     Set level="",expected=2
+	     For {
+		    Set level=$Order(^[ns]%SYS("JOURNAL","ROLLBACK",tree,conn,pid,level),+1,addr)  ;JO2344
+		    Quit:level=""
+		    If level'=expected Do $zu(9,"",$ZN_": WARNING: Rolling back a unexpected level: "_level_" expected: "_expected,(0>0),0)
+		    Set expected=level+1
+		    set opentrans(+$p(addr,",",2),+$p(addr,",",1))=conn_","_pid
+	     }
+	   }
+    }
+    set filecnt=""
+    For {
+    	s filecnt=$o(opentrans(filecnt))
+    	q:(filecnt="")
+    	set tranidx=""
+    	For {
+    	    s tranidx=$o(opentrans(filecnt,tranidx),1,val)
+    	    q:(tranidx="")
+    	    Do $System.ECP.ReRegisterTransaction($p(val,",",1),$p(val,",",2),tranidx,filecnt)
+    	}
+    }
+    if caller="MIR" {
+	    /* for mirroring also register the NNJRNPos() */
+	    ; remsysid's (the index of the savenn tree) matches the connection #'s
+	    ; because we re-register the connections with their original #'s during
+	    ; recovery.
+	    s conn=$O(^[ns]%SYS("JOURNAL","ROLLBACK","savenn",""),1,info)
+	    while conn'="" {
+		   s addr=$P(info,",",1)
+		   s filecnt=$P(info,",",3)
+		   s rc=$SYSTEM.ECP.ReRegisterNNJrnPos(conn, addr, filecnt) 
+	       s conn=$O(^[ns]%SYS("JOURNAL","ROLLBACK","savenn",conn),1,info)
+	    }
+    }
+    if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"RegisterECPOpenTrans finished.") }
+ }
+ ;
+ ;=========================================
+ ;
+ ; Save ECP server open transactions and session goodies in the cluster common DB 
+ ;
+SaveECPCluOpenTran(ns) [QUIETLY] public {
+    Set $ZT="failed"
+    s ECPJrnIndex=$system.ECP.GetProperty("ECPJrnIndex")
+    q:(ECPJrnIndex=0)
+    s jroff=+ECPJrnIndex,minfile=+$p(ECPJrnIndex,",",2)
+    if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"++++ ECP Jrn Index == "_ECPJrnIndex) }
+    s jrfilecnt=$ZU(78,26),filelist=(jrfilecnt-minfile)+1
+    if (filelist<1) { ; recovery required if any ECP sessions.
+	s ^[ns]%SYS("JOURNAL","ROLLBACK","ECPRecover")=$o(^[ns]%SYS("SERVICE","ECP",""))
+	Quit
+    }
+    s JN=$zu(78,3)
+    f i=1:1:filelist {
+      s filelist(i)=JN
+      s JN=$P($zu(78,22,JN,1),",",2)
+    }
+    F i=filelist:-1:1 {
+      S chan=$zu(78,5,filelist(i),0)
+      if (chan=-1) {
+	 d $ZU(9,"","Scan ECP sessions failed to open journal("_filelist(i)_")")
+	 W !,filelist(i)," is either nonexistent or not a journal file!"
+	 W !,"Due to that, we cannot use this to save ECP sessiosn!!.",! 
+	 Goto failed
+      }
+      S x=$zu(78,6,chan),addr=0
+      i jroff s addr=$zu(78,18,jroff),jroff=0
+      F  {
+	 S addr=$zu(78,17,addr)
+	 Q:addr'>0
+	 S type=$zu(78,80,addr) 
+	 f  {
+	    q:((type'=4)&&(type'=5)&&(type'=15)&&('((type'<16)&&(type'>18)))&&'(type=(128+6))&&(type'=21))
+	    S remsysid=$ZU(78,25,addr),pid=$zu(78,10,addr)
+	    s ecpsysid=$zu(34,22,remsysid)
+	    q:((ecpsysid < 1)||(ecpsysid >$zu(40,0,67)  /* PWC637 */))
+	    if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"ECP save remember type("_type_") remsys("_remsysid_") pid("_pid_") addr("_addr_")") }
+	    If (type=(128+6)) {
+	       Set transsys(ecpsysid)=$G(transsys(ecpsysid),0)+1
+	       Quit
+	    }
+	    If type=5 {
+	       K ECPTran(remsysid,pid) 
+	       Set:'$d(rollbackstart(remsysid,pid)) transsys(ecpsysid)=$G(transsys(ecpsysid),0)+1
+	       kill rollbackstart(remsysid,pid)
+	       Quit
+	    }
+	    If (type=4) {
+	       K ECPTran(remsysid,pid) ;# == kill ECPTran(remsysid,pid,<<levels>>) 
+	       S ECPTran(remsysid,pid)=addr_","_$case($ZBITGET($ZVERSION(0),46),0:$case($f(filelist(i),";"),0:$e(filelist(i),*-8-$l($p(filelist(i),".",$l(filelist(i),"."))),*),:$e(filelist(i),*-8-$l($p(filelist(i),".",$l(filelist(i),"."))),$f(filelist(i),";")-2)),:filelist(i))_","_(jrfilecnt-i+1)
+	       Set transsys(ecpsysid)=$G(transsys(ecpsysid),0)+1
+	       Quit
+	    }
+	    If (type=15) {
+	       Set transsys(ecpsysid)=0 ; Reset count to zero
+	       Set transbufnum(remsysid)=($zu(78,45,addr))
+	       Quit
+	    }
+	    If (type=21) {
+	       set:remsysid rollbackstart(remsysid,pid,$zu(78,60,addr))=1
+	    }
+	    If ((type=16)&&$d(ECPTran(remsysid,pid))) {
+	       If ('$d(ECPTran(remsysid,pid))) if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"**** No open trans associated with pid("_pid_") remsysid "_remsysid) }
+	       S ECPTran(remsysid,pid,$zu(78,60,addr))=addr_","_(jrfilecnt-i+1)
+	       Set transsys(ecpsysid)=$G(transsys(ecpsysid),0)+1
+	       Quit
+	    }
+	    If (((type=18)||(type=17))&&$d(ECPTran(remsysid,pid))) {
+	       set trlvl=$zu(78,60,addr)
+	       Kill ECPTran(remsysid,pid,trlvl)
+	       Set:('$d(rollbackstart(remsysid,pid))) transsys(ecpsysid)=$G(transsys(ecpsysid),0)+1
+	       kill rollbackstart(remsysid,pid)
+	       Quit
+	    }
+	    QUIT
+	 }
+      }
+      S x=$zu(78,7,chan)
+      if (addr<0) {
+	 W !,"Record error in ",filelist(i)
+	 W !,"Due to that, we cannot use this file.",! 
+	 Goto failed
+      }
+    }
+    Kill ^[ns]%SYS("JOURNAL","ROLLBACK")
+    Merge ^[ns]%SYS("JOURNAL","ROLLBACK","ECPTransactions")=ECPTran
+    Merge ^[ns]%SYS("JOURNAL","ROLLBACK","transsys")=transsys
+    Merge ^[ns]%SYS("JOURNAL","ROLLBACK","transbufnum")=transbufnum
+    if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"++++ ECP Jrn Index == "_ECPJrnIndex) }
+    // store the file list in the jrn file cnt/num order
+    F i=filelist:-1:1 {
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"++++ remember filelist("_(jrfilecnt-i+1)_") == "_$g(filelist(i),"<Undef>")) }
+	Set ^[ns]%SYS("JOURNAL","ROLLBACK","filelist",(jrfilecnt-i)+1)=filelist(i)
+    }
+    s ^[ns]%SYS("JOURNAL","ROLLBACK","jrfilecnt")=jrfilecnt
+    s ^[ns]%SYS("JOURNAL","ROLLBACK","ECPJrnIndex")=ECPJrnIndex_","_##Class(%SYS.System).InstanceGUID()
+    If ('$d(ECPTran)) {
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"++++ No ECP open transactions!!") }
+    }
+    Set ^[ns]%SYS("JOURNAL","ROLLBACK","ECPRecover")=($d(ECPTran)||$d(transsys)||$d(transbufnum)||$o(^[ns]%SYS("SERVICE","ECP","")))
+    if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"**** Set clu DB recover to ==> "_^[ns]%SYS("JOURNAL","ROLLBACK","ECPRecover")) }
+    Set ^[ns]%SYS("JOURNAL","ROLLBACK","JrnSeqNum")=$zu(78,41,0) ;; GK332
+    if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"**** Saved jrn seq# ==> "_$zu(78,41,0)) } ;; GK332
+    Quit ; saved ECP sessions successfully
+failed
+    S $ZT="fatal"
+    Do $System.ECP.SetProperty("ECPCluSaveFailed")
+    if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"SaveECPCluOpenTran failed @ ("_$zu(56,2)_") $ZE("_$ZE_")") }
+    Quit
+fatal
+    Do ^%ET
+ } ;
+ ;=========================================
+ ;
+ ; ECPWaitForServers : wait for ecp servers to shutdown
+ECPWaitForServers(timeout) PUBLIC {
+	Set:('$d(timeout)) timeout=10
+	Set starttime=$zh
+	Set now=starttime
+	Set waiters=1
+	while ((waiters > 0) && ((now-starttime) < timeout))   {
+	    Set waiters=0 
+	    For conn=1:1:$System.ECP.MaxServerConnections() {
+		if ($system.ECP.GetServerState(conn) = 1) Set waiters=waiters+1
+	    }
+	    h:(waiters) .5
+	    Set now=now+.5
+	}
+	q ('waiters)
+ }
+ ;=========================================
+ ;
+ ; ECPCluShutdown: 
+ ; save ECP open transactions in cluster common DB so the next cluster master
+ ; can recover the ECP sessions.
+ECPCluShutdown() PUBLIC {
+     s clustat=$zu(59)
+     if ((+$p(clustat,",",3)=1)&&($system.ECP.GetProperty("MountsClusterDB")>1)) {
+	s ns="^^"_$p(clustat,",",13)
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"Save ECP session in ("_ns_")!!.") } ; GK339
+        d SaveECPCluOpenTran^ECPRecovery(ns)
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"Clear ECP open transaction index!!.") } ; GK339
+        d $system.ECP.SetServerState(-1,5,0)
+     }
+ }
+ ;=========================================
+ ; ECPCluCanContinue : Check if the node can continue
+ ;		       Cluster slave will wait for the master to recover the ECP sessions
+ECPCluCanContinue(ns,master) [QUIET] PUBLIC {
+	; can continue if cluster master
+	q:(+master) 1
+	if '$D(QUIET) s QUIET=0
+	;this system is a Cache' cluster slave. waiting for the master to recover
+	set firsttime=1
+	Set starttime=$zh
+	Set now=starttime
+	set timeout=120
+	set dotcount=0
+loop ;
+	s $ZT="err"
+	while (+$g(^[ns]%SYS("JOURNAL","ROLLBACK","ECPRecover"),0)) {
+	   If firsttime {
+	      do $ZU(9,"","Waiting for master to recover the ECP sessions")
+	      w:'QUIET !,"Waiting 120 seconds for ECP recovery"
+	   }
+	   If ($i(dotcount)=10) {
+	      w:'QUIET ". "
+	      Set dotcount=0
+	   }
+	   If firsttime {
+	      w !,"This node cannot startup safely until the cluster master finishes."
+	      w !,"You can continue to wait or abort STARTUP and run it again later."
+	      set firsttime=0
+	   }
+	   if ((now-starttime) > timeout) {
+	      if $$YN("Do you want to keep waiting","Y",15)="N" W ! g NO1
+	      Set starttime=$zh
+	      Set now=starttime
+	   }
+	   h .5
+	   Set now=now+.5
+	}
+ 	quit 1
+err ;
+	s $ZT="NO1"
+	if QUIET goto NO1
+	w !,"You can continue startup but if another cluster member"
+	w !,"might be middle of ECP recovery"
+	w !
+	if $$YN("Do you want to startup the system without the lock","N",60)'="Y" W ! g NO1
+	w !
+	Goto loop
+NO1 
+	q 0
+}
+Mirror(mirname,lastjrnfilecnt,minxjrnfilecnt,minxindex) [STU,errlist] public {
+	new STU,errlist
+	s $ZT="MirrorERR"
+	; This routine drives the ECP recovery process when a new machine (this
+	; machine) becomes the new primary for the mirror. $SYSTEM.Mirror.TakeOverInit()
+	; has already been called so this machine is marked as the primary but not as
+	; the active primary. It is in FAILOVER mode so incoming ECP requests are 
+	; held without answers until the recovery process fails or enters the
+	; next (RECOVERY) phase. This is called from MIRRORMGR and we're passed
+	; information about the current journal file and how far back we need
+	; to go in order to find all the open transactions. The jrnfilecnt values
+	; "mirror" values, not "local" values.
+	;
+	s QUIETLY=1  ;various ECPRecovery subroutines expect this defined
+	s checkerr=1
+	s reporterr=0  ; don't report errors on the terminal (log them)
+	s STU="M"  ;indicate to JRNROLL and "below" that this is mirror recovery
+	if +$G(^%SYS("SERVICE","ECPNoRecovery")) {
+	    do ECPJrnSync(0)
+	}
+	; Run through the mirror journals from the tp/ecp recovery point to
+	; the end and all ECP transactions are entered in the ECP transaction
+	; recovery table and all non-ECP transactions (eg. local transactions
+	; on the old primary) are rolled back.
+    s rc=$$MIRROR^JRNROLL(mirname,lastjrnfilecnt,minxjrnfilecnt,minxindex,.errlist)
+    if 'rc {
+	    do MirrorFail("Transaction rollback failed")
+	    k ^MIRROR(mirname,"ROLLBACKERR")
+	    merge ^MIRROR(mirname,"ROLLBACKERR")=errlist
+	    s ^MIRROR(mirname,"ROLLBACKERR","$ZTIMESTAMP")=$ZTIMESTAMP  ;just so we know when its from
+	    quit 0
+    }
+	; Register all ECP connections to the old primary as valid
+	; connections here so that we can accept them during the ECP
+    ; recovery period.
+    Kill ^%SYS("SERVICE","SaveECP")  ;old list of sessions to recover
+	if '$$EditMirOpenTrans() quit 0
+    if '$$RecoverECPSessions("","ECPMIRs") quit 0
+    ; Set mserver_lockphase = NETHARDEN_LOCKPHASE (aka LOCK_GRANTED_DONE_PHASE)
+    ; to start 
+   	do $ZU(87,10,1)  ; set mserver_lockphase = NETHARDEN_LOCKPHASE to begin recovery 
+   	; Change Mirror to RECOVERY state where it accepts incoming
+   	; ecp reconnections to the mirror if it can find them in the
+   	; table of existing connections.
+    do $SYSTEM.Mirror.PrimaryAcceptSessions()	
+    ; 
+	; Returns  when all clients have reconnected or in 10 seconds
+	; whichever is sooner.
+	do WaitForECPConnections("","ECPMIRs")
+   	do $ZU(87,10,2)  ; set mserver_lockphase = LOCK_DELOCK_MSG_DONE_PHASE
+   	; Let recovery complete and register the open transactions.
+   	do WaitForECPRecoverComplete("","ECPMIRs")
+   	; set mserver_lockphase to 3. This is only done for mirror connections.
+   	; For mirror connections the jobs are waiting for syncpoint 3 and
+   	; then they will call Service_ECP_Synchpoint again to wait for 
+   	; mserver_lockphase to go to 0 before they continue. MirrorStartupComplete()
+   	; waits for all the jobs to hit the next syncpoint and then it sets 
+   	; mserver_lockphase to 0. This occurs after the node has fully initialized
+   	; itself as the primary mirror server.
+	do $ZU(87,10,3)
+	quit 1  ; return success, mirror will move from RECOVERY state to active
+MirrorERR ;
+	s $ZT=""
+	do $zu(9,"","Unexpected error during Mirror^ECPRecovery: "_$ze,(0>0),0)
+	quit 0	
+}
+MirrorFail(msg) {
+	do $ZU(9,"",msg)
+}
+MirrorStartupComplete() PUBLIC {
+	; This is called from BecomePrimary^MIRRORMGR after primary 
+	; initialization is complete to let the ECP clients start 
+	; running. 
+    if ($$WaitForECPRecoveryLockPhase(3)) {
+	   d CheckECPServerState("","ECPMIRs",3)
+    }
+    do $ZU(87,10,0)  ;set mserver_lockphase to 0, recovery is closed
+}
+MirrorStartupAbort() PUBLIC {
+	; This is called from tag failed in BecomePrimary^MIRRORMGR
+	; to reset the ECP connections if we're in ECP Recovery
+	; (mserver_lockphase is not zero).
+	s phase=+$ZU(87,10)
+	if phase=0 quit  ; ECP recovery hasn't started, nothing to do
+    if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"ECPRecovery: Aborting Mirror ECP Recovery at phase "_phase) }
+    if ($$WaitForECPRecoveryLockPhase(phase)) {
+	   d CheckECPServerState("","ECPMIRs",phase)
+    }
+    ; Signal the dmns to exit.
+    d $system.ECP.SetServerState(-1,3,0)
+    ; Since the dmns were in the loop waiting for mserver_lockphase
+    ; to change, once we signal them to exit, we can reset mserver_lockphase
+    do $ZU(87,10,0)  ;reset mserver_lockphase to 0
+}
+ ;=========================================
+ ;
+ ; Log messages for a later display
+ERR(ERRMSG) [ERR] PUBLIC {
+ S ERR=$G(ERR)+1,^NET("ERR",ERR)=ERRMSG
+ Do $ZU(9,"","ECPRecovery -- "_ERRMSG)
+ s ^%SYS("STARTUPERROR","type")="ECPTRANS"
+ s i=$I(^%SYS("STARTUPERROR","ECPTRANS")) ;total error count
+ s i=$I(^%SYS("STARTUPERROR","ECPTRANS","other"))
+ s ^%SYS("STARTUPERROR","ECPTRANS","other",i)=ERRMSG
+ s i=$I(^STU("errors"))
+ s ^STU("errors",i,"sev")=1  ; info
+ s ^STU("errors",i,"msg")="Fix ECP recovery errors and use ^STURECOV to retry"
+}
+ECPJrnSync(mode) [QUIETLY] PUBLIC {
+ if $g(QUIETLY)="" n QUIETLY s QUIETLY=0
+ s mirror=$S($SYSTEM.Mirror.GetInfo()[",DEFINED,":1,1:0)
+ if ('$d(mode)) {
+	if mirror {
+		w "Jrnsync enabled. Cannot be disabled on a mirror member"
+		quit 0
+	}
+    w "0 - Normal",!
+    w "1 - disable jrnsync",!
+    w "2 - disable jrn sync waits",!
+    w "Warning: when mode is not normal the ECP server will not recover the client sessions on failure",!
+    R !,"Enter ECP sync mode # (def 0):",mode
+    s:(mode="") mode=0
+ }
+ q:(mode="")||(+mode < 0)||(+mode > 2) 0
+ if ('+mode) {
+     k ^%SYS("SERVICE","ECPNoRecovery")
+     Do $system.ECP.SetProperty("ECPJrnSyncCntrl",0)
+     Do $zu(9,"","** Enabling the ECP server durability - ECP client sessions will be recoverable",(0>0),0)
+ } else {
+	 if mirror {
+        Do $zu(9,"","** Failed to disabling the ECP server durability - Cannot be disabled on a mirror server",(0>0),0)
+        q 0
+	 }
+     s ^%SYS("SERVICE","ECPNoRecovery")=mode
+     Do $system.ECP.SetProperty("ECPJrnSyncCntrl",mode)
+     Do $zu(9,"","** Disabling the ECP server durability - ECP client sessions will **NOT** be recoverable, mode="_mode,(0>0),0)
+ }
+ q 1
+}
+startWorkerDmn(opentrans) [QUIETLY] PUBLIC {
+ Set $ZT="failed"
+ set opentrans=(opentrans-$system.ECP.GetProperty("NumBackWorkDmns"))
+ if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"** num worker dmns to start =="_opentrans) }
+ if (opentrans > 0) {
+	// limit max roll back dmns -> 8
+	set:(opentrans > 8) opentrans=8
+	while ($i(opentrans,-1) >= 0) {
+		Do StartTranDmn^ECPClient(opentrans)
+	}
+ }
+ if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecp.rec: "_"** num runing worker dmns =="_$system.ECP.GetProperty("NumBackWorkDmns")) }
+ s $zt=""
+ quit
+failed
+    S $ZT="fatal"
+    Quit
+fatal
+    Do ^%ET
+}
+ECPMaxNumWorkDmn(number) [QUIETLY] PUBLIC {
+ Do $system.ECP.SetProperty("ECPMaxNumWorkDmn",number)
+ if (number = 0) {
+  kill ^%SYS("SERVICE","ECPMaxNumWorkDmn")
+ } else {
+  set ^%SYS("SERVICE","ECPMaxNumWorkDmn")=number
+ }
+ quit 1
+}
+ECPMaxBackServers(number) [QUIETLY] PUBLIC {
+ Do $system.ECP.SetProperty("ECPMaxBackServers",number)
+ if (number = 0) {
+  kill ^%SYS("SERVICE","ECPMaxBackServers")
+ } else {
+  set ^%SYS("SERVICE","ECPMaxBackServers")=number
+ }
+ quit 1
+}
+GetRecoveryActivity() [QUIETLY] PUBLIC {
+    try {
+       set val=$system.ECP.GetProperty("RecoveryActivity")
+    } catch {
+       // an old bin
+       set val=0
+    }
+    quit $g(val,0)
+}
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R

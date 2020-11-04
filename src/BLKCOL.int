@@ -1,0 +1,405 @@
+ROUTINE BLKCOL [Type=INT]
+BLKCOL	; Sample and analyze block collisions; RFD795 10/29/12
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;
+ s $ztrap="ERR^BLKCOL"
+ l +^SYS("BLKCOL"):5 e  w !!,"Unable to Lock ^SYS(""BLKCOL""), only one process may run BLKCOL.",!! q
+ n array,sec,wait,io,details,nblocks
+ s io=$io
+ w !,"Block Collision Analysis",!
+ w !,"How many seconds should we sample: <10> " r sec s:sec="" sec=10
+ g:sec=0 exit
+ w !,"How long to wait (ms) between each sample: <10> " r wait s:wait="" wait=10
+ w !,"Collect routine details? <Y> " r details s details=$s(details="":1,"Yy"[details:1,1:0)
+ s format="D",nblocks=0
+fmt	; ask for format
+ i details {
+	 w !,"Format for 'T'op counts, 'D'isplay all, 'S'orted CSV, 'H'ot spot, or 'R'aw CSV: <T> "
+	 r format s:format="" format="T" s format=$zcvt(format,"U")
+	 i "TDSRH"'[format {
+		 w !,"Enter 'T', 'D', 'S', or 'R' to select output format."
+		 w !?5,"'T' display the blocks (and globals/routines) with the most collisions."
+		 w !?5,"'D' is a simple, readable format with details for each block."
+		 w !?5,"'S' sorts and counts by block number and routines, and uses CSV format."
+		 w !?5,"'R' records each collision in CSV format."
+		 w !?5,"'H' display hot spots in routines."
+		 g fmt
+	 }
+	 if format="T"||(format="H") {
+		 w !,"Number of blocks to display: <10> "
+		 r nblocks s nblocks=+nblocks s:nblocks=0 nblocks=10
+		 s details=$select(format="T":2,1:3)
+	 }
+ }
+file	;
+ w !,"Output to file: <0> " r file s:file="" file=0
+ i file'=0 {
+	 o file:"NW":2 e  w !!,"Unable to open file ",file,! g file
+	 u file
+	 w:format="D" !,"Block collisions - sampled ",sec," seconds with ",wait," ms. wait at ",$zdt($h),!!
+ }
+ u io w !!,"Sampling ... (enter key to interrupt)",! i file'=0 u file
+ d RUN(sec,wait,details,format,nblocks,1)
+ i file'=0 c file u io
+exit
+ l -^SYS("BLKCOL")
+ q
+ ;
+ ; Non-interactive entry point, can be called to re-direct output
+ ; 'sec' = second to collect, 'wait' = ms to wait for each sample
+ ; 'details' = 1/0 to do new routine details collection
+ ;
+RUN(sec,wait,details,format,nblocks,interactive=0) PUBLIC {
+	s $ztrap="RUNERR"
+ 	l +^SYS("BLKCOL"):5 e  w !!,"Unable to Lock ^SYS(""BLKCOL""), only one process may run BLKCOL.",!! q
+	i "TDH"'[format d CSV(format,sec,wait) l -^SYS("BLKCOL") q
+	s array=""
+    if interactive {
+	    for  read tmp:0 quit:'$test
+    }
+	d COLLECT(sec,wait,details,.array,interactive,.blkcol)
+	i format="D" d DISPLAY(.array,details,.blkcol)
+	i format="T" d TOP(.array,nblocks,.blkcol)
+	i format="H" d HotSpot(.array,nblocks,.blkcol)
+	l -^SYS("BLKCOL")
+	q
+RUNERR	; Trap errors and CTRL-C
+	s $ztrap=""
+	l -^SYS("BLKCOL")
+	i $ze]"",$ze'["<INTERRUPT>" w !!,"Unexpected error - ",$ze,!!
+	q	
+}
+ ;	
+COLLECT(sec,wait,details,array,interactive,blkcol) PUBLIC {
+	s col=0,to=$zh+sec
+	f cnt=1:1 {
+		; 1.job_id, 2.bufnum, 3.block, 4.glo_sfn, 5.rou_sfn, 6.routine, 7.line, 
+		; 8.owner, 9.owner rou_sfn, 10.owner routine
+		set info=$zu(190,17)
+		if info]"" {
+			s blk=$p(info,",",3),sfn=$p(info,",",4)
+			s wrou=$p(info,",",5)_"_"_$p(info,",",6),line=$p(info,",",7)
+			; don't sort by owner for 'Top' display
+			if details=2 {
+				s orou=0
+			} else {
+				s orou=$p(info,",",9)_"_"_$p(info,",",10)
+			}
+			if details=3 {
+				if $p(info,",",5)'=-1 {
+					if $i(blkcol(0,wrou)),$i(blkcol(0,wrou,line))
+				}
+				if $p(info,",",9)'=-1 {
+					if $i(blkcol(1,orou)),$i(blkcol(1,orou,wrou)),$i(blkcol(1,orou,wrou,line))
+				}
+			} else {
+				if $i(blkcol(blk,orou,wrou,line)),$i(array(sfn,blk))
+			}
+			s col=col+1
+			if interactive,col#100=0 w "#"
+		}
+		if interactive {
+			r tmp:0 i $t q
+		}
+		h wait/1000
+		q:to<$zh
+	}
+	s array=cnt_","_col
+	q
+}
+ ;
+DISPLAY(array,details,%blkcol) {
+	w !!,$p(array,",",2)," block collisions in ",$p(array,",",1)," samples."
+	s (sfn,blk)=""
+	f  {
+	     s sfn=$o(array(sfn)) q:sfn=""
+	     try {
+		     s dir=$zu(49,sfn,3)
+	     } catch verr {
+		     if verr.Name="<FUNCTION>" {
+			     w !!,"Error accessing SFN "_sfn,!!
+			     continue
+		     } else {
+			     throw verr
+		     }
+	     }
+	     i +dir'=0 w !,"Remote directory"
+	     e  w !!,"Database: ",$p(dir,"^",2)
+	     w !,"   Block # and (collison counts)"
+	     f  {
+		     s blk=$o(array(sfn,blk)) q:blk=""
+		     s num=array(sfn,blk)
+		     w !,?3,blk,?10,"(",num,")",?15," "
+		     f i=1:1:num w "*"
+	     }
+	     ; print glo refs
+	     i +dir=0,$p(array,",",2) {
+	         w !!,"   Global references (first - last in block)"
+	         o 63:"#"_sfn
+	         f  {
+		         s blk=$o(array(sfn,blk)) q:blk=""
+		         ; trap BLOCKNUMBER error, possible SFN/blk# mismatch?
+		         try {v blk}
+		         catch verr {
+			         if verr.Name="<BLOCKNUMBER>" {
+				         w !,?3,blk,?10,"()",?20,"Error VIEWing block, possible SFN/BLOCK# mismatch."
+				         continue
+				     } else {
+					     throw verr
+				     }
+		         }
+		         s (if,fnode,lnode)=""
+		         s rc=$$GetNodeReferences^DMREPAIR(0,.if,.fnode)
+		         i rc=1 s rc=$$GetNodeReferences^DMREPAIR(-1,.if,.lnode)
+		         w !,?3,blk,?10,"("
+		         s type=$v($zu(40,32,1),0,1)
+	             w $case(type,2:"Ptr",6:"BotPtr",8:"Data",9:"GloDir",24:"BigData",66:"TopPtr",70:"T/BPtr",16:"Map",13:"Security",:type),") "
+	             i rc=1 w ?20,fnode," - ",lnode
+		         else  w ?20,"Error = ",rc
+	         }
+	         c 63
+	     }
+	}
+	i details,$p(array,",",2) {
+		w !!,"   Routines involved in collisions (SFN in parentheses)"
+		s node="%blkcol",lastblk=""
+		;%blkcol(blk,orou,wrou,line)=cnt
+		f  {
+			s node=$q(@node) q:node=""
+			i lastblk'=$qs(node,1) w !,"   Block ",$qs(node,1) s lastblk=$qs(node,1)
+			s own=$qs(node,2),wait=$qs(node,3),line=$qs(node,4)
+			w !,"      ",@node," at ^",$p(wait,"_",2),"+",line,"(",$p(wait,"_",1),")"
+			w ", owner in ^",$p(own,"_",2),"(",$p(own,"_",1),")"
+		}
+	}
+	q
+}
+TOP(array,nblocks,%blkcol) {
+	w !!,$p(array,",",2)," block collisions in ",$p(array,",",1)," samples.",!
+	q:'$p(array,",",2)
+	; sort by collision count
+	s (sfn,blk)=""
+	f  {
+	     s sfn=$o(array(sfn)) q:sfn=""
+	     f  {
+		     s blk=$o(array(sfn,blk)) q:blk=""
+		     s num=array(sfn,blk)
+		     s sort(-num,blk)=sfn
+	     }
+	}
+	s (sfn,blk,num)=""
+	w !,"Block # (count) - Global refs (first - last in block) - Routine refs (SFN)"
+	f  {
+	     s num=$o(sort(num)) q:num=""  q:nblocks<1
+	     f  {
+		     q:nblocks<1
+		     s blk=$o(sort(num,blk)) q:blk=""
+		     s nblocks=nblocks-1,sfn=sort(num,blk)
+		     w !!,blk,?10,"(",-num,")",?15," "
+		     try {
+			     s dir=$zu(49,sfn,3)
+		     } catch verr {
+			     if verr.Name="<FUNCTION>" {
+				     w !!,"Error accessing SFN "_sfn,!!
+				     continue
+			     } else {
+				     throw verr
+			     }
+		     }
+		     i +dir'=0 w " (remote directory)"
+		     e  w "in ",$p(dir,"^",2)
+		     ; print glo refs
+		     i +dir=0 {
+			     o 63:"#"_sfn
+		         ; trap BLOCKNUMBER error, possible SFN/blk# mismatch?
+		         try {v blk}
+		         catch verr {
+			         if verr.Name="<BLOCKNUMBER>" {
+				         w !,?3,blk,?10,"()",?20,"Error VIEWing block, possible SFN/BLOCK# mismatch."
+				         continue
+				     } else {
+					     throw verr
+				     }
+		         }
+		         s (if,fnode,lnode)=""
+		         s rc=$$GetNodeReferences^DMREPAIR(0,.if,.fnode)
+		         i rc=1 s rc=$$GetNodeReferences^DMREPAIR(-1,.if,.lnode)
+	             if rc=1 {
+		             w !,?2,fnode," - ",lnode," ("
+			         s type=$v($zu(40,32,1),0,1)
+		             w $case(type,2:"Ptr",6:"BotPtr",8:"Data",9:"GloDir",24:"BigData",66:"TopPtr",70:"T/BPtr",16:"Map",13:"Security",:type),") "
+	             }
+		         else {
+			         w !,?2,"Error getting global, error = ",rc
+		         }
+		         c 63
+		     }
+			; sort routines for this block ; %blkcol(blk,orou,wrou,line)=cnt
+			s node="%blkcol("_blk_")" k rsort
+			f  {
+				s node=$q(@node) q:node=""  q:blk'=$qs(node,1) 
+				s own=$qs(node,2),wait=$qs(node,3),line=$qs(node,4),cnt=@node
+				s rsort(-cnt,wait,line)=blk
+			}
+			s (cnt,wait,line)=""
+			f  {
+				s cnt=$o(rsort(cnt)) q:cnt=""
+				f  {
+					s wait=$o(rsort(cnt,wait)) q:wait=""
+					f  {
+						s line=$o(rsort(cnt,wait,line)) q:line=""
+						w !,?4,-cnt," at ^",$p(wait,"_",2),"+",line,"(",$p(wait,"_",1),")"
+					}
+				}
+			}
+	     }
+	}
+	q
+}
+CSV(format,sec,wait) PUBLIC {
+	; collect detail routine block collision data to a CSV file
+	k ^||BLKCOL
+	i format="S" w "SFN,Block,WaitRoutine,WaitSFN,OwnRoutine,OwnSFN,Count,Global,GloRef1,GloRef2,BlkType"
+	e  w "Global,WaitJob,BuffNum,Block,SFN,WaitSFN,WaitRoutine,WaitLine,OwnerJob,OwnerSFN,OwnerRoutine"
+	s cnt=0,col=0,to=$zh+sec
+	f  {
+		; job_id,bufnum,block,glo_sfn,rou_sfn,routine,line,owner,rou_sfn,routine
+		s info=$zu(190,17),len=$l(info,",")
+		i info]"" {
+			if format="R" {
+				s bn=$p(info,",",2) w !,$p($zu(190,16,bn),",",4),",",info
+			} else {
+				s bn=$p(info,",",2),blk=$p(info,",",3),sfn=$p(info,",",4)
+				s wsfn=$p(info,",",5),wrou=$p(info,",",6),line=$p(info,",",7)
+				s osfn=$p(info,",",9),orou=$p(info,",",10)
+				s:wrou="" wrou="_Unknown_" s:orou="" orou="_Unknown_"
+				s wrou=wrou_"+"_line
+				s ^||BLKCOL(sfn,blk,wrou,wsfn,orou,osfn)=$g(^||BLKCOL(sfn,blk,wrou,wsfn,orou,osfn))+1
+			}
+		}
+		h wait/1000
+		q:to<$zh
+	}
+	q:format="R"
+	; get global refs for each block
+	s sfn="",blk=""
+	f  {
+		s sfn=$o(^||BLKCOL(sfn)) q:sfn=""
+		i sfn'=-1 o 63:"#"_sfn
+        f  {
+	        s blk=$o(^||BLKCOL(sfn,blk)) q:blk=""
+	        i sfn=-1 s ^||BLKCOL(sfn,blk)="Unknown;;;" continue
+	        try {v blk}
+	        catch verr {
+		        s ^||BLKCOL(sfn,blk)=verr.Name_";;;"
+		        continue
+	        }
+	        s (if,fnode,lnode)=""
+	        s rc=$$GetNodeReferences^DMREPAIR(0,.if,.fnode)
+	        i rc=1 s rc=$$GetNodeReferences^DMREPAIR(-1,.if,.lnode)
+	        s t=$v($zu(40,32,1),0,1)
+            s type=$case(t,2:"Ptr",6:"BotPtr",8:"Data",9:"GloDir",24:"BigData",66:"TopPtr",70:"T/BPtr",16:"Map",13:"Security",:t)
+            i rc=1 s ^||BLKCOL(sfn,blk)=$p($p(fnode,"^",2),"(")_";"_fnode_";"_lnode_";"_type
+	        e  s ^||BLKCOL(sfn,blk)=rc_";;;"
+        }
+        c 63
+	}
+	; write sorted counts and info
+	s glo="^||BLKCOL"
+	f  {
+		s glo=$q(@glo) q:glo=""
+		s len=$ql(glo) i len=2 continue
+		s sfn=$qs(glo,1),blk=$qs(glo,2)
+		w ! f sub=1:1:len w $qs(glo,sub),","
+		w @glo
+		f p=1:1:4 w ",","""",$p(^||BLKCOL(sfn,blk),";",p),""""
+	}
+	q
+}
+ERR	; Trap errors and CTRL-C
+	s $ztrap=""
+	l -^SYS("BLKCOL")
+	i $ze]"",$ze'["<INTERRUPT>" w !!,"Unexpected error - ",$ze,!!
+	q
+HotSpot(array,top=10,%blkcol) public {
+	w !!,$p(array,",",2)," block collisions in ",$p(array,",",1)," samples.",!!
+	q:'$p(array,",",2)
+	For i=0,1 {
+		Set a=""
+		For {
+			Set a=$order(^%blkcol(i,a),1,c1) Quit:a=""
+			Set blkcol(i,-c1,a)=""
+			Set b=""
+			For {
+				Set b=$order(^%blkcol(i,a,b),1,c2) Quit:b=""
+				Set blkcol(i,-c1,a,-c2,b)=""
+			}
+		}
+	}
+	For i=0,1 {
+		Set title=$select(i=0:"Sorted by routine/line that waits for block ownership",1:"Sorted by routine that owns the block")
+		Write !,title,!,$translate($justify("",$length(title))," ","_"),!!
+		Set c1="",x=0
+		For {
+			Set c1=$order(blkcol(i,c1)) Quit:c1=""
+			Set a=""
+			For {
+				Set a=$order(blkcol(i,c1,a)) Quit:a=""
+				If $increment(x)>top Quit
+				Write "(",-c1,") ",$piece(a,"_",2),!
+				Set c2="",y=0
+				For {
+					Set c2=$order(blkcol(i,c1,a,c2)) Quit:c2=""
+					Set b=""
+					For {
+						Set b=$order(blkcol(i,c1,a,c2,b)) Quit:b=""
+						If $increment(y)>(top\2) Quit
+						If i=0 {
+							Set sfn=$piece(a,"_",1)
+							If '$data(db(sfn)) {
+								Try {
+									Set dbinfo=$zu(49,+sfn,3)
+									If $piece(dbinfo,"^")=0 {
+										Set db(sfn)=$piece(dbinfo,"^",2)
+									} Else {
+										Set db(sfn)=""
+									}
+								} Catch {
+									Set db(sfn)=""
+								}
+							}
+							Write "    (",-c2,") +",b,"^",$piece(a,"_",2)
+							If db(sfn)'="",$piece(a,"_",2)'="" {
+								Try {
+									Set line=$get(^|"^^"_db(sfn)|ROUTINE($piece(a,"_",2),0,b))
+									If line'="" Write " : ",line
+								} Catch {
+								} 
+							}
+							Write !					
+						} Else {
+							Write "    (",-c2,") +",$piece(b,"_",2),!
+						}
+					}
+					If y>(top\2) Quit
+				}
+			}
+			If x>top Quit
+		}
+	}
+}

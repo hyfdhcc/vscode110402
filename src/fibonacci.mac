@@ -1,0 +1,18 @@
+ROUTINE fibonacci
+fibonacci ; generate Fibonacci sequences
+ read !, "Generate Fibonacci sequence up to where? ", upto
+ set t1 = 1, t2 = 1, fib = 1
+ write !
+ do {
+     write fib,"  "  set fib = t1 + t2, t1 = t2, t2 = fib
+    }
+ while ( fib '> upto )
+ 
+ set t1 = 1, t2 = 1, fib = 1
+ write !
+ while ( fib '> upto ) {
+     write fib,"  "  set fib = t1 + t2, t1 = t2, t2 = fib
+    }
+ 
+ 
+ 

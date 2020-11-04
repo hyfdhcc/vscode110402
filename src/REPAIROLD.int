@@ -1,0 +1,201 @@
+ROUTINE REPAIROLD [Type=INT]
+REPAIROLD ;REPAIR/EXAMINE PROGRAM FOR DATABASE DEGRADATION ; HYY1483 08/27/09
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ; GXLATE.INC DPB125 06/04/93
+A N  W !,"***Block Repair/Examine Program***",!!
+ D ASK^%SYS.FILE Q:DIRNAM=""  o 63:"^^"_DIRNAM
+A1 W !,"Global Directory Block: ",GD
+ W !
+ Set rc=$$GetMapBlocks^DMREPAIR(DIRNAM,.%MAPBLOCKS)
+ If ('rc) d ShowMessage^REPAIR(rc,0) Quit  
+ Write !,"Map Blocks: "
+ Set mapblk="" For  Set mapblk=$Order(%MAPBLOCKS(mapblk)) Quit:mapblk=""  Write mapblk," "
+ S LINK=0,BLK=0 W ! D READ I 'BLK C 63 Q
+B Write !,"Block Repair Function "_$Case(BLK,0:"",:"(Current Block "_BLK_"): ") 
+ Read F I F="" Goto B
+ I F>0,F<8 S A=$T(FUN+F) W " ",$P(A,";;",2),! D @$P(A,";;",3) G B ;MER037
+ I F="?" W ! DO  W ! G B
+ . F I=1:1:7 S A=$T(FUN+I) W ?5,I,")  ",$P(A,";;",2),!
+ S F=$$UC(F)
+ F I=1:1:7 S LA=$T(FUN+I) S UA=$$UC(LA) I $E($P(UA,";;",2),1,$L(F))=F W $E($P(LA,";;",2),$L(F)+1,99),! D @$P(LA,";;",3) G B
+ W " ???" G B
+FUN ; ;
+ ;;Read Block;;READ
+ ;;Display Current Block;;DISPLAY
+ ;;Edit Current Block;;EDIT^REPAIR1
+ ;;Write Current Block to Disk;;WRITE^REPAIR2
+ ;;Internal Detail of Current Block;;dumpDISPLAY
+ ;;Pointer Tree;;TREE
+ ;;Quit REPAIR;;quitREPAIR
+quitREPAIR ZQuit  
+ Quit   
+TREE ;Code from MECHU0 adapted
+ Set blk=BLK ;return the block tree for the block
+ N ii,jj,b,last,edge,glo,chk,frst,info,root,left,link,list
+ S (list,left,link)=""
+ ;
+ D BLOCK:blk=BLK,BVIEW:blk'=BLK I glo="" Quit  
+ D REBUILD(DIRNAM,%GD) ;rebuild the global list
+ S info=$G(REPDIR(glo)) If info="" Quit  
+ S root=$P(info,"^",4) I root=16776961 G ERROR ;implicit global
+ ;
+ S (b,list)=root,$ZT="ERROR" I root=blk S (left,link)="" G DONE
+LOOP V (b) I "26"'[$V(2043,0,1) G ERROR ;view in the block
+ S last=1 F i=1:1 Q:$V(i*2-1,-5)=""  Q:$V(i*2-1,-6)]chk  S last=i
+ S b=$V(last*2,-5),list=list_"^"_b
+ G LOOP:b'=blk,LEFT ;follow the chain or find the left block  
+BLOCK S (glo,chk,frst,edge)="",type=TYPE I '((type=1)!(type=2)!(type=6)!(type=8)!(type=12))!(type=1) Q
+ S frst=$G(REPPRINT(1)) S:frst="^ " edge=1
+ I 'edge S glo=$E($P(frst,"("),2,*),chk=$G(REPAIR(1))
+ E  S glo=$E($P($G(REPPRINT(2)),"("),2,*),chk=$G(REPAIR(2))
+ S:chk="" glo="" S link=LINK Q
+BVIEW S (glo,chk,frst,edge)="",$ZT="BERR" V (blk) S type=$V(2043,0,1)
+ i '((type=1)!(type=2)!(type=6)!(type=8)!(type=12))!(type=1) q  
+ S frst=$V(1*2-1,-5) S:frst="^ " edge=1
+ I 'edge S glo=$E($P(frst,"("),2,*),chk=$V(1*2-1,-6)
+ E  S glo=$E($P($V(2*2-1,-5),"("),2,*),chk=$V(2*2-1,-6)
+ S:chk="" glo="" S link=$V(2040,0,"3O") Q
+BERR S glo="" Q
+LEFT ;given 'list', find the left block
+ S ii=$L(list,"^")
+LLOOP S ii=ii-1 G DONE:ii'>0 S b=$P(list,"^",ii) G LLOOP:'b
+ S $ZT="DONE" V (b)
+ S last=0 F i=1:1 Q:$V(i*2-1,-5)=""  Q:$V(i*2-1,-5)=frst  S last=i
+ G LLOOP:'last S b=$V(last*2,-5)
+DLOOP S $ZT="DONE" V (b) I $V(2040,0,"3O")=blk S left=b G DONE
+ G ERROR:$V(2043,0,1)=8!($V(2043,0,1)=12) F last=1:1 I $V(last*2-1,-5)="" Q
+ S b=$V(last-1*2,-5) G DLOOP  
+DONE ;Q list_$c(1)_left_$c(1)_link
+ Set len=$Length(list,"^")
+ Write !,?5,"Tree starts at Directory block: ",block
+ For i=1:1:len Write " => ",$Piece(list,"^",i)
+ If left]"" Write !,?5,"Left block is ",left
+ If link]"" Write !,?5,"Link block is ",link
+ Quit  
+REBUILD(DIR,GLO) ;rebuild global directory information
+ ;N block,size,link,N,glo,type,prot,grow,root
+ N size,link,N,glo,type,prot,grow,root
+ S block=GLO
+RESBLK V (block) S link=$V(2040,0,"3O"),size=$V(2046,0,2),N=0 ;read in the block
+RESGLO S glo="" F N=N:1 Q:$V(N,0,1)#256=0  S glo=glo_$C($V(N,0,1)#256)
+ S N=N+1 ;that got the global name 'glo'
+ S type=$V(N,0,"2O"),prot=$V(N+2,0,1),grow=$V(N+3,0,"3O"),root=$V(N+6,0,"3O")
+ S REPDIR(glo)=type_"^"_prot_"^"_grow_"^"_root
+ S N=N+9 I N<size G RESGLO
+ I link S block=link G RESBLK ;follow the directory links
+ Q
+ERROR Q ""
+dumpDISPLAY Set dodump=1 Goto DISPLAY
+READ R "Block #: ",A Q:A=""  I A S BLK=A
+ I A?1"L".E,LINK W "  Link Block ",LINK,! S BLK=LINK
+ n NSPNAM s NSPNAM="^^"_DIRNAM
+ G R3:A'?1"^".E S:A'?1"^[".E A="^["""_NSPNAM_"""]"_$E(A,2,*)
+ Do ^ST
+ S $ZT="READERR"
+ I '$D(@A) W " ??? does not exist",! G READ
+ S SSSS=$D(@A),GVEC=$V(%ST("GVEC"),-3,"P") G R1
+READERR S $ZT="" W !,$P($ZE,">")_">",! G READ
+R1 ; carry on
+ W !,"Global Directory Block: ",GD,!
+ ;
+R2 S BLK=$V($V(%ST("GVEC"),-3,"P")+%ST("glast")+%ST("indian"),-3,3)
+ W !,"DATA BLOCK = ",BLK,"  TOP POINTER BLOCK = "
+ W $V($V(%ST("GVEC"),-3,"P")+%ST("gpnt")+%ST("indian"),-3,3),!
+R3 I 'BLK W " ???",! G READ
+ Set $Ztrap="R3ERR" 
+Viewblk V BLK W ! Goto GETARRAY
+R3ERR Set $Ztrap="" 
+ If $Zerror["<NOTOPEN>" Open 63:"^^"_DIRNAM  Set $Zerror="" Goto Viewblk
+ Else  i $zu(96,3,$zu(96,0))
+GETARRAY K REPPRINT,REPAIR,REPVAL,REPDIR S LINK=$V(2040,0,"3O")
+ S TYPE=$V(2043,0,1)
+ If TYPE=170  {
+    Set rc=$$ParseMapBlock^DMREPAIR(DIRNAM,BLK,.FREECOUNT)
+    i ('rc) d ShowMessage^REPAIR(rc,0) Set BLK=0 Goto READ
+    Goto DISPLAY
+ }
+ I TYPE-1,TYPE-2,TYPE-6,TYPE-8,TYPE-12 W "***Type = ",TYPE," Invalid",! G READ
+ S OFF=$V(2046,0,2),GAR=$V(2036,0,"4O")
+ I OFF>2036 W "***Offset improper (",OFF," - shouldn't be > 2036 )",! G READ
+ I TYPE=1 S A=0,N=0 G GET2
+GET1 F N=1:1 S X=$V(N-1*2+1,-6) Q:X=""  DO
+ . S REPAIR(N)=X,REPPRINT(N)=$V(N-1*2+1,-5),REPVAL(N)=$V(N-1*2+2,-6)
+ S N=N-1 G DISPLAY
+ ;
+GET2 I A'<OFF G DISPLAY
+ S S="" F A=A:1 Q:$V(A,0)#256=0  S S=S_$C($V(A,0))
+ S A=A+1,N=N+1,REPAIR(N)=S_$C(0),REPPRINT(N)="^"_S
+ S X=$V(A,0,"2O")_"^"_$V(A+2,0)_"^"_$V(A+3,0,"3O")_"^"_$V(A+6,0,"3O")
+ S REPVAL(N)=X,A=A+9
+ G GET2
+DISPLAY W !,"Block # ",BLK,?25,"Type: ",TYPE
+ If $Data(%MAPBLOCKS(BLK)) {
+    Write " (MAP BLOCK)"
+    Write !,"Free Count: ",FREECOUNT
+    Write !,"First block: ",%MAPBLOCKS(BLK,1)
+    Write !,"Last block: ",%MAPBLOCKS(BLK,2)
+    Quit  
+ }
+ W " (",$P("GLOBAL DIR^POINTER^^^^BOTTOM POINTER^^DATA^^^^BIGDATA","^",TYPE),")",!
+ W !,"Link Block: ",LINK,?25,"Offset: ",OFF,?40,"Garbage pnt: ",GAR
+ W !,"#",?5,"Node",?30
+ W $S(TYPE=8:"Data",TYPE=12:"BIGDATA",TYPE=1:"TYPE^PROT^NEW GROWTH^POINTER",1:"POINTER")
+ W ! F D=1:1:N W D D PRINT
+ Set dodump=0
+ W ! Q
+ ; PRINT is also called by other subroutines in REPAIR1 and REPAIR2
+PRINT S X=$G(REPVAL(D)) W ?5,$G(REPPRINT(D)),?28," " ;JFP051
+ If $Get(dodump) zzdump $Get(REPAIR(D)) Write !,?28," "
+ I TYPE-8,TYPE-12,TYPE-2,TYPE-6 W X,! Q  ; PWC232
+ I TYPE-8,TYPE-12 D  W ! Q 
+ . w $p(X,",",2),$case($p(X,",",1),1:" *big",:"")
+ I '$A(X)!($A(X)=8)!($A(X)=4) W $$clean($E(X,2,*)),! Q 
+ I $A(X)=1 S Z=$A(X,5)*256+$A(X,4)*256+$A(X,3)*256+$A(X,2)
+ I  I Z>2147483647 S Z=Z-4294967296
+ I $A(X)=1 W Z," *",! Q
+ I $A(X)=3!($A(X)=5)!($A(X)=9) G PRINTBIG
+ G PRINT2:$A(REPVAL(D),10)>127
+ S Z=0 F J=10:-1:3 S Z=Z*256+$A(REPVAL(D),J)
+ ;
+PRINT1 S Y=$A(X,2) I Y<128,Y S Z=Z_"E+"_Y
+ I Y>127 S Y=256-Y S Z=Z_"E-"_Y
+ W Z," **",! Q
+PRINT2 F J=3:1:10 S A(J)=255-$A(REPVAL(D),J)
+ S A(3)=A(3)+1#256 F J=3:1:10 Q:A(J)  S A(J+1)=A(J+1)+1#256
+ S Z=0 F J=10:-1:3 S Z=Z*256+A(J)
+ S Z="-"_Z G PRINT1
+PRINTBIG S NUM=$p(X,",",2) ; X has 03,numblks,bytes in last block, block,block,...
+ S REM=$p(X,",",3)
+ S LEN=(NUM-1)*(%BLKSIZ)+REM
+ W "BIG: LEN ",LEN," BLKS: " 
+ i NUM+3'=$l(X,",") W "** BLOCK TOTAL MISMATCH **" Q
+ f Z=1:1:NUM w:Z>1 "," w $p(X,",",3+Z)
+ w ! Q
+clean(data)     ; Convert all control characters to $c(3)
+ s L=$l(data) q:'L ""
+ s return=data
+ n cod
+ f i=1:1:L s cod=$a(data,i) i cod<32!(cod>126&(cod<160)) s $e(return,i)=$c(3)
+ q return      
+UC(x) q $zcvt(x,"u")
+DC(c,n) Q $TR($J("",n)," ",$E(c_" "))
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R

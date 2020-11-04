@@ -1,0 +1,28 @@
+ROUTINE forexample
+forexample ; examples of the for construct
+ for i = 1:1:8 {
+     write !, "I ", i, " the sandbox."
+    }
+ write !!
+ for b = "John", "Paul", "George", "Ringo" {
+     write !, "Was ", b, " the leader? "
+     read yn
+    }
+ write !!
+ for i = 1:1 {
+     read !, "Capital of MA? ", a
+     if a = "BOSTON" {
+         write "...did it in ", i, " tries"
+         quit
+        }
+    }
+ write !!
+ for  {
+     read !, "Know what? ", wh
+     quit:(wh = "NO!")
+     write "   That's what!"
+    }
+    
+    
+    
+    

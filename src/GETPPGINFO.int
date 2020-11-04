@@ -1,0 +1,143 @@
+ROUTINE GETPPGINFO [Type=INT]
+GETPPGINFO(inpid , options , outputfile ) 
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+    if $zu(5)'="%SYS" {
+	w !,"Utility must be loaded and run in the %SYS namespace!"
+	quit	
+    }
+    do Get2(.inpid, .options, .outputfile)
+    q
+Get2(inpid , options , outputfile )  [] PRIVATE {
+    set inpid=$g(inpid) , outputfile = $g(outputfile) , options = $g(options)
+    s:inpid="" inpid="*"
+    if ($l(outputfile)) {
+    	open outputfile:"WN":0
+	if ('$T) {
+	    w "Error, unable to open file "_outputfile,!
+	    q
+	} else {
+	    try {
+	    	use outputfile
+		w $S($f(options,"T"):"JOB,BLOCKS",1:"JOB,PPGNAME,BLOCKS"),!
+		use 0
+	    } catch ex {
+	    	use 0
+	    }
+	}
+    }
+    if (inpid'="*") {
+	if +inpid'=inpid {
+	    w !,"Invalid Process ID: "_inpid,!
+	    quit 0	
+	}	
+	set good=0
+	try {
+	    set x = ##class(%SYS.ProcessQuery).Open(inpid)
+	    s good=1
+    	} catch err {
+	    w "No such pid exists, sorry.",!
+    	}
+	kill x
+	quit:'good 0
+    }
+    if inpid="*" {  ;All
+	set maxjob = $zu(181)				// Maximum number of jobs
+	do multipleProcs(1,maxjob,options,.outputfile)
+    } else {
+    	if ($f(options,"J")) {				// GGC742 If J option, we are specifying a job number
+	    set job = inpid 
+	} else {
+	    set job=$zu(67,inpid)			// Convert process id to job number
+	    q:job=0 1
+	}
+	d multipleProcs(job,job,options,.outputfile)
+    }
+    close:$l(outputfile) outputfile
+    kill Rset 
+    q 1
+}
+multipleProcs(jobnumberStart,jobnumberEnd,options,outputfile) [] PRIVATE {
+    s filter="*"		// Look for all PPGs within a process
+    s optionS=$f(options,"S"),	// Check the "S" option
+      optionT=$f(options,"T"),	// Check the "T" option
+      optionJ=$f(options,"J"),	// Check the "J" option
+      optionMptr=$f(options,"M")	// Preserve the M option
+    set optionM=""		// Assume there is no option M
+    if (optionMptr) {
+    	while ($e(options,optionMptr)?1N) { s optionM=optionM_$e(options,optionMptr),optionMptr=optionMptr+1}
+    }
+    if ($f(options,"b")) {
+    	set options="Nb" , optionB=1
+    } else {
+    	set options="NB" , optionB=0
+    }
+    for jobnumber = jobnumberStart:1:jobnumberEnd {
+    	set pid = $zu(96,2,jobnumber)
+	if (pid > 0) s joblist($S(optionJ>0:jobnumber,1:pid))=jobnumber_","_pid
+    }
+    s info=##class(%SYS.ProcessQuery).PPGInfo($J)
+    q:info=""
+    s dbsize = $lg(info,3)
+    set key=""
+    for {
+    	set key=$O(joblist(key),1,data)
+	q:key=""
+	set jobnumber = $p(data,",",1) , pid = $p(data,",",2)
+	try {
+	    s blockcount = $zu(61,33,jobnumber)		// Retrieve the PPG count for this job number
+	    continue:((optionM>0)&&(blockcount<optionM))
+	    w:'optionS $S(optionJ=0:"Process ID: "_pid,1:"Job #: "_jobnumber)," --> Total PPG Block count "_blockcount_", block size "_$fnumber(dbsize,","),!
+	    if ((optionT)&&($l(outputfile))) {
+		use outputfile
+		w pid_","_blockcount,!
+		use 0
+	    }
+	    if (('optionT)&&(+blockcount>0)) {
+		k stack,res
+		do PPGExecute^|"%SYS"|JOBEXAM(.stack , filter , pid , options )
+		for {
+		    k res
+		    s res = $$PPGNext^|"%SYS"|JOBEXAM(.stack , .list )
+		    q:res  ;0 = good
+		    s gloname=$lg(list,1) , blocks = $lg(list,3)
+		    w:'optionS ?5,"PPG: ",gloname," uses "_$$dispsize(),!
+		    if ($l(outputfile)) {
+			s:optionB blocks = blocks \ dbsize 	// Remove the conversion from blocks to bytes
+			use outputfile
+			w pid_","_pid_".^||"_gloname_","_blocks,!
+			use 0
+		    }
+		}
+	    }
+	} catch err {
+	    use 0
+	    w !,"Error inspecting process id "_pid,!
+	}
+    }
+    use 0	// Just in case !
+    q
+dispsize()
+    q:'optionB blocks_" block"_$case(blocks,1:"",:"s")
+    s bytes=blocks,suffix=" bytes"
+    if (bytes>(10*1048576)) {
+	set bytes=(bytes/1048576*10)\1/10,suffix=" M"_suffix
+    } elseif (bytes > 10240) {
+	set bytes=(bytes/1024*10)\1/10,suffix=" K"_suffix
+    }
+    q $fnumber(bytes,",")_suffix
+}

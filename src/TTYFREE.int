@@ -1,0 +1,70 @@
+ROUTINE TTYFREE [Type=INT]
+TTYFREE ; TTY Hash Table Manipulation ; SAP565  4/25/06
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ i ($zversion(1)=1) u 0 w !,"This routine is not used on VMS systems" q         
+ Set tty=$ZU(40,2,48)
+ f i=0:0 d q q:q=""  d @q
+ q
+q ;
+ r !,"Terminal: ",t
+ i t="" s q="" q
+ i t="?" s q="list" q
+ if ($zversion(1)=2) s q="remove" q
+ else  s t=$zu(12,t),q="remove" q
+ q
+list ;
+ New cs,i,chunkoff,endoff,entryoff,namlen,offword,pid,shmoff,ttyname
+ Set cs=$$charsize^%Wprim(),shmoff=$zu(40,0,25)
+zb
+ For i=0:1:$ZU(40,0,66)-1 {
+    Set chunkoff=$View(tty+(i*shmoff),-2,shmoff)
+    If 'chunkoff Quit  
+    Set offword=$View(chunkoff,-2,4)
+    Set endoff=chunkoff+((offword#65536)*4)
+    Set entryoff=chunkoff+$zu(40,0,25)
+    While (entryoff < endoff) {
+       Set pidptr=entryoff+$ZU(40,33,0)
+       Set pid=$View(pidptr+$ZU(40,28,78),-2,4)
+       if $ZBITGET($ZVERSION(0),40) {
+	  s tid=$View(pidptr+$ZU(40,28,79),-2,4)
+       } else {
+          s tid=0
+       }
+       Set namlen=$View(entryoff+$ZU(40,33,1),-2,1)
+       If cs=1 {
+          Set ttyname=$View(entryoff+$ZU(40,33,3),-2,-(namlen-1))_$View(entryoff+$ZU(40,33,2),-2,-1)
+       } else {
+          Set ttyname=$View(entryoff+$ZU(40,33,3),-2,-namlen_"w")
+       }
+       Write:pid !,ttyname,?30," ",pid
+       Write:tid " (thread id = ",tid,")"
+       Set entrylen=0+$ZU(40,33,3)+(namlen*cs)-$Case(cs,1:1,:0)
+       Set entryoff=entryoff+(((entrylen+shmoff-1)\shmoff)*shmoff)
+    }
+ }
+ q
+INT ;
+ Set tty=$ZU(40,2,48)
+ d rem q
+remove ;
+ d rem q:f
+ w !,"Enter a terminal device name, or '?' to see a list of terminals."
+ q
+rem ;
+ s f=$zu(109,0,t)
+ q

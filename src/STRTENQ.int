@@ -1,0 +1,167 @@
+ROUTINE STRTENQ [Type=INT]
+STRTENQ() ; Start up the enq deamon and the recovery deamon. ;STC1542 02/12/09
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;
+ n gbuf,status,failp  ; KMK122
+ n clunet             ; JAO748+
+ s clunet=$G(^SYS("CLUSTER","NETTYPE"))
+ s clunet=$E(clunet_"D",1)  ; Defaults to ECP
+ s clunet=$ZCONVERT(clunet,"U")  ; make sure it's upper case
+ s failp=1
+ n rootlocks ; ROOTLOCKS must be a power of 2
+ s rootlocks=$G(^SYS("CLUSTER","ROOTLOCKS"),0)
+ Do $system.ECP.SetProperty("MountsClusterDB",1) 
+ Set ^%SYS("SERVICE","ECPCluster")=1 
+ if ($G(STU)'="S") {
+    Set pijdir=$p($zu(59),",",13)
+    if (pijdir="") {
+       d $zu(9,"","ENQ daemon not started.. PIJ dir is not specified",(1>0),1) ; GK339
+       s status=-101
+       Goto failed 
+    }
+    if ($System.ECP.Debug()\$zh("2000")#2=1) d $ZU(9,"","ecpstrtenq: "_"+++ Chk clu comm DB state="_$g(STU)) ; GK339
+    If (($$AnyECPOpenSession^ECPRecovery(pijdir))) {
+       d $zu(9,"","ENQ daemon not started.. There are open ECP sessions",(1>0),1) ; GK339
+       s status=-100
+       Goto failed 
+    }
+ }
+ If ((clunet="D")!(clunet="d")) {
+    n prop
+    Set prop("Enabled")=1
+    Do ##class(Security.Services).Modify("%Service_ECP",.prop)
+ }
+ i rootlocks="DEFAULT" s rootlocks=0 ; 0 is use system default
+ f  s status=$zu(59,1,clunet,rootlocks) q:status'=-11  d  
+ . i failp,'+$G(QUIETFLAG) w !,"Failover in progress..." s failp=0
+ . h 10                  ; KMK122-
+ ;If the enqdeamon started, give the write deamon 20 seconds to
+ ;'join' the cluster, otherwise return an error. If the write
+ ;deamon joins, go ahead and job off the recovery deamon.
+ ;
+failed ; GK300
+ i status=1 d  q:'status 0
+ . i "Mm"[$E($G(^SYS("CLUSTER","STARTRDMN"))_"A") d
+ . . w !,"Recovery deamon set to manual startup - Start by hand when ready"
+ . e  d
+ . . ; zu(66) returns pid of new job or -1 if job command failed
+ . . s status=$ZU(66,"REC","RCVRYDMN",30,0,0,$I)
+ . . i status=-1 d $zu(9,"","Recovery deamon failed to start.",(1>0),1)
+ . s status=0
+ . f i=1:1:60 s:$P($zu(59),",",3)'=4294967295 status=1 q:status  h 1
+ . d MountCluCommonDB()
+ . i 'status,'+$G(QUIETFLAG) d
+ . . d $zu(9,"","Write daemon failed to join the cluster.",(1>0),1)
+ . . w !,"This may be due to an invalid "_$S(clunet="D":"ECP",1:"DCP")_" configuration"
+ . . w !,"Check your "_$S(clunet="D":"ECP",1:"DCP")_" configuration for all nodes in this cluster"
+ i +$G(QUIETFLAG) q status  ; KMK074
+ i status=1 q 1
+ s errmsg="ENQ daemon failed to start because "
+ i status=0 s errmsg=errmsg_"of an unknown reason (see SYSLOG)."
+ i status=-1 s errmsg=errmsg_"of an unknown reason (see SYSLOG)."
+ i status=-2 s errmsg=errmsg_"cluster member limit reached."
+ i status=-3 s errmsg=errmsg_"database recovery was not successfully completed."
+ i status=-4 s errmsg=errmsg_"the format of the cluster journal file is unrecognizable."
+ i status=-5 s errmsg=errmsg_"a read or write operation to the cluster journal file failed."
+ i status=-6 s errmsg=errmsg_"the cluster journal file could not be opened or created."
+ i status=-7 s errmsg=errmsg_"recovery of this machine's databases may not have been completed successfully."  ; (very unlikely)
+ i status=-8 s errmsg=errmsg_"the path to the PIJ file is not defined or defined incorrectly."
+ i status=-9 s errmsg=errmsg_"it is already running."
+ i status=-10 s errmsg=errmsg_"cluster is crashed."  ; KMK122
+ i status=-11 s errmsg=errmsg_"cluster is failing over."
+ i status=-12 d
+ . n nettype
+ . i clunet="E"!(clunet="e") s nettype="ethernet"
+ . e  i clunet="U"!(clunet="u") s nettype="udp/ip"
+ . e  i clunet="W"!(clunet="w") s nettype="wollengong"
+ . e  i clunet="D"!(clunet="d") s nettype="ecp"
+ . e  s nettype="unknown network"  ; Should never happen
+ . s errmsg=errmsg_"could not locate our "_nettype_" address in the network tables"
+ i status=-13 s errmsg=errmsg_"system is in journal recovery mode"
+ i status=-14 s errmsg=errmsg_"incorrect # of cluster members in PIJ"
+ i status=-15 s errmsg=errmsg_"unsupported network type for cluster network line: "_$G(^SYS("CLUSTER","NETTYPE"))
+ i status=-16 s errmsg=errmsg_"network type for cluster network line: "_$G(^SYS("CLUSTER","NETTYPE"))_" differs from what is currently inuse"
+ i status=-17 s errmsg=errmsg_"can't locate master's network address in our network tables"
+ i status=-18 s errmsg=errmsg_"failed to write the current journal file header"
+ i status=-19 s errmsg=errmsg_"failed to get a lock on the CIN resource"
+ i status=-20 s errmsg=errmsg_"failed to create a new CIN"
+ i status=-21 s errmsg=errmsg_"CIN not found in CCD_LOCK for existing cluster"
+ i status=-22 s errmsg=errmsg_"CIN in CCD lock does not match CIN in PIJ"
+ i status=-22 s errmsg=errmsg_"CIN in CCD lock does not match CIN in PIJ"
+ i status=-22 s errmsg=errmsg_"system does not support clustering, DLM is not loaded"
+ i status=-24 s errmsg=errmsg_"logins are disabled because switch 12 is set"
+ i status=-25 s errmsg=errmsg_"we failed to resolve an IP address for "_$C(10,13)_"     the local machine"
+ i status=-100 s errmsg=errmsg_"cluster has unresolved ECP sessions"
+ i status=-101 s errmsg=errmsg_"No PIJ dir specified"
+ d $zu(9,"",errmsg,(1>0),1)
+ i status=-12 w !,"Please configure network connections."  ; DAS284
+ q status
+ ;
+ ; Create clu manager dir
+ ;
+MountCluCommonDB() [QUIETLY] public {
+    if ('$d(QUIETLY)) { n QUIETLY s QUIETLY=0 }
+    Set $zt="mounterr"
+    Set retry=5
+getdbpath
+    Set Directory=$p($zu(59),",",13)
+    Set Directory=$zu(12,Directory)
+    Set sc=$zu(49,Directory) 
+    If (sc<=-2) {
+    	if ($System.ECP.Debug()\$zh("2000")#2=1) d $ZU(9,"","ecpstrtenq: "_"Creating cluster common DB in:"_Directory) ; GK339
+        Set sc=##class(SYS.Database).CreateDatabase(Directory,,,,$Piece($zu(49,$zu(12)),",",25))
+	If ('sc) {
+	   Set retry=retry-1
+	   if (retry>0) {
+		hang 1
+		Goto getdbpath
+	   }
+	   Set sc=$System.Status.GetErrorText(sc)
+	   d $zu(9,"","Cluster common DB create failed : "_sc,(1>0),1) ; GK339
+	   Goto nodb
+	}
+	d ##class(SYS.Database).DismountDatabase(Directory)
+    }
+    if ($p($zu(49,Directory,1),",",3)="X") {
+       d $zu(9,"","Warning: Dismounting privately mounted cluster common database: "_Directory,(1>0),1)
+       d ##class(SYS.Database).DismountDatabase(Directory)
+    }
+    if ($System.ECP.Debug()\$zh("2000")#2=1) d $ZU(9,"","ecpstrtenq: "_"+++Mounting cluster common database: "_Directory) ; GK339
+    set sc=##class(SYS.Database).MountDatabase(Directory,0,1) ;; dir,<readonly flag>,<cluster flag>
+    if ('sc) {
+       Set sc=$System.Status.GetErrorText(sc)
+       d $zu(9,"","Mounting cluster common database("_Directory_") failed!! err:"_$zu(56,2)_" "_sc,(1>0),1) ; GK339
+nodb
+       d $zu(9,"","Warning: ECP server connections may fail!!",(1>0),1) ; GK339
+    } else {
+       if ($System.ECP.Debug()\$zh("2000")#2=1) d $ZU(9,"","ecpstrtenq: "_"ENQ dmn is up: ECP server is enabled!!"_sc) ; GK339
+       d $system.ECP.SetProperty("MountsClusterDB",2)
+       s clustat=$zu(59)
+       if (+$p(clustat,",",3)=1) {
+	  Set ^["^^"_Directory]%SYS("CLUInstanceGUID")=$system.Util.CreateGUID()
+       s sc=##Class(SYS.Database).ModifyDatabase(Directory,,$Piece($zu(49,$zu(12)),",",25))
+       }
+    }
+    q 1
+mounterr ;
+    s $ZT="mounterr2"
+    d $zu(9,"","mount cluster common DB ("_Directory_") failed from: "_$zu(56,2),(1>0),1) ; GK339
+    d $zu(9,"","   Warning: unable to mount "_Directory,(1>0),1) ; GK339
+mounterr2 ;
+    q 0
+ }

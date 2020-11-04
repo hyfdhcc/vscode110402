@@ -1,0 +1,413 @@
+ROUTINE STU1 [Type=INT]
+STU1 Quit  ; Process startup ;STC2247 9/19/13
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+Debug() Private {
+ Set $ZT="Error"
+ Set x=$g(^CONFIG("Debug","ecpdebugflags"))
+ If x'="" {
+	d $zu(9,"","Debug: Setting ECP Debug Flags to "_x_" with $System.ECP.Debug()",0,0  /* Informational message */)
+	Set ^NET(0,"ECPDEBUGFLAGS")=x
+	Do $System.ECP.Debug($zh(x_""))
+ }
+ Set x=$g(^CONFIG("Debug","numtrandaemons"))
+ If x'="" {
+	d $zu(9,"","Debug: ECP: Using "_x_" ECP Background Server jobs",0,0  /* Informational message */)
+	Set ^NET(0,"NumTranDaemons")=x
+ }
+ Set x=$g(^CONFIG("Debug","netdebugflags"))
+ If x'="" {
+	d $zu(9,"","Debug: Setting NetDebugFlags to "_x_" with DO ^REDEBUG",0,0  /* Informational message */)
+	Set ^NET(0,"NETDEBUGFLAGS")=x
+	Do INTSET^REDEBUG(x)
+ }
+ Kill ^SYS("CLUSTER","STARTRDMN")
+ Set x=$g(^CONFIG("Debug","clurecdodemon"))
+ If x'="" {
+	d $zu(9,"","Debug: Using RCVRYDMN startup option (^SYS(""CLUSTER"",""STARTRDMN"")): "_x,0,0  /* Informational message */)
+	Set ^SYS("CLUSTER","STARTRDMN")=x
+ }
+ Kill ^SYS("CLUSTER","NETDBGFLAGS")
+ Set x=$g(^CONFIG("Debug","clurecnetdbgflags"))
+ If x'="" {
+	d $zu(9,"","Debug: Setting ^REDEBUG for cluster recovery (^SYS(""CLUSTER"",""NETDBGFLAGS"")): "_x,0,0  /* Informational message */)
+	Set ^SYS("CLUSTER","NETDBGFLAGS")=x
+ }
+ Quit
+Error s $zt=""
+ d $zu(9,"","Error: "_$ze_" in Debug",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+}
+SERVERS() Public {
+ s $ZT="Error"
+ i $zparent=0 q
+ d DISABLE^%SYS.NOJRN()
+ i ($zversion(1)=2) {
+	d Trm()				                ;Start Ctrmd.exe daemon for Windows Vista.
+ 	d Telnet()                          ;Start TELNET
+ 	d Com()                             ;Start COMM Ports
+ }
+ d WebServer()                          ;Start private webserver
+ d SHADOW()                             ;Start shadowing
+ d Clean^%CDSrv                         ;Kill old Cache Direct globals
+ d Monitor()							;SNMP etc.
+ d TASKMGR()                            ;Start TASKMGR
+ d SYSMON()                          	;Start System Monitor
+ d JOBSRV(+$g(^CONFIG("Startup","JobServers"),0)) ;Start Job Servers
+ d PPURGE^JRNUTIL                       ;Purge journals
+ d $zu(68,28,0)                         ;enable global kill
+ d ExpandPidtab()                       ;Expand the pidtab table
+ d U2Routines()					        ;Initialize U2 routines
+ i $$SecurityScan^%SYS.SECURITY()		;Update accounts etc.
+ q
+Error s $zt=""
+ d $zu(9,"","Error: "_$ze_" in SERVERS",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+}
+Trm() Private {
+ s $zt="Error"
+ d $zu(9,"","Processing Terminal daemon section",0,0  /* Informational message */)
+ Set dir=$zu(12),dir=$zu(147,$e(dir,1,$l(dir)-4)_"BIN\CTRMD.EXE")_" "
+ Set x=$zf(-2,dir_$p($zu(86),"*",2))
+ Quit
+Error s $zt=""
+ d $zu(9,"","Error: "_$ze_" in Trm",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+}
+Telnet() Private { 
+ s $zt="Error"
+ d $zu(9,"","Processing Telnet section",0,0  /* Informational message */)
+ s Status=##Class(Config.Telnet).Load()
+ i '(''Status) d $zu(9,"","Error: "_$SYSTEM.Status.GetErrorText(Status),1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+ q
+Error s $zt=""
+ d $zu(9,"","Error: "_$SYSTEM.Status.GetErrorText($$Error^%apiOBJ(5002,$ze)),1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+}
+Com() Private {
+ s $zt="Error"
+ d $zu(9,"","Processing Com section",0,0  /* Informational message */)
+ s Status=##Class(Config.ComPorts).Load()
+ i '(''Status) d $zu(9,"","Error: "_$SYSTEM.Status.GetErrorText(Status),1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+ q
+Error s $zt=""
+ d $zu(9,"","Error: "_$SYSTEM.Status.GetErrorText($$Error^%apiOBJ(5002,$ze)),1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+}
+Monitor() Private {
+ s $zt="Error"
+ d $zu(9,"","Processing Monitor section",0,0  /* Informational message */)
+ s Status=##Class(Config.Monitor).Load()
+ i '(''Status) d $zu(9,"","Error: "_$SYSTEM.Status.GetErrorText(Status),1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+ q
+Error s $zt=""
+ d $zu(9,"","Error: "_$SYSTEM.Status.GetErrorText($$Error^%apiOBJ(5002,$ze)),1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+}
+WebServer(Restart = 0) Public {
+ s $zt="Error"
+ q:($zversion(1)=1)
+ q:'^CONFIG("Startup","WebServer")
+ s OldAsync=$system.Process.AsynchError(0)
+ d ##Class(Config.Startup).StopWebServer(Restart)
+ Set wsport=^CONFIG("Startup","WebServerPort")
+ Set wsaddress=^CONFIG("Startup","WebServerName")
+ Set dir=$zu(12),dir=$e(dir,1,$l(dir)-4)
+ Set file=$zu(147,dir_"httpd/logs/httpd.pid") 
+ Set twsp=$$TestWebServerPort(wsaddress,wsport)
+ Set ssport=$g(^CONFIG("Startup","DefaultPort"))
+ Do WebServerUpdate(dir,ssport,wsport)
+ If twsp {
+	 s rc=$ZU(140,5,file)
+ }
+ i wsaddress="" {
+	 s address=wsport
+ } else {
+	 s address=wsaddress_":"_wsport
+ }
+ If ($zversion(1)=2) {
+	Set cmd=$zu(147,dir_"httpd\bin\httpd.exe")_" -k start -n "_$p($zu(86),"*",2)_"httpd -c ""Listen "_address_""""
+ } 
+ If ($zversion(1)=3) {
+	Set cmd=$zu(147,dir_"httpd/bin/httpd")_" -d "_$zu(147,dir_"httpd")_" -c ""Listen "_address_""" >"_$zu(147,dir_"httpd/logs/httpderr")_" 2>&1 </dev/null"
+ }
+ Set x=$zf(-2,cmd)
+ If ($zversion(1)=3) {
+	Set up=0
+    For i=1:1:50 {
+		If $zu(140,4,file)=0 {
+			Set up=1
+			quit
+		} else {
+			Hang .1
+		}
+    }
+ 	If 'up {
+		d $zu(9,"","Private web server has not started after 5 seconds.",1 /* broadcast and log message*/,1  /* Warning */)
+		g Exit
+ 	}
+ }
+ d $zu(9,"","Private webserver started on "_address,0,0  /* Informational message */)
+ j ##Class(Config.Startup).CheckWebServerStatus(20)::5
+Exit
+ d $system.Process.AsynchError(OldAsync)
+ Quit
+Error s $zt=""
+ d $system.Process.AsynchError(OldAsync)
+ d $zu(9,"","Error: "_$ze_" in WebServer",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+ g Exit
+}    
+TestWebServerPort(wsaddress,Port) Private {
+ s $zt="Error"
+ Set rc=1
+ Set Dev="|TCP|"_Port
+ i wsaddress="" {
+	Open Dev:(:Port):4 
+ } else {
+	Open Dev:(:Port::::::/BINDTO=wsaddress):4 
+ }
+ If '$Test Set rc=0 d $zu(9,"","Private webserver may not start on port "_Port_", may be in use by another instance",1 /* broadcast and log message*/,1  /* Warning */)
+ Close Dev
+ q rc
+Error s $zt=""
+ i $d(Dev) Close Dev
+ d $zu(9,"","Error: "_$ze_" in TestWebServerPort",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+ q 0
+}
+WebServerUpdate(dir,ssport,wsport) Private {
+ s $zt="Error"
+ If ($zversion(1)=1) Set infile=dir_"CSP.bin]CSP.ini",outfile=dir_"CSP.bin]t.t"
+ If ($zversion(1)=3) Set infile=dir_"csp/bin/CSP.ini",outfile=dir_"csp/bin/t.t"
+ If ($zversion(1)=2) Set infile=dir_"CSP\bin\CSP.ini",outfile=dir_"CSP\bin\t.t"
+ Set OldPermissions=$zu(140,7,infile)
+ Open infile:"rs":2 Else  d $zu(9,"","Error: "_"Could not open "_infile,1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN Quit
+ Open outfile:"wns":2 Else  d $zu(9,"","Error: "_"Could not create "_outfile,1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN Close infile Quit
+ Set section=""
+ For {
+	Use infile Read x i $ZEOF Set $ze="<ENDOFFILE>" q
+	If x?1"[LOCAL]".e {
+	    Set section=x,SawLocal=1
+	    Use outfile Write x,!,"Ip_Address=127.0.0.1",!,"TCP_Port=",ssport,!
+	} ElseIf x?1"[SYSTEM_INDEX]".e {
+	    Set section=x,SawIndex=1
+	    Use outfile Write x,!,"LOCAL=Enabled",!
+	} ElseIf x?1"[SYSTEM]".e {
+	    Set section=x,SawSystem=1
+	    Use outfile Write x,!,"No_Activity_Timeout=1800",!
+	} Else {
+	    Set:$e(x,1)="[" section=""
+	    If section="" {
+			Use outfile Write x,!
+	    } ElseIf section?1"[LOCAL]".e,x'?1"Ip_Address=".e,x'?1"TCP_Port=".e {
+			Use outfile Write x,!
+	    } ElseIf section?1"[SYSTEM_INDEX]".e,x'?1"LOCAL=".e {
+			Use outfile Write x,!
+	    } ElseIf section?1"[SYSTEM]".e,x'?1"No_Activity_Timeout=".e {
+			Use outfile Write x,!
+	    }
+	}
+ }
+Error s $zt="Error1"
+ If $ze'["<ENDOFFILE>" {
+    i $d(infile) Close infile
+    i $d(outfile) Close outfile
+    d $zu(9,"","Error: "_"Error setting private web server parameters: "_$ze,1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+    q
+ }
+ If '$d(SawLocal) Use outfile Write !,"[LOCAL]",!,"Ip_Address=127.0.0.1",!,"TCP_Port=",ssport,!
+ If '$d(SawIndex) Use outfile Write !,"[SYSTEM_INDEX]",!,"LOCAL=Enabled",!
+ if '$d(SawSystem) Use outfile Write !,"[SYSTEM]",!,"No_Activity_Timeout=1800",!
+ Close infile,outfile
+ Do chmod(outfile,OldPermissions)
+ Do $zu(140,5,infile),$zu(140,6,outfile,infile)
+ Quit
+Error1 s $zt=""
+ d $zu(9,"","Error: "_$ze_" in WebServerUpdate",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+}
+SHADOW() Public {
+ s $zt="Error"
+ i $ZU(194,1) {
+	 d $zu(9,"","Starting in Emergency mode, shadowing not started",0,0  /* Informational message */)
+	 q
+ }
+ d $zu(9,"","Processing Shadows section (this system as shadow)",0,0  /* Informational message */)
+ s cli="" f  s cli=$o(^SYS("shdwcli",cli)) q:cli=""  d
+ . s Data=$g(^CONFIG("Shadows",cli))
+ . i cli'["~",Data'="" d   ;the shadow is defined in cpf
+ . . i $p(Data,",",2)=0 s ^SYS("shdwcli",cli,"stop")=2
+ . . e  i ('($g(^SYS("shdwcli",cli,"stop"),2)=2)) s ShadowsToResume(cli)=4
+ . s ^SYS("shdwcli",cli,"stat")=0
+ . s ^SYS("shdwcli",cli,"pid")=""
+ i $d(ShadowsToResume) {
+   s ShadowCount=##class(SYS.Shadowing.Shadow).StartGroup(.ShadowsToResume)
+   i 'ShadowCount s ShadowID="" f  s ShadowID=$o(ShadowsToResume(ShadowID),1,rc) q:ShadowID=""  i 'rc d $zu(9,"","Error: "_"Shadow <"_ShadowID_"> failed to start: "_$SYSTEM.Status.GetErrorText(rc),1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+ }
+ Q
+Error s $zt=""
+ d $zu(9,"","Error: "_$ze_" during SHADOW",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+}
+SHADOWRELOAD() Public {
+ s cli="" f  {
+   s cli=$o(^SYS("shdwcli",cli)) q:cli=""  
+   i cli'["~",(+$g(^SYS("shdwcli",cli,"stat"))) {
+     s rc=$$SUSPEND^SHDWCLI(cli)
+     i ('rc) {
+       d $zu(9,"","Error: "_"Unable to suspend Shadow <"_cli_">: "_$System.Status.GetErrorText(rc),1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+       continue
+     }
+     s ShadowsToResume(cli)=4
+   }
+ }
+ i '$d(ShadowsToResume) q
+ s beg=$zh
+ s cli="" f  {
+   s cli=$o(ShadowsToResume(cli)) q:cli=""  
+   s maxtimeout=$g(^SYS("shdwcli",cli,"intv"))
+   s:maxtimeout<10 maxtimeout=10
+   s wait=$g(wait,maxtimeout+5)
+   f  {
+     i '(+$g(^SYS("shdwcli",cli,"stat"))) q 
+     i $zh-beg>wait {
+       d $zu(9,"","Error: "_"Shadow <"_cli_"> has not suspended in time and will not be resumed later",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+       k ShadowsToResume(cli)
+       q
+     }
+     h 1
+   }
+ }
+ s ShadowCount=##class(SYS.Shadowing.Shadow).StartGroup(.ShadowsToResume)
+ i ShadowCount q  ;success
+ s ShadowID="" f  {
+   s ShadowID=$o(ShadowsToResume(ShadowID),1,rc) q:ShadowID=""  
+   i 'rc d $zu(9,"","Error: "_"Shadow <"_ShadowID_"> failed to resume: "_$SYSTEM.Status.GetErrorText(rc),1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+ }
+ Q
+Error s $zt=""
+ d $zu(9,"","Error: "_$ze_" during SHADOWRESET",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+}
+TASKMGR() Private {
+ s $zt="Error"
+ i $ZU(194,1) {
+	 d $zu(9,"","Starting in Emergency mode, TASKMGR not started",0,0  /* Informational message */)
+	 q
+ }
+ Job ##class(%SYS.Task).StartTASKMGR():(:10):20 
+ i '$t d $zu(9,"","Error: "_"Unable to start TASKMGR",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+ q
+Error s $zt=""
+ d $zu(9,"","Error: "_$ze_" in TASKMGR",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+}
+SYSMON() Private {
+ s $zt="Error"
+ s rc = ##class(%SYS.Monitor).Start()
+ i 'rc d $zu(9,"","Unable to start System Monitor",1 /* broadcast and log message*/,1  /* Warning */) q
+ s rc = ##class(%SYS.Monitor).StartSystemMonitorUserNS()
+ i 'rc d $zu(9,"","Unable to start System Monitor in user namespaces",1 /* broadcast and log message*/,1  /* Warning */)
+ q
+Error s $zt=""
+ d $zu(9,"","Error: "_$ze_" starting System Monitor",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+}
+JOBSRV(Number) Private {
+ s $ZT="Error"
+ Q:Number=0
+ d $zu(9,"","Starting "_Number_" Job Servers",0,0  /* Informational message */)
+ J JOBSRV1(Number)::5
+ i '$t d $zu(9,"","Unable to start Job Servers",1 /* broadcast and log message*/,1  /* Warning */)
+ Q
+Error s $zt=""
+ d $zu(9,"","Error: "_$ze_" in JOBSRV",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+}
+JOBSRV1(Number) Public {
+ s $ZT="Error"
+ i $zparent=0 q
+ h 20
+ d $ZU(5,"%SYS")
+ D APPLY^SETQUOTA("STUJOB")
+ F i=1:1:Number J JOBSRV2():("":2):5 i '$t d $zu(9,"","Unable to start Job Server "_i,1 /* broadcast and log message*/,1  /* Warning */)
+ Q
+Error s $ZT=""
+ d $zu(9,"","Error: "_$ZE_" in JOBSRV1",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+}
+JOBSRV2() Public {
+ i $zparent=0 q
+ I $ZU(14) ; NEVER RETURNS
+}
+ExpandPidtab() Private {
+ s $zt="Error"
+ s lastmax=$g(^SYS("LASTMAXPID"),0),inc=$g(^SYS("LASTINCPID"),0)
+ If lastmax {
+    s curmax=$v($zu(40,2,118),-2,4)
+    while (lastmax && (curmax<lastmax)) {
+       Set exp=$S(inc:inc,1:lastmax-curmax),expact=$zu(181,exp)
+       If expact=-1 {
+          Hang .1
+       }
+       ElseIf expact<exp {
+          d $zu(9,"","Unable to expand the Process Table to reach last maximum value of "_lastmax_".  "_$v($zu(40,2,118),-2,4)_" slots allocated.",1 /* broadcast and log message*/,1  /* Warning */)
+          Quit  
+       }
+       Set curmax=$v($zu(40,2,118),-2,4)
+    }
+ }
+ q
+Error s $zt=""
+ d $zu(9,"","Error: "_$ze_" expanding process slots",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+}
+U2Routines() Private {
+ s $zt="Error"
+ if +$ZBITGET($ZVERSION(0),30) {
+	 if '$D(^rOBJ("%zu2f")) {
+		 x "zr  zi ""1 ;;autoinit"" zs %zu2f"
+		 k ^ROUTINE("%zu2f")
+	 }
+	 if '$D(^rOBJ("%zu2c")) {
+		 x "zr  zi ""1 ;;autoinit"" zs %zu2c"
+		 k ^ROUTINE("%zu2c")
+	 }
+	 if '$D(^rOBJ("%zu2v")) {
+		 x "zr  zi ""1 ;;autoinit"" zs %zu2v"
+		 k ^ROUTINE("%zu2v")
+	 }
+ }
+ q
+Error s $zt=""
+ d $zu(9,"","Error: "_$ze_" initializing U2 routines",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+}
+chmod(path,mode) Private {
+ If ($zversion(1)=2) {
+	Set permstring=$$Mode2StringWindows(mode)
+ } ElseIf ($zversion(1)=1) {
+	Do $zf(-1,"SET SECURITY/CLASS=FILE/PROTECTION=("_$$Mode2StringVMS(mode)_") "_path)
+ } ElseIf ($zversion(1)=3) {
+	Do $zf(-1,"chmod "_$$Mode2StringUnix(mode)_" "_path)
+ }
+}
+Mode2String(mode) Private {
+ If ($zversion(1)=2) Quit $$Mode2StringWindows(mode)
+ If ($zversion(1)=1) Quit $$Mode2StringVMS(mode)
+ If ($zversion(1)=1) Quit $$Mode2StringUnix(mode)
+}
+Mode2StringUnix(mode) Private {
+ Set world=mode#8,mode=mode\8,group=mode#8,mode=mode\8,owner=mode#8
+ Quit owner_group_world
+}
+Mode2StringVMS(mode) Private {
+ Set system=mode#16,mode=mode\16,owner=mode#16,mode=mode\16,group=mode#16,mode=mode\16,world=mode#16
+ Quit "SYSTEM:"_$$VMSperm(system)_",OWNER:"_$$VMSperm(owner)_",GROUP:"_$$VMSperm(group)_",WORLD:"_$$VMSperm(world)
+}
+VMSperm(nibble)	Private {
+ Set ret="" For i=1:1:4 Set x=nibble#2,nibble=nibble\2 Set:'x ret=ret_$e("RWED",i)
+ Set:ret="" ret=""""""
+ Quit ret
+}
+Mode2StringWindows(mode) Private {
+ Quit ""
+}

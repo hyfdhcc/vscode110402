@@ -1,0 +1,81 @@
+ROUTINE %SYS.ZenReportLockControl [Type=INT]
+%SYS.ZenReportLockControl
+SecureUnlock(filename) private {
+	i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"}
+	New $namespace Do $zu(5,"%SYS")
+	Lock -^SYS("ZENReports","deletecontrol",filename) ; unlock filename
+}
+Unlock(filename) public {
+	Try {
+		Do SecureUnlock(filename)
+	}
+	Catch (e) {
+	}
+}
+SecureAddFileToDeleteQueue(filename, fileLifeTime, isFileBeingPrinted) private {
+	i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"}
+	New $namespace Do $zu(5,"%SYS")
+	Set index=$i(^SYS("ZENReports","filestopurge"))
+	Set ^SYS("ZENReports","filestopurge",index)=$LB(filename,$zdt($zts,"3"),fileLifeTime,isFileBeingPrinted)
+	; lock file if it is not being printed
+	if 'isFileBeingPrinted {
+		Lock +^SYS("ZENReports","deletecontrol",filename):0
+	}
+}
+AddFileToDeleteQueue(filename, fileLifeTime, isFileBeingPrinted) public {
+	try {
+		do SecureAddFileToDeleteQueue(filename, fileLifeTime, isFileBeingPrinted)
+	} catch e {
+	}
+}
+SecureDeleteFilesFromQueue() Private {
+	/// Keep file for file life time, when lifetime exceeded we may delete, unit is seconds
+	i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"}
+	New $namespace Do $zu(5,"%SYS")
+	Set index="" for {  Set index=$O(^SYS("ZENReports","filestopurge",index),1,filenametuple) q:index=""
+		Set filename=$LG(filenametuple,1)
+		Set timestamp=$LG(filenametuple,2)
+		Set fileLifeTime=$LG(filenametuple,3)
+		Set isFileBeingPrinted=$LG(filenametuple,4)
+		If $g(fileLifeTime)="" {
+			Set fileLifeTime=300 ; 300 seconds or 5 minutes
+		}
+		; if file is not being printed and it is not locked (indicates not in use) then delete it
+		if 'isFileBeingPrinted {
+			Set notlocked=1
+			Lock +^SYS("ZENReports","deletecontrol",filename):0
+			if '$TEST {
+				; The file is locked
+				Set notlocked=0
+			} else {
+				; The file is unlocked and we just locked it!
+				Lock -^SYS("ZENReports","deletecontrol",filename)
+			}
+			if notlocked {
+				Set flag=##class(%Library.File).Delete(filename)
+				;if 'flag {
+					;d $zu(9,"","Error deleting "_$g(filename),1 /* broadcast and log message*/,2  /* Severe error */)	
+				;} file may have been deleted by Purge
+				Kill ^SYS("ZENReports","filestopurge",index)
+			}			
+		}
+		; delete file if its life time is old enough and its being printed
+		if isFileBeingPrinted&&($SYSTEM.SQL.DATEDIFF("s",timestamp,$zdt($zts,3)) > fileLifeTime) {
+			Open filename::5 Set exists=$T
+			If exists Close filename
+			Set flag=##class(%Library.File).Delete(filename)
+			;if 'flag {
+				;d $zu(9,"","Error deleting "_$g(filename),1 /* broadcast and log message*/,2  /* Severe error */)	
+			;} file may have been deleted by Purge
+			if flag||'exists {
+				Kill ^SYS("ZENReports","filestopurge",index)
+			}
+		}
+	}
+}
+DeleteFilesFromQueue() Public {
+	try {
+		Do SecureDeleteFilesFromQueue()
+	} catch e {
+	}
+}

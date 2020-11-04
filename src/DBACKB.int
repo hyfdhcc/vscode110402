@@ -1,0 +1,544 @@
+ROUTINE DBACKB [Type=INT]
+DBACKB ; Part three of Incremental Backup ; JO2382 12/23/10
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+POSTPROC ;
+ d DEQ13
+ ; Now allow full use of the global module, unless the
+ ; caller already had switch 10 set
+ D DEQ10
+ I 'ALRDY10,'ALRDY13 d msgout($C(13,10)_"Global references are enabled."_$C(13,10),NOFORCE)
+ S DIR=""
+ F  S DIR=$O(DIRNAM(DIR)) Q:DIR=""  D EORFTOF
+ ; store parameters about this backup
+ S Y=$zu(78,22)
+ i BUTYP=FULL D
+ . K ^SYS("BACKUP","HISTORY")
+ . S ^SYS("BACKUP","LASTFULL","DATE")=BACKHDATE
+ . S ^("DESC")=DESCRIPTION,^("DEVICE")=$S($D(FIRSTDEV):FIRSTDEV,1:DEV)
+ . S ^("TYPE")="Full"     ; as opposed to External Full
+ . S ^("LOG")=logfile     ; logfile gets displayed on GUI
+ . i Y S ^("JOURNAL")=$zu(78,3)  ; Current journal file
+ i BUTYP'=FULL D
+ . d ConvHistDate^DBACK
+ . S ^SYS("BACKUP","HISTORY",(+BACKHDATE*1000000+$p(BACKHDATE,",",2)),"DESC")=DESCRIPTION
+ . S ^("DEVICE")=$S($D(FIRSTDEV):FIRSTDEV,1:DEV),^("TYPE")=TYPE
+ . S ^("LOG")=logfile     ; logfile gets displayed on GUI
+ . i Y S ^("JOURNAL")=$zu(78,3)  ; Current journal file
+ D SETHISTORY(1+($g(BUWARNING)]""))
+ q
+ExternalSetHistory(logfile,DESCRIPTION)
+ Set TYPE="Paused External Full",BUTYP=5,DEV="",FULL=2
+ D SETHISTORY(1)
+ q
+SETHISTORY(Complete)
+ s BACKHDATE=$G(BACKHDATE,$H)
+ s hindex=(+BACKHDATE*1000000+$p(BACKHDATE,",",2))
+ S Y=$zu(78,22)
+ s ^SYS("BUHISTORY",hindex,"STATUS")=$case(Complete,-1:"Aborted",2:"Warning",1:"Completed",0:"Failed",:"")
+ S ^("DESC")=$G(DESCRIPTION),^("DEVICE")=$S($D(FIRSTDEV):FIRSTDEV,1:DEV)
+ S ^("TYPE")=$S(BUTYP=FULL:"Full",1:TYPE)
+ S ^("LOG")=$G(logfile)     ; logfile gets displayed on GUI
+ s ^("LIST")=$s(+$g(alldb):"All",1:"List")
+ s ^("Complete")=Complete ;numeric completion status (cf. "STATUS")
+ I Y&(Complete>0) d SetJournalHistory(hindex)
+ i $p($g(^%SYS("JOURNAL","LIFESPAN","FILE")),",",2) d PPURGE^JRNUTIL
+ q
+SetJournalHistory(hindex) ;
+ n wijinfo s wijinfo=$g(^SYS("BACKUP","WIJINFO"))
+ s ^SYS("BUHISTORY",hindex,"JOURNAL")=$p(wijinfo,",",2)
+ s ^SYS("BUHISTORY",hindex,"WIJINFO")=wijinfo
+ q
+SetNames(D) N M
+ S M=D_"CACHE"_".",INC=M_"INC",IND=M_"IND",INE=M_"INE",INF=M_"INF"
+ Q
+ ;
+EORFTOF ; After a Full BU, we delete INE and INF
+ ; after a Cumulative or Incremental,
+ ; we merge INE into INF, and then delete INE.
+ D SetNames(DIR)
+ i BUTYP=FULL d 
+ . s RC=$$INLOGOR(DIR,1,1,1)
+ . s RC=$$INLOGOR(DIR,0,0,1)
+ i BUTYP=PARTIAL!(BUTYP=CUMINC) D
+ . S RC=$$INLOGOR(DIR,1,0,1)
+ ; If the above functions failed due to an I/O error report it and
+ ;    abort backup.
+ I (RC'=-2)&(RC<0) D  Q
+ . D msgout($C(13,10)_"["_$s(RC=+RC:"I/O Error",1:"Error "_$p(RC,",",2,*))_" occurred while processing directory '"_DIR_"']"_$C(13,10),FORCE)
+ . S OK=0
+ Q
+JRNCHECK ;
+ i $p($zu(78,22),"^",3) d  q
+ . n status,error,SAVE13,SAVE10 s SAVE13=ALRDY13,SAVE10=ALRDY10
+ . i ALRDY13 s ALRDY13=0,ALRDY10=1 d ENQ10,DEQ13
+ . d msgout("Journaling is currently off due to I/O error. Restarting journaling..."_$C(13,10),FORCE)
+ . s status=##class(%SYS.Journal.System).Start()
+ . i 'status d  i 1
+ . . s error=$System.Status.GetErrorText(status)
+ . . d msgout("Journal start did not complete: "_error_$C(13,10),FORCE)
+ . e  d msgout($C(13,10)_"Journaling started at "_$zu(78,3)_$C(13,10),FORCE)
+ . I SAVE13 D ENQ13 S ALRDY13=1
+ . i 'SAVE10 d DEQ10 s ALRDY10=0
+ S Y=$zu(78,22)
+ I 'Y d msgout("Journaling is not enabled"_$C(13,10),FORCE) Q
+JRNSWTCH ;
+ I INTERNAL,$zcvt($G(swjrn),"U")="N" d msgout($C(13,10)_"Journaling is NOT switched"_$C(13,10),FORCE) Q
+ n SAVE13,SAVE10 s SAVE13=ALRDY13,SAVE10=ALRDY10
+ ;if switch 13 is set, replace it with switch 10 since JRNSWCH sets globals
+ i ALRDY13 s ALRDY13=0,ALRDY10=1 d ENQ10,DEQ13
+ S status=$$JRNSWCH^JRNUTIL("",4)
+ i status=1 d 
+ . d msgout($C(13,10)_"Journal file switched to:"_$C(13,10),FORCE)
+ . d msgout($zu(78,3)_$C(13,10),FORCE)
+ i status'=1 d
+ . d msgout("Journal switch did not complete"_$C(13,10),FORCE)
+ . d msgout($p(status,",",2,$l(status))_$C(13,10),FORCE)
+ I SAVE13 D ENQ13 S ALRDY13=1
+ i 'SAVE10 d DEQ10 s ALRDY10=0
+ Q
+GD1(DIR) S DIR=$$ZU(12,DIR) ; get canonic name for directory
+ n zu49,zu49l s zu49l=$$ZU(49,DIR),zu49=+zu49l  ;KMK106
+  i zu49=-2!(zu49=-3) d
+  . s NODIR(DIR)="",NODIR=NODIR+1  ;KMK106
+  . s REASON(DIR)="(probably doesn't exist)"
+  e  d  
+  . ;  MNTDIR() sets up REASON(DIR) if it fails
+  . i zu49=-1!(zu49=$zu(40,0,41)) d MNTDIR(DIR) s zu49=+$ZU(49,DIR)
+  . i zu49=-1!(zu49=$zu(40,0,41)) s NODIR(DIR)="",NODIR=NODIR+1
+  . e  d
+  . . i +zu49=$zu(173) s NODIR(DIR)="",NODIR=NODIR+1,REASON(DIR)="(CACHETEMP cannot be backed up)" q
+  . . i (('$zb(+$p(zu49l,",",17),$zu(40,8,28),1))||$zb(+$p(zu49l,",",18),$zu(40,8,30),1))&&($zb(+$p(zu49l,",",17),$zu(40,8,13),1)||($zb(+$p(zu49l,",",18),$zu(40,8,2),1))) s NODIR(DIR)="",NODIR=NODIR+1,REASON(DIR)="(Database is readonly)" q
+  . . s DIRNAM(DIR)="",DIRNAM=DIRNAM+1
+  . . ; The 2nd piece of $ZU(49,dir,1) is the gfcfn which is 0
+  . . ; if the database is privately mounted, non-zero if cluster mntd.
+  . . S CLSTATE(DIR)=$S(+$P($ZU(49,DIR,1),",",2):"C",1:"P")
+  . . i 'CLUBACKUP,CLSTATE(DIR)="C" s CLUBACKUP=1,USEENQ=1
+  . . i 'USEENQ,'$p($zu(49,DIR),",",21) s USEENQ=1
+  . . ;for mirrored db's we also store a series of fields from
+  . . ; the mirror info block seperate by :'s
+  . . ;    <mirdbname>:<mirdb guid>:<mirname>:<mirguid>: etc...
+  . . s MIRDBINFO(DIR)=$$getMirDBInfo(DIR)
+ Q
+getMirDBInfo(dir) PUBLIC {
+  ; returns null string if database is not a mirrored db or we
+  ; return the information from the mirror info block that we
+  ; want to store in the database list in volume #1 for use
+  ; by DBREST.
+  if '$$isMirroredDb^MIRRORMGR(dir) quit ""
+  s info=$SYSTEM.Mirror.DBGetInfoByName(0,dir)
+  if info="" quit ""  ;shouldn't happen but this isn't a mirrored database
+  ;
+  s dbname        =$P(info,"^",2)
+  s mirjrnfilecnt =$P(info,"^",3)
+  s jrnoff        =$P(info,"^",4)
+  s dbguid        =$P(info,"^",6)
+  s mirguid       =$P(info,"^",7)
+  s mirname       =$P(info,"^",8)
+  s sysguid       =$P(info,"^",9)
+  ; lastfilecntrestored is usually zero unless the database
+  ; is currently being caught up. In that situation this contains
+  ; the mirjrnfilecnt of the last journal file replayed to
+  ; this database.
+  s lastfilerest =$P(info,"^",11)
+  s nofailoverbit=+$ZU(40,8,31)
+  s nofailoverflag=+$P(info,"^",12)
+  s readonly=$ZB(nofailoverflag,nofailoverbit,1)			
+  if readonly'=0 s readonly=1  ;change to 1/0 for read-only/read-write
+  ; use : as a seperator, not ^. ^ is already the delimiter for the
+  ; string this gets added to in the backup with the $ZU(49) and
+  ; cluster flag. : is safe as long as we don't store any file names
+  ; in this info as : can't be in any of the other strings.
+  s backupinfo=dbname_":"_mirjrnfilecnt_":"_jrnoff_":"_dbguid
+  s backupinfo=backupinfo_":"_mirguid_":"_mirname_":"_sysguid
+  s backupinfo=backupinfo_":"_readonly
+  quit backupinfo
+}
+MNTDIR(DIR) ; 
+ N (DIR,%ST,REASON,bkpmount,zu49)
+ s:zu49'=$zu(40,0,41) bkpmount(DIR)=""
+ s Status=##Class(SYS.Database).MountDatabase(DIR,0,0)
+ i (''Status) q
+ i '$S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0) s REASON(DIR)="(cannot be mounted, "_$SYSTEM.Status.GetErrorText(Status)_")" q
+ s Status=##Class(SYS.Database).MountDatabase(DIR,0,1)
+ i '(''Status) s REASON(DIR)="(might be privately mounted elsewhere, "_$SYSTEM.Status.GetErrorText(Status)_")"
+ q
+ ;        
+ ; subtract two times in $H format, and return the diff in # seconds
+TIME(a,b) q (a-b*24*3600)+$p(a,",",2)-$p(b,",",2)
+LISTDIRS ; This tag was moved here from DBACK
+ ; This procedure takes a file name and a mode.  It opens the file
+ ;   and dumps the list of directories which are included in a backup.
+ ;   If the list is empty, all directories on the system (except cachetemp)
+ ;   are backed up.
+ ; If MODE is not equal to "QUIET" then it also displays this list
+ ;  on the terminal.
+ ; It is intended that this list provide the list of directories
+ ;    who's CACHE.DATs will be backed up.  If the backup is performed
+ ;    with Cache up then it is expected that the external backup
+ ;    will be followed immediatly by a 'concurrent incremental' backup
+ ;    as it is necessary in order to record blocks which were modified
+ ;    during the external backup.  If a directory is present in the
+ ;    SYS global but does not really exist then it is not listed and
+ ;    the DBACK utility will report that it isn't being backed up...
+ ; Notes:
+ ;     This procedure requires read access to the SYS global.
+ ;     No switches are set or cleared
+ ;     All local variables are NEWed
+ N DIR,QUIET,D,zu49
+ n rc,cnt,list,i,del1,del2,db,dbname,msg
+ S $ZT="LSTERR^DBACKB"
+ i $$UP^DBACK(mode)'="QUIET" d
+ . s QUIET=0
+ . w !,"List of directories to be backed up"
+ e  s QUIET=1
+ O file:"WNS"   ; Create a new copy of this file
+ s del1=$$del1^%Wprim,del2=$$del2^%Wprim
+ s rc=$$DbList^Wsback(.list)
+ if '+rc w !,"Error building list of databases: ",$P(rc,del1,2) g LSTERR2
+ s cnt=$L(list,del1)-1
+ f i=1:1:cnt {
+	s db=$P(list,del1,i)
+	s dbname=$P(db,del2,1)
+	q:dbname=""  
+	s DIR=$P(db,del2,2)
+ 	s zu49=+$$ZU(49,DIR)  
+ 	i zu49=-1 {  ; skip unmounted directories
+ 	   s msg=DIR_" NOT mounted.  Omitted from backup."
+ 	   u file w msg,! i 'QUIET u 0 w !,?5,msg
+ 	} elseif zu49'=-2 {
+ 	   S D=$$ZU(12,DIR) ;Just incase it is a logical w/o ":" 
+ 	   u file w D,!
+ 	   i 'QUIET u 0 w !,?5,D
+ 	}
+ }
+ use 0
+ c file
+ i 'QUIET w !
+ s $ZT="" Q 1   ; indicates success
+LSTERR s $ZT="" i $ZE'="" w !,$ZE,!
+LSTERR2
+ c file
+ q 0   ; indicates failures
+ ;-------------------------------------------------------------------
+CLRINC ;This tag was moved here from DBACK
+ ;This procedure is called to clear the bitmaps that mark blocks as
+ ;  modified for the databases in the backup list.  At the same
+ ;  time it also deletes the backup history as it is no longer possible
+ ;  to do any sort of a backup without first performing a full backup.
+ ;  This procedure is designed to be used prior to doing an external
+ ;  full backup with Cache running.  If an external backup is
+ ;  performed with Cache down then before shutting down the system,
+ ;  this entry point should be called. (JAO614 updated this comment)
+ ;If MODE is not equal to QUIET then the procedure prints out the
+ ;  directory names as it goes along.
+ ;This procedure sets switch 10, waits for the daemon/garcol to
+ ;  quiesse, and dismounts the directories before deleting the .INC
+ ;  files.  
+ ; Notes:
+ ;    This process requires read/write access to the SYS global.
+ ;    This procedure will record the state of switch 13,
+ ;          insure switch 13 is set and restore switch 13 upon exit.
+ ;    All local variables are NEWed EXCEPT for those defined by
+ ;          INITVARS^DBACK
+ ;    If a directory is dismounted when this routine is called then
+ ;          it is left dismounted when the routine exits
+ ; Error processing:
+ ;   If an error is encountered (although none are expected) then we
+ ;      restore switch 13.  At this point however we have deleted
+ ;      the backup history information as we may have cleared one
+ ;      or more bitmaps (JAO614)
+ S $ZT="CLRERR"
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") {
+ 	w !,"Operation requires %Admin_Operate:Use privilege"
+	q 0	 
+ }
+ N DIR,%SW,%VAL,RC,TMP,QUIET,SW13SET,SW10SET,OK,D         
+ n zu49  
+ n CLUBACKUP,LCKTYPE,NODIR,DIRNAM,CLSTATE
+ n mirrorid,MIRDBINFO
+ n rc,cnt,list,i,del1,del2,db,dbname,msg
+ n ALRDY13 ;used in ENQ13, same as SW13SET
+ D INITVARS^DBACK                   ; Note: This executes ^%ST
+ s DIR=""
+ ; Insure switch 10 is set, switch 13 is clear
+ S SW10SET=$$CHECK10^DBACK          ; Records current setting of switch 10
+ S SW13SET=$$CHECK13^DBACK          ; Records current setting of switch 13
+ I 'SW10SET S %SW=10,%VAL=1 d INT^SWSET       ; Set switch 10
+ I SW13SET S %SW=13,%VAL=0 d INT^SWSET        ; Clear switch 13
+ i $$UP^DBACK(mode)'="QUIET" s QUIET=0
+ e  s QUIET=1
+ ;
+ S NODIR=0,DIRNAM=0
+ s del1=$$del1^%Wprim,del2=$$del2^%Wprim
+ s rc=$$DbList^Wsback(.list)
+ if '+rc w !,"Error building list of databases: ",$P(rc,del1,2) g CLRERR3
+ s cnt=$L(list,del1)-1
+ f i=1:1:cnt {
+	s db=$P(list,del1,i)
+	s dbname=$P(db,del2,1)
+	q:dbname=""  
+	s DIR=$P(db,del2,2)
+	do GD1(DIR)
+    i $d(NODIR(DIR)),'QUIET w !,?5,DIR,$tr($g(REASON(DIR)),"()","  ")
+ }
+ ; Kill off the history and initialize the variables for using
+ ;   the Backup specific $ZU functions
+ K ^SYS("BACKUP","HISTORY")   ; Once we start this we can no longer
+ K ^SYS("BACKUP","LASTFULL")  ;    use the old history information
+ s ^SYS("BACKUP","WIJINFO")=$zu(78,21)
+ ; Wait for disk cleanup to complete
+ I SW13SET S %SW=13,%VAL=1 D INT^SWSET        ; Set switch 13  
+ I 'SW10SET S %SW=10,%VAL=0 D INT^SWSET       ; Clear switch 10
+ i $g(USEENQ) s ALRDY13=SW13SET d ENQ13 i 1 
+ e  d HOLDWD(.DIRNAM)
+ s $zt="CLRERR2"
+ S DIR=""
+ F  S DIR=$O(DIRNAM(DIR)) q:DIR=""  d
+ . S D=$$ZU(12,DIR) ; Just incase it is a logical w/o ":"     
+ . do $ZU(52,8,D,0)  ;Clear the GFNOBACKUP bit on the database
+ . ;Set GFFORCEFULBK for non-HOLDWD because HOLDWD already turned it on.
+ . ;We need to set it for CLRINC to make sure this DB needs a full backup
+ . ;afterwards. The BACKUP^DBACK("","E") will clear it after a full backup
+ . ;is succeed.
+ . I $g(USEENQ) D $zu(52,9,DIR,1)
+ . s RC=$$INLOGOR^DBACK(D,3,3,1) ; clear it
+ . i 'QUIET D
+ .. I RC>-1 W !,?5,"Cleared incremental backup bitmap in ",D q
+ .. i RC=-1 w !,?5,"I/O Error clearing bitmap in ",D q
+ .. i RC=-2 w !,?5,"Incremental backup not enabled for ",D q
+ .. w !,?5,"Unknown error (",RC,") clearing bitmap in ",D
+ ; Post processing - reset switches
+ i $g(USEENQ) d DEQ13 i 1
+ e  d FREEWD
+ S $ZT=""
+ Q 1                         ; Indicates success
+CLRERR s $ZT="" i $ZE'="" w !,$ZE
+CLRERR3 ;
+ w !
+ I SW13SET  S %SW=13,%VAL=1 D INT^SWSET       ; Set switch 13  
+ I 'SW10SET S %SW=10,%VAL=0 D INT^SWSET       ; Clear switch 10
+ q 0                       ; Indicates failure
+CLRERR2 s $ZT="" i $ZE'="" w !,$ZE
+ w !
+ i $g(USEENQ) d DEQ13 i 1
+ e  d FREEWD 
+ q 0
+INLOGOR(DIR,SOURCE,TARGET,DISPOSE) ;Adapter, present same i'face for VAX & UX
+ n rc
+ try {
+   s rc=$ZU(31,DIR,SOURCE,TARGET,DISPOSE)
+ } catch {
+   s rc=-1_","_$ze
+   s $ze=""
+ }
+ q rc
+FILENORM(NAME) ;Return normalized version of NAME
+ S OK=1,$ZT="FNERR"
+ i ($zversion(1)=1) N MTDEV S MTDEV=$$OSDEVICE(NAME) I MTDEV'="" D  Q MTDEV
+ . s ISREG=0
+ . W !,"Cache device numbers are not legal here.  Substituting ",MTDEV
+ i '($zversion(1)=1) N MTDEV,DIR S MTDEV=$$OSDEVICE(NAME) I MTDEV'="" S ISREG=0 Q NAME
+ i ($zversion(1)=1) S DIR=NAME
+ i ($zversion(1)=1) q $ZU(12,DIR)
+ i ($zversion(1)=2),$E(NAME,1,2)="\\" S L=$$CheckForTape(NAME) I L'="" S ISREG=0 Q L
+ i ($zversion(1)=2) S L=$L(NAME,"\"),DIR=$P(NAME,"\",1,L-1)
+ i ($zversion(1)=2) IF L>1 S DIR=DIR_"\"
+ i ($zversion(1)=2) S NAME=$ZU(12,DIR)_$P(NAME,"\",L,L),ISREG=$ZU(140,7,NAME),ISREG=$S(ISREG>0:1,ISREG=-2:1,1:0) Q NAME
+ i ($zversion(1)=3) S L=$L(NAME,"/"),DIR=$P(NAME,"/",1,L-1)
+ i ($zversion(1)=3) IF L>1 S DIR=DIR_"/"
+ i ($zversion(1)=3) S NAME=$ZU(12,DIR)_$P(NAME,"/",L,L),ISREG=$ZU(140,7,NAME),ISREG=$S(ISREG=-2:1,ISREG/32768#2:1,1:0) Q NAME
+FNERR S OK=0,ERRMSG="Not a valid device name." Q
+CheckForTape(NAME)
+ S NAME=$ZCVT(NAME,"U")
+ N I,TAPE
+ For I=47:1:62 s TAPE=$$OSDEVICE(I) I NAME=$ZCVT(TAPE,"U") S NAME=I Q
+ I NAME?2N Q NAME
+ I NAME?1"\\.\TAPE"1N Q NAME
+ Q ""
+TQUIWRITE(verbose) q $$QUIESCE(1,"buffer activity",10,verbose)
+TQUIGC(verbose) q $$QUIESCE(2,"garbage collection",10,verbose)
+TQUIDB(verbose) q $$QUIESCE(4,"database expansion",10,verbose)
+TQUIGLO(verbose) q $$QUIESCE(8,"global activity",10,verbose)
+TQUIGLOUPD(verbose) q $$QUIESCE(16,"global updates",10,verbose)
+TQUINET(verbose) q $$QUIESCE(32,"network activity",10,verbose)
+TQUIDISK(verbose) q $$QUIESCE(1+2,"disk activity",10,verbose)
+TQUIUPD(verbose) q $$QUIESCE(1+2+4+16,"update activity",10,verbose)
+TQUISYS(verbose) q $$QUIESCE(1+2+4+8,"system activity",10,verbose)
+QUIESCE(bits,text,retries,verbose,intv) ;
+ s verbose=+$g(verbose),retries=+$g(retries,-1),intv=+$g(intv,1)
+ q ($$Quiesce(bits,text,retries,verbose,intv)>0)
+Quiesce(bits,text,retries,verbose,intv) ;
+ n noWDbits  ;JO1988
+ s $zt="QUIESCEE"
+ q:$zu(51,bits) 1 ;double checking $ZU(51) is no longer necessary
+ s verbose=+$g(verbose),retries=+$g(retries,-1),intv=+$g(intv,1)
+ d msgout($c(13,10)_"WARNING: Switch is set and may affect production for up to "_(retries*intv)_" seconds."_$c(13,10)_"Waiting for "_text_" to finish...",NOFORCE)
+ f  q:'retries  h intv q:$zu(51,bits)  s retries=retries-1 i retries#5=0 d msgout(".",NOFORCE)
+ s noWDbits=1
+ s:$s($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0):''$zu(59,0),1:0) noWDbits=noWDbits+2
+ s noWDbits=$zboolean(bits,noWDbits,2)  ;2 = x & ~ y
+ if '$ZU(51,bits),bits'=1,$zboolean(bits,1,1),$zu(51,noWDbits) {
+	 d msgout($c(13,10)_"System is idle except WD is still running."_$c(13,10)_"     Waiting up to 2 minutes for WD to finish",NOFORCE)
+	 f i=1:1:120 q:$ZU(51,bits)  h 1 if i#5=0 d msgout(".",NOFORCE)
+	 if $ZU(51,bits) s retries=1 ;signal success
+ }
+ d msgout($s(retries:" ready.",1:" abort. "_$$quiescefailmsg(bits))_$c(13,10),NOFORCE)
+ q retries
+quiescefailmsg(bits)
+ N ret,clu,clumsg s ret="",clu=$zb(bits,512+256+128,1),clumsg=""
+ if $zb(clu,128,1)||($zb(clu,(256+512),1)=(256+512)) s clu=128,clumsg=" (cluster wide)"
+ if $zb(clu,512,1) s clumsg=" (cluster master only)"
+ if $zb(clu,256,1) s clumsg=" (cluster slaves only)"
+ if $zb(bits,1,1)&&('$ZU(51,clu+1)) S ret=ret_"write daemon"_clumsg_","
+ if $zb(bits,2,1)&&('$ZU(51,clu+2)) S ret=ret_"garbage collector"_clumsg_"," 
+ if $zb(bits,4,1)&&('$ZU(51,clu+4)) S ret=ret_"file expander"_clumsg_","
+ if $zb(bits,8,1)&&('$ZU(51,clu+8)) S ret=ret_"global reference"_clumsg_","
+ if $zb(bits,16,1)&&('$ZU(51,clu+16)) S ret=ret_"global update"_clumsg_","
+ if $zb(bits,32,1)&&('$ZU(51,clu+32)) S ret=ret_"client-side network connections"_clumsg_","
+ if $zb(bits,64,1)&&('$ZU(51,clu+64)) S ret=ret_"network server activity"_clumsg_","
+ if ret'="" s ret="Quiesce failed reason: "_$e(ret,1,*-1) d $zu(9,"",ret,1,2) i $d(^rOBJ("ZQuiesceFail")) d ^ZQuiesceFail
+ Q ret
+QUIESCEE s $zt="" d $zu(9,"","QUIESCE: "_$ze,(1>0),1) q -1 ;0
+CluQuiet(switch,target,timeout)
+ n flags,rc
+ i $g(switch)-10,$g(switch)-13 ztrap "SWITCH"
+ n targetmsg s target=$g(target)
+ i target=1 s target=256,targetmsg=" on cluster slave members"
+ e  i target=2 s target=512,targetmsg=" on cluster master"
+ e  s target=512+256,targetmsg=" cluster wide"
+ s flags=1+2+4+$s(switch=10:8,1:16)
+ s rc=$$Quiesce(flags+target,$s(switch=10:"system activity",1:"update activity")_targetmsg,$g(timeout,10),'$g(QUIET,$g(QUIETLY)))
+ i rc<0 ztrap "Abort"
+ q rc
+quietsw(switch,timeout) ;quiesce activities w/ timeout after setting switch 10 or 13
+ n flags,rc
+ i $g(switch)-10,$g(switch)-13 ztrap "SWITCH"
+ s flags=1+2+4+$s(switch=10:8,1:16)
+ i CLUBACKUP s flags=flags+128
+ s rc=$$Quiesce(flags,"disk cleanup",$s($g(timeout)="":30,1:timeout),'$g(QUIET))
+ i rc<0 ztrap "Abort"
+ q rc
+hibernate(switch,released,timeo) ;
+ i +$g(released) d msgout($c(13,10)_"Switch "_switch_" is released.",NOFORCE)
+ n hibtime s hibtime=$s(timeo>3:10,timeo>2:1,timeo>1:.1,timeo>0:.01,1:10)
+ d msgout($c(13,10)_"Backup will hibernate for "_hibtime_" second(s) and try again."_$c(13,10)_"You may abort Backup via Ctrl-C. ",NOFORCE) 
+ i hibtime<1 h hibtime
+ e  n i f i=1:1:hibtime h 1 d msgout(".",NOFORCE)
+ d msgout($c(13,10),NOFORCE)
+ q
+ENQ10 ;
+ n t s t=$g(quietimeout,60) s:t>0 t=(t+9)\10 ;rounded up to 10 sec
+ s $zt="ENQ10e"
+ i CLUBACKUP d  q
+ . f  q:$$CLU^SWSET(10,1,ALRDY10,$g(QUIETMASTERONLY))  s t=t-1 zt:'t "Abort" d hibernate(10,'ALRDY10,t)
+ i ALRDY10 q:$$quietsw(10)  zt "Abort"
+ f  S %SW=10,%VAL=1 D INT^SWSET  q:$$quietsw(10)  s t=t-1 zt:'t "Abort" d DEQ10,hibernate(10,1,t)
+ Q
+ENQ10e s $zt="" d DEQ10 ztrap $ze
+DEQ10 ;
+ i CLUBACKUP,$ZU(95,10,0)  ; Clear SW10 clusterwide
+ i 'ALRDY10 s %SW=10,%VAL=0 D INT^SWSET
+ Q
+ENQ13 ;
+ n t s t=$g(quietimeout,60) s:t>0 t=(t+9)\10 ;rounded up to 10 sec
+ s $zt="ENQ13e"
+ i CLUBACKUP d  q
+ . f  q:$$CLU^SWSET(13,1,ALRDY13)  s t=t-1 zt:'t "Abort" d DEQ13,hibernate(13,'ALRDY13,t)
+ i ALRDY13 q:$$quietsw(13)  zt "Abort"
+ f  S %SW=13,%VAL=1 D INT^SWSET  q:$$quietsw(13)  s t=t-1 zt:'t "Abort" d DEQ13,hibernate(13,1,t)
+ Q
+ENQ13e s $zt="" d DEQ13 zq 1 g:$zt'="" @$zt q
+DEQ13 ;
+ i CLUBACKUP,$ZU(95,13,0)  ; Clear SW13 clusterwide
+ i 'ALRDY13 s %SW=13,%VAL=0 D INT^SWSET
+ Q
+HOLDWD(dir) ;suspend write daemon (dir may be passed as an array)
+ n n
+ i $zu(182,1,0) ;clear any remaining backup request
+ f  q:'$zu(182,0)  h 1  ;wait until write daemon runs again
+ i $d(dir)<10 d $zu(52,9,dir,1) d $zu(182,2,0,+$zu(49,dir)) s n=1 i 1
+ e  s dir="" f n=0:1 s dir=$o(dir(dir)) q:dir=""  d $zu(52,9,dir,1) d $zu(182,2,n,+$zu(49,dir))
+ i $zu(182,1,n)  ;set number of databases to back up
+ f  q:$zu(182,0)  h 1  ;wait until write daemon suspends
+ q
+FREEWD ;unsuspend write daemon
+ i $zu(182,1,0)
+ q
+msgout(aaamess,flag) ;
+         s flag=$g(flag,1) ; default to FORCE
+         W *-1            ;Flush the input buffer                     ;SSG012
+         q:'$L(aaamess)   ; Avoid argumentless writes...
+         i $g(logfile)'="" u logfile w aaamess
+         u 0
+         q:flag=3  ; 1 = FORCE, FORCE, 2 = NOFORCE, 3 = LOGONLY
+         i '$G(INTERNAL,0)!('$G(NOINPUT,0)&(flag=1!'$G(QUIET,0))) w aaamess
+         i $g(gui) D  
+         . s return=$$IjcMsg^%Wprima("DI"_aaamess) ; Retval might =  cancel msg
+         . i return="CANCEL" d  
+         . . i $$IjcMsg^%Wprima("DI"_$c(13,10)_"Abort received!"_$c(13,10))
+         . . zt "Abort"
+         u 0 
+         q
+timestmp(flag) 
+         n msg,%TS,%TN
+         s msg="TIMESTAMP: "
+         s %DN=+$H d INT^%DO
+         s msg=msg_%DS
+         s %TN=$P($h,",",2) d ^%TO
+         s msg=msg_" "_%TS
+         d msgout($c(13,10)_msg_$c(13,10))
+         q
+OSDEVICE(mdevice,new) ;osdevice + range check, pad input, strip output.
+ s mdevice=+mdevice q:mdevice<47 ""  q:mdevice>62 ""
+ i $d(new) s new=$$zpad(new,32)
+ q $$zstrip($$osdevice(mdevice,.new))
+osdevice(mdevice,new) ;"Raw" osdevice
+ n adr,old,size,where,charsize
+ s $ZT="osdeverr"
+ s charsize=$$charsize^%Wprim() ; check size one char
+ s size=32,adr=(mdevice-47)*(size*charsize)+$ZU(40,2,28),where=-2
+ s old=$v(adr,where,-size_"w")
+ i $d(new) v adr:where:-size_"w":new
+ q old
+osdeverr q ""
+zstrip(x) ;Return x with ASCII NUL's removed
+ q $tr(x,$c(0),"")
+zpad(x,len) ;x, maybe truncated, NUL-padded to length len, one NUL guaranteed
+ n zeroes
+ s zeroes=$j("",len),zeroes=$tr(zeroes," ",$c(0)) ;String of len NUL's
+ s x=$e(x,1,len-1) ;Silently truncate x if necessary
+ s $e(zeroes,1,$l(x))=x
+ q zeroes
+ZU(A,B,C,D,E,F,G,H,I,J,K,L,M,N,P) ;so needn't change $$ZU's to $ZU's
+ IF '$D(B) Q $ZU(A)
+ IF '$D(C) Q $ZU(A,B)
+ IF '$D(D) Q $ZU(A,B,C)
+ IF '$D(E) Q $ZU(A,B,C,D)
+ IF '$D(F) Q $ZU(A,B,C,D,E)
+ IF '$D(G) Q $ZU(A,B,C,D,E,F)
+ IF '$D(H) Q $ZU(A,B,C,D,E,F,G)
+ IF '$D(I) Q $ZU(A,B,C,D,E,F,G,H)
+ IF '$D(J) Q $ZU(A,B,C,D,E,F,G,H,I)
+ IF '$D(K) Q $ZU(A,B,C,D,E,F,G,H,I,J)
+ IF '$D(L) Q $ZU(A,B,C,D,E,F,G,H,I,J,K)
+ IF '$D(M) Q $ZU(A,B,C,D,E,F,G,H,I,J,K,L)
+ IF '$D(N) Q $ZU(A,B,C,D,E,F,G,H,I,J,K,L,M)
+ IF '$D(P) Q $ZU(A,B,C,D,E,F,G,H,I,J,K,L,M,N)
+           Q $ZU(A,B,C,D,E,F,G,H,I,J,K,L,M,N,P)
+MORE Q      ;JAO580 added 

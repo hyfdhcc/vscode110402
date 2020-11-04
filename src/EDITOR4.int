@@ -1,0 +1,15 @@
+ROUTINE EDITOR4 [Type=INT]
+EDITOR4 ;(PK) Transfer lines from one place to another ; STC200 02/20/99
+ ;; Copyright 1984, Intersystems Corporation
+ F %I=1:1 S %A=$T(%+%I),%T=$P(%A," "),%B=$P(%A," ;;",2,256) Q:%T="END"  I $L(%T) S ^%RS(%T)=%B
+ Q
+% ;
+1 ;;N (%BG,%EN) S %POP=0 R !,"Begin: ",%T Q:%T=""  X ^%("TAG") Q:%L=""  S %K=$J K ^UPS(%K) S %BG=%T X ^%RS(2)
+2 ;;R "   End: ",%EN S %A=$S(%EN="":3,1:20) X ^%RS(%A)
+3 ;;S %J=1,%B=$P(%BG,"+"),%I=+$P(%BG,"+",2) F %I=%I:1 S %T=%B_"+"_%I,@("%L=$T("_%T_")") Q:%L=""  S %EN=%T,^UPS(%K,%J)=%L,%J=%J+1
+20 ;;S %T=%EN X ^%("TAG") Q:%L=""  S %A=$P(%L," ")_" \*/ "_$P(%L," ",2,999) ZR @%T ZI %A X ^%RS(21)
+21 ;;S %J=1,%B=$P(%BG,"+"),%I=$P(%BG,"+",2)+0 F %I=%I:1 S %T=%B_"+"_%I,@("%L=$T("_%T_")"),%C=$P(%L," ",2),%FI=%C="\*/"!(%L="") X:'%FI ^%RS(22) I %FI S %L=$P(%L," ")_" "_$P(%L," ",3,999) X ^%RS(22) ZR @%T ZI %L Q
+22 ;;S ^UPS(%K,%J)=%L,%J=%J+1
+100 ;;N (%BG,%EN) R !,"Insert after: ",%T I %T]"" X ^%("TAG") Q:%L=""  X ^%RS(101)
+101 ;;S %K=$J I $D(^UPS(%K,1)) S %A=^(1) ZR @%T ZI %L F %J=1:1 Q:'$D(^UPS(%K,%J))  S %A=^(%J) ZI %A
+END ;;

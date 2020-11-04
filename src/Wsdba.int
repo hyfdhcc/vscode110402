@@ -1,0 +1,325 @@
+ROUTINE Wsdba [Type=INT]
+Wsdba ;System Management database functions part 2; SML528 03/10/05
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+maskincl(mask,item,ext) New e,i,include,m,m1,m2
+ Set include=0,ext=$ZCVT($g(ext,""),"U")
+ For i=1:1 Set m=$p(mask,";",i),e="" Quit:m=""  Do:m'["'"  Quit:include
+ . Set:m["." m=$$ParseRoutineName^%R(m,.e),e=$s(e="*":"",e="SRC":".INC.MAC.INT.BAS",e="":"",1:"."_e)
+ . If m["*" Do  Quit
+ . . Set m=$p(m,"*")
+ . . If m=$e(item,1,$l(m)),(e=""!(e[ext)) Set include=1 Quit
+ . If m[":" Do  Quit
+ . . Set m1=$p(m,":"),m2=$p(m,":",2)
+ . . If m1=$e(item,1,$l(m1))!(item]m1) Do
+ . . . If m2=$e(item,1,$l(m2))!(m2]item) Do
+ . . . . Set:e=""!(e[ext) include=1
+ . If m=item,(e=""!(e[ext)) Set include=1 Quit
+ If include,mask["'" For i=1:1 Set m=$p(mask,";",i),e="" Quit:m=""  Do:m["'"  Quit:'include
+ . Set m=$e(m,2,*)
+ . Set:m["." m=$$ParseRoutineName^%R(m,.e),e=$s(e="*":"",e="SRC":".INC.MAC.INT.BAS",e="":"",1:"."_e)
+ . If m["*" Do  Quit
+ . . Set m=$p(m,"*")
+ . . If m=$e(item,1,$l(m)),e=""!(e[ext) Set include=0
+ . If m[":" Do  Quit
+ . . Set m1=$p(m,":"),m2=$p(m,":",2)
+ . . If m1=$e(item,1,$l(m1))!(item]m1) Do
+ . . . If m2=$e(item,1,$l(m2))!(m2]item) Do
+ . . . . Set:e=""!(e[ext) include=0 ; SJ bug fix
+ . If m=item,(e=""!(e[ext)) Set include=0 Quit
+ Quit include
+BldInfo(db,status)  ;build info about databases
+ ;inputs:
+ ;  db = one of the following:
+ ;    - database directory name: build for this database
+ ;    - null: build for all databases, kill off ^%SYS("database")
+ ;    - 1: build for all databases, do not kill off ^%SYS("database")
+ ;  status = flag to post status (0/1)
+ ;return value:
+ ;  none
+ ;
+ ; ^%SYS("database") = last build run information
+ ;       P1:  1 complete
+ ;            0 error during build
+ ;           -1 current database (running)
+ ;       P2:  time and date the build is run
+ ;           $ze if P1=0
+ ; ^%SYS("database",0) = all database calculation 
+ ;       P1:  $H of start
+ ;       P2:  $H of finish
+ ;       P3:  date and time of finish in display format
+ ; ^%SYS("database",database_dir) = database size information 
+ ;       P1:  current size
+ ;       P2:  current percent
+ ;       P3:  max size
+ ;       P4:  max percent
+ ;       P5:  $H of calculation finish for this database
+ ;       P6:  date and time of finish in display format
+ ; Note: It is intended to maintain backward compatibility for V2.x  
+ n (db,status,%UI)
+ Lock ^%SYS("database"):2 i '$t q  ;already running
+ s $ze="",$zt="BldInfoErr"
+ s return=1
+ s db=$g(db)
+ k:db="" ^%SYS("database")       ;start from scratch
+ s:db=1 db=""                    ;update all databses, but don't kill entire global
+ s dirsys=$g(^SYS("GREDIR","NSACT"))
+ q:dirsys=""                    ;this should never happen
+ i db'="",'$d(^%SYS("database",db)) s db=$zu(12,$p($g(^SYS("GREDIR","DSLOC","master",dirsys,db)),$c(1),1))
+ s del=$$del2^%Wprim
+ k %UI("CANCEL")
+ s %UI=$g(%UI,"GUI")
+ ;take care of one database
+ i db'="" d  q
+ . s dir=db 
+ . d BldInfo2
+ . Lock
+ ;the following code deals with all databases
+ ;stamp starting date/time for calculating all databases
+ s ^%SYS("database",0)=$H
+ s dir=""
+ f  s dir=$O(^SYS("UCI",dir)) q:dir=""  d  q:'return
+ . i db'="",db'=dir q       ;skip if not selected db
+ . d BldInfo2
+ ;stamp finishing date/time for calculating all databases
+ s ^%SYS("database",0)=^%SYS("database",0)_$c(22,35,1)_$H_$c(22,35,1)_%TIM_", "_$zdate($h,6)_"."
+ Lock
+ q
+BldInfo2        ; break out from the for loop so that
+ ; it works when jobbed off from List
+ Do
+ . Set ^%SYS("database")=-1_$c(22,35,1)_dir
+ . Set $ZTrap="BldI2^Wsdba"
+ . If ^SYS("UCI",dir)'="" Quit  ;skip secondary volumes
+ . Set rc=$$GetDatabaseInfo^%SYS.DATABASE(dir,.%zu)
+ . If rc'=1 Quit
+ . Set blksize=$Piece(%zu,",",2)
+ . Set cursize=$Piece(%zu,",",4)
+ . Set curpct=""
+ . If $Piece(%zu,",",6)=0 Do   ;use max database size in blocks
+ . . If blksize=2048 Set $Piece(%zu,",",6)=8388096
+ . . Else  Do
+ . . . ; From GMaxBlks[] in blsize.h
+ . . . Set mapsize=$Case(blksize,4096:0,8192:31,16384:31*3,32768:31*7,65536:31*15)+30*1024
+ . . . Set max=65536*65536-1/mapsize-1\1*mapsize
+ . . . Set $Piece(%zu,",",6)=max
+ . Set maxsize=$Piece(%zu,",",6)
+ . Set maxpct=""
+ . Set %FREE=0
+ . If blksize=2048 Do
+ . . Open 63:"^^"_dir
+ . . Set %Max=cursize*1048576/2048/400\1
+ . . For Map=0:1:%Max-1 View 400*Map+1 Do
+ . . . If status,Map#100=0 Do  ;report status, keep MVB from timing out
+ . . . . Do DoEvents^%CDSrv
+ . . . If $v(2046,0,2)<400,$View(2040,0,2)=21845 Set %FREE=%FREE+$v(2046,0,2)
+ . . Close 63
+ . Else  Do
+ . . ;here goes the $ZU call that Laura will write to count in-use blocks.
+ . . Set x=$$GetFreeCount^%SYS.DATABASE(dir,.y,.%FREE)
+ . Set %FREE=%FREE*blksize/1048576
+ . Set curpct=$Justify((cursize-%FREE)/cursize,0,4)
+ . Set maxpct=$Justify(cursize-%FREE/(maxsize*blksize/1048576),0,4)
+ . Do INT^%T
+ . Set ^%SYS("database",dir)=$Justify(cursize,0,0)_del_curpct_del_$Justify(maxsize,0,0)_del_maxpct_del_$Horolog_del_%TIM_", "_$ZDate($Horolog,6)_"."
+ . Quit
+BldI2 . Close 63
+ . Set ^%SYS("database",dir)=$ZE
+ . Lock
+ . Quit
+ Do INT^%T
+ Set ^%SYS("database")=1_$c(22,35,1)_%TIM_", "_$ZDate($Horolog,6)_"."
+ Quit
+BldInfoErr      ;
+ s ^%SYS("database")=0_$c(22,35,1)_$ze
+ Lock
+ q
+ ;
+DbIsMounted(glo)  ;get info about databases
+ ;inputs:
+ ;  glo = global to check (optional, use this consider mapping)
+ ;return value:
+ ;  success/failure flag (0_message=failure, 1=success)
+ ;
+ New (%UI,glo)
+ Set $ze="",$zt="DbIMErr",status=0,glo=$g(glo)
+ ;test local default database
+ If glo="",$$defsys^%SYS.GLO($zu(5))="" Do  Quit status
+ . Set status=$p($zu(49,$$defdir^%SYS.GLO($zu(5))),",",1)
+ . Set status=$s(status>($zu(40,0,41)-1):0,status<0:0,1:1)
+ ;test mapping
+ Set netHard=$zu(68,27,0) ;turn off network hardening
+ ;check db status by trying to access a global
+ If glo="" Set glo="^k1z9foo"
+ Set dummy=$d(@glo)
+ If $ze="" Set status=1
+DbIMErr If $g(netHard) Do $zu(68,27,1) ;restore to original state
+ Quit status
+ ;
+GetInfo(asof)  ;get info about databases
+ ;inputs:
+ ;  asof = date of last $$BldInfo(), passed by reference
+ ;return value:
+ ;  success/failure flag (0_message=failure, #databases=success)
+ ;output record:
+ ;  name, mount status, current size, pct, max size, pct
+ ;
+ n (%UI,asof)
+ s $ze="",$zt="GetInfoErr"
+ s return=1
+ s (dir,str)=""
+ s del=$$del2^%Wprim
+ k %UI("CANCEL")
+ s %UI=$g(%UI,"GUI")
+ f  s dir=$O(^%SYS("database",dir)) q:dir=""  d  q:'return
+ . s stat=$P($zu(49,dir),",",1)
+ . s mount=$s(stat<0:0,1:1)
+ . i '$zu(40,2,95) s clust=5
+ . i $zu(40,2,95) d
+ . . s clust=$p($zu(49,dir,1),",",3) 
+ . . i clust="S" s clust=3
+ . . e  s clust=5
+ . s out=dir_"cache.dat"_del_mount_del_clust_del_^%SYS("database",dir)
+ . i $$callback^%Wprim(0,"",out) s return=0
+ i return,$$callback^%Wprim(1,"","") s return=0
+ s asof=$g(^%SYS("database"))
+ q 1
+GetInfoErr      ;
+ Q 0_$c(22,35,1)_"Can not fetch database information for "_dir_$s($ZE'="":$c(13,10,10)_"$ze="_$ZE,1:"")
+ ;
+List(data,context)  ;get info about databases for Control Panel
+ New (data,context)
+ Set context=$g(context)
+ Set $ze="",$zt="ListErr"
+ Set data="",stop=0,return=1,size=30000
+ Set prev=context
+ Set rs=##class(%Library.ResultSet).%New("Config.Databases:CompactLocalDBList")
+ Do rs.Execute()
+ For  s rnext=rs.Next() Do  Q:stop
+ . If rnext=0 Set stop=1,return=0,context="" Quit
+ . Set dirnm=rs.Data("Name"),dir=rs.Data("Directory")
+ . I prev'="" Q:dirnm'=prev  s prev="" Quit
+ . Set data=data_dirnm_$c(19,94,1)_rs.Data("Directory")_$c(19,94,1)_rs.Data("ReadOnly")_$c(19,94,1)_rs.Data("SFN")_$c(22,35,1)
+ . If $l(data)>size Set context=dirnm,stop=1 Quit
+ Quit return
+ListErr ;error
+ Q 0_$c(22,35,1)_"Unable to fetch database information!"_$s($ZE'="":$c(13,10,10)_"$ze="_$ZE,1:"")                
+ ;
+ListStat(dir) ;return mounted status
+ n sfn
+ s sfn=+$zu(49,dir)
+ q:sfn>-1&(sfn<$zu(40,0,41)) 1    ;"mounted"
+ q:sfn=$zu(40,0,41) 0             ;"not mounted"
+ q:sfn=-1 -1             ;"dismounted"
+ q:sfn=-2 -2             ;"no such database"
+ q 0                     ;"other result, database not mounted"
+ ;
+NmLoc(nm)       ;return database location for namespace
+ Quit:nm="" 0
+ N (nm)
+ Set dirsys=$G(^SYS("GREDIR","NSACT"))
+ Quit:dirsys="" 0
+ Set loc=$G(^SYS("GREDIR","NSCONF",dirsys,"name-space",nm,"defloc"))
+ Quit $P(loc,$C(1))
+ ;
+UpdInfo(chk)    ; Update database information from Control Panel.
+ ; If chk is equal to 1, we are checking lock only
+ ; If it is equal to "All", we are to update all databases
+ ; Else, we are to update one or multiple databases
+ ; 
+ n return
+ s return=1
+ i chk=1 d  q return
+ . Lock ^%SYS("database"):2 i '$t s return=0 q
+ . Lock  ;unlock
+ . s return=$p($g(^%SYS("database",0)),$c(22,35,1),3)
+ i chk="All" d  q return
+ . Job BldInfo^Wsdba(1,0)::2
+ Quit return
+UpdInfoI(chk)   ; Update selected databases (jobbed from Control Panel)
+ n dir,i
+ s dir=""
+ f i=1:1 s dir=$p(chk,",",i) q:dir=""  d
+ . d BldInfo^Wsdba(dir,0)
+ q
+ ;
+UpdTime(dbs)    ; Return the earliest finishing time
+ ; Called from Control Panel before commit to calculate 
+ ; selected database sizes.
+ ; Input:  one or a list of database names,
+ ; Output: the earliest finishing time
+ n (dbs)
+ s del2=$c(19,94,1)
+ s dirsys=$g(^SYS("GREDIR","NSACT"))
+ q:dirsys="" ""         ;this should never happen
+ f i=1:1 s dbname=$p(dbs,",",i) q:dbname=""  d
+ . s dbdir=$zu(12,$p($g(^SYS("GREDIR","DSLOC","master",dirsys,dbname)),$c(1),1))
+ . s time=$p($g(^%SYS("database",dbdir)),del2,5) ;$H
+ . q:time=""
+ . s ftime($tr(time,",",""))=$p(^(dbdir),del2,6) ;date/time in displayable format
+ i '$d(ftime) q ""
+ s time=$o(ftime(0))     ;get the earliest date/time
+ q ftime(time)           ;return the displayable date/time
+Dismount(dir) ;dismount a database
+ ;inputs:
+ ;  dir = directory containing M database
+ ;
+ ;return value:
+ ;  status flag (1=sucess; 0=failure)
+ ;
+ n (dir)
+ s $ZE="",$zt="DismErr^Wsdba"
+ s del=$$del2^%Wprim
+ s dir=$zu(12,dir)
+ s dummy=0
+ i $ZU(36,dir)=$ZU(12) g DismErr
+ s dummy=$ZU(3,dir)
+ i dummy<0 g DismErr
+ Q 1
+DismErr ;error
+ ; If dummy=0 and $ze="" then they tried to dismount the manager's
+ ; database and we're not going to allow that. Otherwise one or the
+ ; other contains the error related to why the dismount failed.
+ ;
+ s msg=0_$c(22,35,1)_"Unable to dismount "_dir
+ i $ZE="",dummy=0 q msg
+ s msg=msg_$C(13,10)_" because "
+ s msg=msg_$S($ZE'="":"$ze="_$ZE,1:$$MSG^%DKIOERR(dummy))
+ q msg
+ ;
+Mount(dir,CLUSFLAG) ;mount a database
+ ;inputs:
+ ;  dir = directory containing M database
+ ;
+ ;return value:
+ ;  status flag (1=sucess; 0=failure)
+ ;
+ n (dir,CLUSFLAG)
+ Set blksize=$Piece($Zutil(49,dir),",",2)
+ Set blkix=$case(blksize,2048:0,4096:1,8192:2,16384:3,32768:4,:5)
+ If '$case($v(blkix*$ZU(40,0,1)+$zu(40,2,128),-2,$ZU(40,0,1)),4294967295:0,:1) Quit 0_$c(22,35,1)_"Unable to mount "_dir_" because"_$C(13,10)_"there are no "_(blksize\1024)_"KB buffers (or bigger) configured."
+ Quit ##class(SYS.Database).MountDatabase(dir,,CLUSFLAG)
+ ;
+DBBuildInfo	New lastfinish
+ If '$g(^%SYS("database"),0) Job BldInfo^Wsdba("",0)::2 Quit
+ ;if this is the first click for the day, calculate all database sizes.
+ If $g(^%SYS("database",0)) d
+ . s lastfinish=$p(^%SYS("database",0),$c(22,35,1),2)
+ . q:lastfinish=""       ;don't job it if last run did not finish
+ . i +$h>lastfinish Job BldInfo^Wsdba(1,0)::2
+ Else  Job BldInfo^Wsdba(1,0)::2
+ Quit

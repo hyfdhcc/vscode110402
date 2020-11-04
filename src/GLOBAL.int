@@ -1,0 +1,160 @@
+ROUTINE GLOBAL [Type=INT]
+GLOBAL ;Manage globals ;LFT1413 2/23/05
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ n
+ d MENU()
+ q
+MENU() { 
+ s $zt="ERROR"
+ s List(1)="Create a global"
+ s List(2)="Edit a global"
+ s List(3)="Calculate size of a global"
+ s List(4)="Compact a global"
+ f  {
+	s Directory=""
+	s Flag=8+8192+512
+ 	s Status=##class(SYS.Database).GetDirectory("Database directory?",.Directory,,,,,Flag)
+ 	i (Status=0)||(Status=2)||(Directory="") q
+	f  {
+		s Value=""
+		s Status=##Class(%Library.Prompt).GetMenu("Option?",.Value,.List,,8+128+512)
+		i (Status=0)||(Status=2)||(Value="") q
+		i Value=1 d CREATE(Directory) Continue
+		i Value=2 d EDIT(Directory) Continue
+		i Value=3 d GETSIZE(Directory) Continue
+		i Value=4 d COMPACT(Directory) Continue
+	}
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ze
+}
+CREATE(Directory) {
+ s $zt="ERROR"
+ f  {
+	s Value=""
+	s Flag=8+16384+512
+ 	s Status=##class(%Library.GlobalEdit).GetName(Directory,"Global name?",.Value,.Obj,,,,Flag)
+ 	i (Status=0)||(Status=2)||(Value="") q
+	f  {
+ 		s Value=0
+ 		s Status=##Class(%Library.Prompt).GetYesNo("Change default global properties?",.Value,,8)
+ 		i (Status=2)||(Status=0) q
+ 		i Value=1 {
+	 		s Status=##Class(%Library.Prompt).EditFields(.Obj,1)
+ 			i (Status=0)||(Status=2) q
+ 		}
+ 		s Value=1
+ 		s Status=##Class(%Library.Prompt).GetYesNo("Confirm creation of global "_Obj.Name_"?",.Value,,8)
+		i (Status=2) Continue
+ 		i (Status=0) q
+ 		i Value {
+			s Status=Obj.%Save()
+			i ('Status) {
+				w ! d $SYSTEM.Status.DisplayError(Status) w !
+			} else {
+				w !,"Global "_Obj.Name_" created"
+	 		}
+ 		}
+ 		k Obj
+ 		q
+	}
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+EDIT(Directory) {
+ s $zt="ERROR"
+ f  {
+	s Value=""
+	s Flag=8+8192+512
+ 	s Status=##class(%Library.GlobalEdit).GetName(Directory,"Global name?",.Value,.Obj,,,,Flag)
+ 	i (Status=0)||(Status=2)||(Value="") q
+  f  {
+ 	s Status=##Class(%Library.Prompt).EditFields(.Obj,0)
+ 	i (Status=0)||(Status=2) q
+ 	s Value=1
+	i Obj.%IsModified()=0 q  
+        s keepcheck=0 i Obj.IsKeepIsModified() s keepcheck=1
+ 	s Status=##Class(%Library.Prompt).GetYesNo("Confirm update of global "_Obj.Name_"?",.Value,,8)
+ 	i (Status=0) q
+ 	i (Status=2) Continue
+ 	i Value {
+		s Status=Obj.%Save()
+		i ('Status) {
+			w !!,$SYSTEM.Status.DisplayError(Status)
+		} else {
+			w !,"Global "_Obj.Name_" updated"
+	 	}
+		i keepcheck,'Obj.IsKeep {
+			s glob="^"_"|"_"""^^"_Directory_""""_"|"_Obj.Name
+			i '$d(@glob) s @glob=1 k @glob
+		}
+ 	}
+ 	q
+  }
+  i (Status=0) q
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+GETSIZE(Directory) {
+ s $zt="ERROR"
+ f  {
+	s Value=""
+	s Flag=8+8192+512
+ 	s Status=##class(%Library.GlobalEdit).GetName(Directory,"Global name?",.Value,.Obj,,,,Flag)
+ 	i (Status=0)||(Status=2)||(Value="") q
+	s Status=Obj.GetSize(.allocated,.used)
+ 	i (Status=0)||(Status=2) q
+	u 0 w !,"Global ^",Obj.Name,":  ",allocated," MB Allocated",", "
+        u 0 w used," MB Used"
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+COMPACT(Directory) {
+ s $zt="ERROR"
+ f  {
+	s Value=""
+	s Flag=8+8192+512
+ 	s Status=##class(%Library.GlobalEdit).GetName(Directory,"Global name?",.Value,.Obj,,,,Flag)
+ 	i (Status=0)||(Status=2)||(Value="") q
+	s Percent=90
+	s Help="Enter the percentage of how full each data block should be, 50-100."
+	s Status=##Class(%Library.Prompt).GetNumber("How Full of the data block (%)?",.Percent,50,100,.Help)
+ 	i (Status=2) Continue
+ 	i (+Status=0) q
+	s Status=Obj.Compact(Percent,.cursize,.newsize,.last)
+ 	i (Status=0)||(Status=2) q
+	u 0 w !,"Global ^",Obj.Name,":  Started with ",cursize," MB",", "
+        u 0 w "Compressed to ",newsize," MB"
+	u 0 w !,"Last global reference: ",last
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}

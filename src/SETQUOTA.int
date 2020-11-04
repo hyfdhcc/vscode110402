@@ -1,0 +1,114 @@
+ROUTINE SETQUOTA [Type=INT]
+SETQUOTA ; Set quotas for jobbed processes *AN* 12/11/92 ; LFT1320 10/28/04
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;
+ ; Modifies the GJOBQUOTA and PJOBQUOTA table for process quotas.
+ ; Modifications to the GJOBQUOTA table are done based on the values
+ ; in ^SYS("QUOTAS","SYSTEM",quota). Modifications to the PJOBQUOTA
+ ; table are done only to the process executing STU depending on
+ ; which set of processes we are interested in. These values are
+ ; obtained either from ^SYS("QUOTAS","NETDAEMON",quota) for the
+ ; network daemons and ^SYS("QUOTAS","STUJOB",quota) for job servers
+ ; and jobbed processes started during execution of STU.
+ ; 
+ ; Note to maintenance programmers: Whenever we change the default
+ ; value (hard-coded) of any of the quotas for a jobbed process, the
+ ; same change has to be made in this routine. Also note that any
+ ; additions/changes in quotas should be made here too. The list of
+ ; quotas and their default values are set at tags NAMLIST and DEFLIST
+ ; respectively.
+ ;
+ u 0 w !,"Illegal entry point: do not call ^",$ZN," directly."
+ q:$zu(41)'>2  ZTRAP "EP"
+ ;
+APPLY(QTYPE) Public {
+ i '($zversion(1)=1) q
+ D SETUP(.QUOTAVAL,.QUOTANAM,.QUOTADEF)
+ N %ST D ^ST
+ S QTABLE=$S(QTYPE="SYSTEM":"GJOBQ",QTYPE="NETDAEMON":"PJOBQ",QTYPE="STUJOB":"PJOBQ",1:"")
+ I QTABLE="" Q
+ S OFFSET=%ST(QTABLE)
+ S MODE=$S(QTABLE="PJOBQ":-1,QTABLE="GJOBQ":-2)
+ F I=1:1:15 Q:$V(OFFSET,MODE)=QUOTAVAL("LISTEND")  DO    
+ . S CURQUOTA=QUOTANAM($V(OFFSET,MODE))
+ . S DEFVALUE=QUOTADEF($V(OFFSET,MODE))
+ . I QTYPE="SYSTEM" DO
+ . . S X=$G(^SYS("QUOTAS","SYSTEM",CURQUOTA)) I X>DEFVALUE V OFFSET+1:-2:4:(^(CURQUOTA))
+ . I QTYPE="NETDAEMON" DO
+ . . S X=$G(^SYS("QUOTAS","NETDAEMON",CURQUOTA)) I X>DEFVALUE V OFFSET+1:-1:4:(^(CURQUOTA))
+ . I QTYPE="STUJOB" DO
+ . . S X=$G(^SYS("QUOTAS","STUJOB",CURQUOTA)) I X>DEFVALUE V OFFSET+1:-1:4:(^(CURQUOTA))
+ . S OFFSET=OFFSET+5
+ Q
+}
+RESTORE() Public {
+ i '($zversion(1)=1) q        
+ f QTYPE="STUJOB","NETDAEMON" {
+	k ^SYS("QUOTAS",QTYPE)
+	m ^SYS("QUOTAS",QTYPE)=^SYS("QUOTAS_ORIG",QTYPE)
+ }
+ k ^SYS("QUOTAS_ORIG")
+ q	
+}
+DEFAULT(QTYPE) Public {
+ i '($zversion(1)=1) q
+ D SETUP(.QUOTAVAL,.QUOTANAM,.QUOTADEF)
+ N %ST D ^ST
+ S QTABLE=$S(QTYPE="SYSTEM":"GJOBQ",QTYPE="PROCESS":"PJOBQ",1:"")
+ I QTABLE="" Q
+ S OFFSET=%ST(QTABLE)
+ S MODE=$S(QTABLE="PJOBQ":-1,QTABLE="GJOBQ":-2)
+ F I=1:1:15 Q:$V(OFFSET,MODE)=QUOTAVAL("LISTEND")  D
+ . V OFFSET+1:MODE:4:QUOTADEF($V(OFFSET,MODE))
+ . S OFFSET=OFFSET+5
+ Q
+}
+DISPLAY(QTYPE) Public {
+ i '($zversion(1)=1) q
+ D SETUP(.QUOTAVAL,.QUOTANAM,.QUOTADEF)
+ N %ST D ^ST
+ S QTABLE=$S(QTYPE="SYSTEM":"GJOBQ",QTYPE="PROCESS":"PJOBQ",1:"")
+ I QTABLE="" Q
+ S OFFSET=%ST(QTABLE)
+ S MODE=$S(QTABLE="PJOBQ":-1,QTABLE="GJOBQ":-2)
+ W !,?10,"***** Quotas for jobbed jobs in the "_QTYPE_" table *****",!
+ F I=1:1:15 Q:$V(OFFSET,MODE)=QUOTAVAL("LISTEND")  DO
+ . W !,?25,QUOTANAM($V(OFFSET,MODE)),?45,$V(OFFSET+1,MODE,4)
+ . S OFFSET=OFFSET+5
+ Q
+}
+SETUP(QUOTAVAL,QUOTANAM,QUOTADEF) Private {
+ i '($zversion(1)=1) q
+ F I=1:1:15 D
+ . S VAL=+$P("0^1^2^3^4^5^6^7^8^9^10^11^12^13^14","^",I),NAM=$P("LISTEND^ASTLM^BIOLM^BYTLM^CPULM^DIOLM^FILLM^PGFLQUOTA^PRCLM^TQELM^WSQUOTA^WSDEFAULT^ENQLM^WSEXTENT^JTQUOTA","^",I)
+ . S QUOTAVAL(NAM)=VAL
+ . S QUOTANAM(VAL)=NAM
+ . S QUOTADEF(VAL)=$G(^SYS("QUOTAS","DEFAULT",NAM))
+ Q
+}
+INIT() Public {
+ i '($zversion(1)=1) q
+ D SETUP(.QUOTAVAL,.QUOTANAM,.QUOTADEF)
+ N %ST D ^ST
+ S OFFSET=%ST("GJOBQ"),MODE=-2
+ K ^SYS("QUOTAS","DEFAULT")
+ F I=1:1:15 Q:$V(OFFSET,MODE)=QUOTAVAL("LISTEND")  DO
+ . S ^SYS("QUOTAS","DEFAULT",QUOTANAM($V(OFFSET,MODE)))=$V(OFFSET+1,MODE,4)
+ . S OFFSET=OFFSET+5
+ Q
+}

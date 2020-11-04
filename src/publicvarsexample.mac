@@ -1,0 +1,20 @@
+ROUTINE publicvarsexample
+publicvarsexample 
+ ; examples of public variables
+ ;
+ do proc1()   ; call a procedure
+ quit    ; end of the main routine
+ ;
+proc1() [a, b]
+ ; a private procedure
+ ; "c" and "d" are private variables
+ {
+ write !, "setting a"  set a = 1
+ write !, "setting b"  set b = 2
+ write !, "setting c"  set c = 3
+ set d = a + b + c
+ write !, "The sum is: ", d
+ }
+ 
+ 
+ 

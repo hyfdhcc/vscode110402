@@ -1,0 +1,139 @@
+ROUTINE BITMAPSCAN [Type=INT]
+BITMAPSCAN ; scan bitmaps ; LFT1418 03/03/05
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+	n db,blk,dirinfo,curblks,blksize
+	r !,"Database? ",db
+	if $E(db,1,2)="^^" s db=$E(db,3,$L(db))
+	r !,"Enter bitmap block to dump? ",blk
+    Do INT(db,blk)
+	Quit
+INT(db,blk) [] PUBLIC
+{
+	r !,"Display bitmap detail? <N> ",detail
+	if "Yy"[$E(detail_"X") {
+	   s detail=1
+	} else {
+	   s detail=0
+	}
+	do dump(db,blk,detail)
+	q 1
+}
+dump(db,block,detail) {	
+    s dirinfo=$zu(49,db)
+	s blksize=$p(dirinfo,",",2),curblks=$p(dirinfo,",",22)
+	if blksize=2048 w ! d $SYSTEM.Status.DisplayError($$Error^%apiOBJ(344)) quit
+	if block'=+block || (block < 1) w ! d $SYSTEM.Status.DisplayError($$Error^%apiOBJ(6075,block)) quit
+	if block > curblks w ! d $SYSTEM.Status.DisplayError($$Error^%apiOBJ(341,block)) quit
+	s i=blksize/4096
+	s masteroff=$ZU(40,0,51)
+	s mastercnt=i
+	s j=$ZU(40,0,51)+(i*4)
+	s secoff=j
+	s dataoff=(((i * 32) - i - 1) * 4) + j
+	s datacnt = (blksize-dataoff)/4
+	s seccnt = (dataoff - secoff)/4
+	o 63:"^^"_db
+	v block
+	if $V(32,0,-8)'="CacheMap" w ! d $SYSTEM.Status.DisplayError($$Error^%apiOBJ(6076)) c 63 quit
+	s type=$V(40,0,-1)
+	if detail w !,"Master bitmap:"
+	do load(detail,masteroff,seccnt,.mlist)
+	if detail w !!,"Secondary bitmap: "
+	do load(detail,secoff,datacnt,.seclist)
+	if detail w !!,"Data bitmap: "
+	do load(detail,dataoff,datacnt*32,.datalist)
+	s mapcnt=$v(28,0,4)
+	if detail w !!,"Map summary count = ",mapcnt
+	c 63
+	w !!,"Analyzing bitmaps in block #",block,", type=",type
+	do compare("Master",.mlist,"Secondary",.seclist)
+	do compare("Secondary",.seclist,"Tertiary",.datalist)
+	s bitcnt=0
+	s d=""
+	f  s d=$O(datalist("bits",d)) q:d=""  s bitcnt=bitcnt+1
+	if bitcnt=mapcnt {
+		w !,"Summary count is ok"
+	} else {
+		w !,"Summary count of ",mapcnt," doesn't match actual count of ",bitcnt
+	}
+	q	
+}
+compare(parname,parlist,childname,childlist) {
+	merge parent=parlist("bits")
+	merge child=childlist("words")
+	s d=$O(parent(""))
+	while d'="" {
+		if '$D(child(d)) s missing(d)=""
+		k child(d)
+		s d=$O(parent(d))
+	}
+	if '$D(child),'$D(missing) w !,parname,"/",childname," ok" q
+	if $D(child) {
+		w !,"The following words are marked in ",childname," but not in ",parname
+		s d=$O(child(""))
+		w !,?5
+		while d'="" {
+			w:$X>70 !,?5
+			w d," "
+			s d=$O(child(d))
+		}
+	}
+	if $D(missing) {
+		w !,"The following words are marked in ",parname," but not in ",childname
+		s d=$O(missing(""))
+		w !,?5
+		while d'="" {
+			w:$X>70 !,?5
+			w d," "
+			s d=$O(missing(d))
+		}
+	}
+}
+load(detail,startoff,bitcnt,list) {
+	; startoff = byte offset of this bitmap
+	; bitcnt = # of bits to check
+	s base=0
+	s i=startoff
+	while (bitcnt>0) {
+		s v=$V(i,0,4)
+		if bitcnt<32 {
+			s bits=bitcnt
+			s k=0  ; k = (2^bits)-1
+			do {
+				s k=(k*2)+1
+				s bits=bits-1
+			} while (bits)
+			s v=$zboolean(v,k,1)  ; v = v & k;
+		}
+		if (v) {
+		    s list("words",base/32)=""
+			if detail w !,?5,"[",base/32,"] ",?15
+			for j=0:1:31 {
+			   if v#2 {
+			      if detail w:$X>70 !,?15 w base+j," " 
+				  s list("bits",base+j)=""
+			   }
+			   s v=v\2
+			   quit:'v
+			}
+		}
+		s base=base+32
+		s bitcnt=bitcnt-32
+		s i=i+4
+	}
+}

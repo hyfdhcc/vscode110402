@@ -1,0 +1,78 @@
+ROUTINE EDITOR2 [Type=INT]
+EDITOR2 ;(PTR,PK,ADF) CONTINUATION ROUTINE FOR THE EDITOR. ; LFT708 4/7/99
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ F %I=1:1 S %A=$T(%+%I),%T=$P(%A," "),%B=$P(%A," ;;",2,256) Q:%T="END"  I $L(%T) S ^%(%T)=%B
+ G ^EDITOR3
+ ; Check for syntax of tag as part of line.
+% ;
+750 ;;S %NX=1 R "earch for: ",%R Q:%R=""  X ^("SELECT") S %NX=$S(%POP:999,1:755)
+755 ;;S %NX=1,%T=$S(%C:%B_"+"_%C,1:%B) F %A=%A:1:%I S %L=$T(+%A) S:$P(%L," ")]"" %B=$P($P(%L,"(")," "),%C=0,%T=%B W:%L[%R !,%T_$P($P(%L," "),%T,2,99),?6," "_$P(%L," ",2,999),! S %C=%C+1,%T=%B_"+"_%C
+800 ;;S %NX=999 X:$ZN="" ^%(801) I $ZN]"" X ^%(808),^%(805)
+801 ;;W !,"(no routine name has been specified)",!,*7
+ ; line 601 forces an exit
+805 ;;S %NX=1 ZS  W "ile "_$ZN I "Xx"[$E(%X_"???",3) S %NX=601
+808 ;;X ^%(809) S %B=$T(+1),$P(%B," ;",3)=" "_$ZD($H,2,,4)_"  "_%C ZR +1 ZI %B
+809 ;;S %A=$P($H,",",2)\60,%B=" AM" S:%A'<720 %A=%A-720,%B=" PM" S:%A<60 %A=%A+720 S %C=%A\60_":"_(%A#60\10)_(%A#10)_%B
+TAG ;;X:%T?.1"%".8AN1"-".1N&(%T'?1"-".N) ^("TAGM") X:%T?1"*".E!(%T?1"+".N)!(%T?1"-".N)&$D(%TG) ^("TAGS") S:%T?1.""""1"+"1.N %T="+"_$P(%T,"+",2) S %L="",%D=$P(%T,"+"),%E=$P(%T,"+",2) Q:%D'?1.AN&(%D'?1"%".AN)&(%D]"")!(%E'?.N)  S %T=%D,%L="" S %F=%E,%E=-1 F %I=0:1:%F S %E=%E+1,%T=$S(%E:%D_"+"_%E,%D]"":%D,1:"+999"),@("%L=$T("_%T_")") I $P(%L," ")]"" S %D=$P($P(%L,"(")," "),%E=0,%T=%D
+TAGM ;;I $T(@$P(%T,"-"))]"" S %TG=$P(%T,"-"),%T="-"_$P(%T,"-",2)
+TAGS ;;S:$E(%T)="*" %T=$E(%T,2,9) S:%T="" %T="+0" S:%T?1P %T=%T_1 I "+-"[$E(%T),%T?1P.N S %T=$P(%TG,"+")_"+"_($P(%TG,"+",2)+%T) I %T["-" F %J=1:1 S %F=$T(+%J) Q:%F=""  I $P($P(%F,"(")," ")=$P(%T,"+") S %T="+"_(%J+$P(%T,"+",2)) Q
+SELECT ;;S %POP=1 R " from line: BEG=> ",%T S:%T="" %T="""+1" X ^("TAG") Q:%L=""  S %B=%D,%C=%E X ^("SEL3") S %A=%I R " to line: END=> ",%T S (%D,%E)="" X ^("TAG"):%T]"" S %POP=%L=""&(%T]"") Q:%POP  X ^("SEL3") S %POP=%A>%I
+ ;SEL3 F %I=1:1 S %L=$T(+%I) Q:%L=""  I $P($P(%L,"(")," ")=%D,%D]"" S %I=%I+%E Q
+SEL3 ;;S %I=%E Q:(%D="")&(%E]"")  F %I=1:1 S %L=$T(+%I) Q:%L=""  I $P($P(%L,"(")," ")=%D,%D]"" S %I=%I+%E Q
+LN1 ;;S:$P(%L," ")[$C(9) %L=$P(%L,$C(9))_" "_$P(%L,$C(9),2) S %A=$E(%L,1,32),%T=$P($P(%A,"(")," "),%POP=$S(%A="":0,%A[" ":0,%A["(":0,1:1) I '%POP,%T'?.N,%T'?1A.AN,%T'?1"%".AN S %POP=1
+LCL ;;S %NX=999 S:$E(%X,2)'="" %LCL=$E(%X,2,99) Q:'$D(@%LCL)  S %L=@%LCL W !,%L,! X $S(XY]"":^%("EDXY"),1:^%("ED")) S @%LCL=%L,%NX=1 W !,%L
+MV ;;W "ove lines in this routine" X ^%RS(1) ZR @(%BG_":"_%EN) X ^%RS(100) S %NX=1 W !,"(moved)"
+COPY ;;W !,"Copyright 1999, InterSystems Corporation"
+930 ;;S %NX=1 F %A=1000:0 S %A=$O(^%(%A)) Q:'%A  W !,^(%A)
+1001 ;;Enter one of the following
+1010 ;;.B   to break a line into two pieces
+1015 ;;.C   to change all occurrences of a string
+1020 ;;.D   to display s specific range of lines
+1030 ;;.F   to file the routine
+1035 ;;.FX  to file the routine and exit the editor
+1040 ;;.G   to get lines that were put into in a buffer (see .P)
+1045 ;;.I   to insert additional lines (or use the TAB key)
+1050 ;;.J   to join a line with the next one
+1055 ;;.M   to move lines within the routine
+1060 ;;.P   to put lines into a buffer (see .G)
+1065 ;;.R   to remove one or more lines
+1070 ;;.S   to search for all occurrences of a string
+1075 ;;tag OR tag+offset  to edit a line
+1080 ;;+n   to move down n lines and edit
+1085 ;;-n   to move up n lines and edit
+1090 ;;""+n to edit the nth line of the program
+1095 ;;^globalref  to edit a value stored in a global node
+1100 ;;any line of Cache ObjectScript source code, to execute it
+1105 ;;     (but if you call another routine before filing this one,
+1110 ;;     it will wipe out any edits you have made).
+1115 ;;"." use decimal point to move character by character on the current line
+1120 ;;" " use space bar to move from space to space on the line
+1125 ;;"e" to enter characters, use "." and " " to move to entry point,
+1130 ;;    then press "e".  To get out of entry mode, press <RETURN>.
+1135 ;;"d" to delete the characters to the end of the word the cursor is on
+1140 ;;Backspace: Depending on your terminal settings, backspace will either move 
+1145 ;;           back character by character, or delete the character at the cursor.
+ ;NT Console device
+CON ;;N A,X,I S I=$E($I,1,5),X=$D(^%IS(I,1)) X ^%($S(X:"CON3",1:"CON2"))
+CON2 ;;I $D(^%IS("TERM",1)) S I="TERM" X ^%("CON3")
+CON3 ;;S A=$P($G(^%IS(I,1)),"^",3) I A]"" S A=$G(^%IS(0,"SUB",A)) S %SL=$P(A,"^",3)-1,%RM=+A U $I:(%RM:0) I '$D(XY) S XY=$P(A,"^",5),DX=0,DY=%SL-1 X XY
+ ;LAT and/or network device types
+LAT ;;N A,X,I S I=$E($I,1,2)_"0:",X=$D(^%IS(I,1)) X ^%($S(X:"LAT3",1:"LAT2"))
+LAT2 ;;I $D(^%IS("TERM",1)) S I="TERM" X ^%("LAT3")
+LAT3 ;;S A=$P($G(^%IS(I,1)),"^",3) I A]"" S A=$G(^%IS(0,"SUB",A)) S %SL=$P(A,"^",3)-1,%RM=+A U $I:(%RM:0) I '$D(XY) S XY=$P(A,"^",5),DX=0,DY=%SL-1 X XY
+END ;;

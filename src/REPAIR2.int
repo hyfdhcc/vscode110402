@@ -1,0 +1,138 @@
+ROUTINE REPAIR2 [Type=INT]
+REPAIR2 ;PTR REPAIR CONT'D ; 11 May 86  2:00 PM ; LFT1016 08/07/02
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+DENODE R "Delete Node #: ",D Q:'D
+ S (DFIRST,DLAST)=D I D[":" S DFIRST=$P(D,":"),DLAST=$P(D,":",2)
+ ;
+ I DFIRST<0!(DFIRST>N)!(DFIRST'?1N.N) W " ???",! G DENODE
+ I DLAST<0!(DLAST>N)!(DLAST'?1N.N)!(DLAST<DFIRST) W " ???",! G DENODE
+ I REPAIR(DFIRST)=" " W " Cannot Delete first node!",! G DENODE
+ W ! F D=DFIRST:1:DLAST D PRINT^REPAIROLD
+ ;
+ W $S(DFIRST=DLAST:"Is this the node",1:"Are these the nodes")
+ R " to be deleted? ",X
+ I $TR(X,"yn","YN")'?1"Y".E W " ***No Change",! G DENODE
+ F D=DLAST:-1:DFIRST D DEL
+ W " ...Deleted",!,"(Higher numbered nodes have been shuffled down)"
+ I D=1,TYPE-1 DO
+ . W !,"(Deleted 1st node in block - Consider changes to higher"
+ . W !,"pointer blocks)",!
+ W ! G DENODE
+DEL S A=0,B=0,C=0 I D>1,TYPE-1 S X=REPAIR(D-1),Y=REPAIR(D) D DEN1 S A=Z
+ I D<N,TYPE-1 DO
+ . S X=REPAIR(D),Y=REPAIR(D+1) D DEN1 S B=Z
+ . I D>1 S X=REPAIR(D-1) D DEN1 S C=Z
+ S X=REPAIR(D),I=$L(X)
+ S OFF=OFF-I+A+B-C-5
+ ;  For now we don't reclaim blocks from deletion of a big string
+ I TYPE=8!(TYPE=12) S Y=$A(REPVAL(D)) d  
+ . i Y=3!(Y=5)!(Y=9) s numblks=$a(REPVAL(D),2)  ;# of blocks in big string
+ . i Y=8 s cmplen=$zu(153,$e(REPVAL(D),2,$l(REPVAL(D))))
+ . s OFF=OFF+3-$s('Y:1+$l(REPVAL(D)),Y=8:1+cmplen,Y=4:1+($l(REPVAL(D))*2),(Y=3!(Y=5)!(Y=9)):1+$l(REPVAL(D)),Y=1:6,1:10)
+ I TYPE=1 S OFF=OFF-4
+ F I=D:1:N-1 DO
+ . S REPAIR(I)=REPAIR(I+1),REPVAL(I)=REPVAL(I+1)
+ . S REPPRINT(I)=REPPRINT(I+1)
+ K REPVAL(N),REPAIR(N),REPPRINT(N) S N=N-1
+ Q
+DEN1 F Z=1:1:$L(X)+1 Q:$E(X,Z)'=$E(Y,Z)
+ S Z=Z-1 Q
+VALUE W "Change ",$S(TYPE=8!(TYPE=12):"Data value",TYPE=1:"Value",1:"Pointer")
+ W " of node #: " R D Q:D=""  I D<1!(D>N)!(D'?1.N) W " ???",! G VALUE
+ W ! D PRINT^REPAIROLD R "Is this the node? ",X
+ I $TR(X,"yn","YN")'?1"Y".E W " ***No Change" Q
+ I TYPE=1 D INGET^REPAIR1 S REPVAL(D)=VAL Q
+ W !,"NEW ",$S(TYPE=8!(TYPE=12):"Data value (string only)",1:"Pointer"),": " R X
+ I TYPE=8!(TYPE=12) DO
+ . N A,L,cmplen,cmplenold S A=$A(REPVAL(D)),L=$L(REPVAL(D))    ;,X=$C(0)_X
+ . i A=8 s cmplenold=$zu(153,$e(REPVAL(D),2,$l(REPVAL(D))))
+ . s cmplen=$zu(153,X) i cmplen,cmplen<($l(X)*2) s X=$c(8)_X  ; compact unicode
+ . e  i 'cmplen s X=$c(0)_X  ; ascii
+ . e  s X=$c(4)_X   ; unicode
+ . S OFF=OFF-$S('A:1+L,A=1:6,A=4:(L*2),A=8:2+cmplenold,(A=3!(A=5)!(A=9)):1+L,1:10)+$S('$A(X):1+$L(X),$A(X)=1:6,$A(X)=4:$l(X)*2,$A(X)=8:2+cmplen,1:10)
+ I TYPE=2!(TYPE=6) {
+    R !,"Does that block contain any big sring nodes? ",ans
+    If $TR(ans,"yn","YN")'?1"Y".E W " No big string nodes",! Set X="0,"_X
+    Else  Set X="1,"_X
+ }
+ S REPVAL(D)=X Q
+LINK W "Change link from ",LINK," to: " R X
+ I X="" W " ***No Change (Specify 0 to delete link)",! Q
+ I X\16777216!(X<0) W " ???",! G LINK
+ S LINK=X Q
+TYPE S X="GLOBAL DIRECTORY^POINTER^^^^BOTTOM POINTER^^DATA^^^^BIG DATA"
+ W "Change type from ",$P(X,"^",TYPE)," to one of the following: ",!
+ F I=1,2,6,8,12 W ?10,I,?15,$P(X,"^",I),!
+TYP1 R !,"New type: ",Z I Z="" W " ***No Change",! Q
+ S Y=$P(X,"^",Z) I Y="" W " ??? Choose a # or press <RETURN>",! G TYP1
+ S X=TYPE,TYPE=Z W " ",Y,!
+ Q:TYPE=6&(X=2)!(X=6&(TYPE=2))!(X=TYPE)!(TYPE=8&(X=12))!(TYPE=12&(X=8))  G GETARRAY^REPAIROLD   ; allow switching between types 8 & 12
+WRITE W !,"Writing modified block ",BLK,!
+ R "Okay? ",X,! I $TR(X,"yn","YN")'?1"Y".E W "***Not Written",! Q
+ If TYPE=$Case(0,0:170,:16) View -BLK W "...Written" Q
+ V 2043:0:1:TYPE V 2040:0:"3O":LINK V 2036:0:4:GAR
+ S A=0,B=0,S="" G WR3:TYPE=1
+WR1 S B=B+1 G WR2:B>N
+ S X=REPAIR(B) F C=1:1:$L(S)+1 Q:$E(S,C)'=$E(X,C)
+ S S=X,C=C-1 V A:0:1:C S A=A+1
+ V A:0:1:$L(S)-C S A=A+1 F Y=C+1:1:$L(S) V A:0:1:$A(S,Y) S A=A+1
+ I TYPE=2!(TYPE=6) {
+    New blknum Set blknum=$Piece(REPVAL(B),",",2)
+    If $Piece(REPVAL(B),",",1)=1 Set blknum=blknum+8388608 ;LFT1001
+    V A:0:"3O":blknum S A=A+3 G WR1
+ }
+ S X=REPVAL(B)
+ ; If this is a compact unicode string need the encoded length
+ i $A(X)=8 s cmplen=$zu(153,$e(X,2,$l(X)))
+ e  s cmplen=0
+ i cmplen>756 w !,"Cannot insert long strings" q  
+ I '$A(X) DO  S A=A+$L(X)+1 G WR1 ;String
+ . V A:0:"2O":$L(X)-1 F I=2:1:$L(X) V A+I:0:1:$A(X,I) ;String
+ I $A(X)=1 DO  S A=A+6 G WR1 ; Integer value
+ . V A:0:"2O":65535
+ . V A+2:0:"4O":$A(X,5)*256+$A(X,4)*256+$A(X,3)*256+$A(X,2)
+ i $A(X)=4 d  s A=A+(2*$l(X)) g WR1  ;unicode string
+ . s X=$e(X,2,$l(X))
+ . v A:0:"2O":$l(X) ; view in the length byte
+ . v A+1:0:1:144 s A=A+2  ; view in the unicode datatype byte
+ . v A:0:(-$l(X))_"W":X
+ i $A(X)=8 d  s A=A+cmplen g WR1  ; compact unicode string
+ . s X=$e(X,2,$l(X)) s cmplen=$zu(153,X)
+ . v A:0:"2O":(cmplen+(160*256)) ; view in 2 byte len with compact unicode datatype byte or'ed into 2nd byte
+ . s A=A+2
+ . v A:0:(-$l(X))_"E":X
+ ; X is a comma delimited string in this form:
+ ;  intro byte,numblks,remainder in last block,block1,block2,...
+ i $A(X)=9!($A(X)=5)!($A(X)=3) d  s A=A+4+(numblks*3) g WR1  ; big string types
+ . Set numblks=$Piece(X,",",2)
+ . View A:0:1:numblks-1 ;2k blocks have num blocks - 1
+ . v A+1:0:1:$s($A(X)=9:131,$A(X)=5:130,$A(X)=3:129,1:0)
+ . View A+2:0:"2O":$Piece(X,",",3) ; Bytes used in last block
+ . For I=0:1:numblks-1 View A+4+(3*I):0:"3O":$Piece(X,",",4+I)
+ V A:0:"2O":32768+$A(X,2) ; Quadword value
+ V A+2:0:"4O":$A(X,6)*256+$A(X,5)*256+$A(X,4)*256+$A(X,3)
+ V A+6:0:"4O":$A(X,10)*256+$A(X,9)*256+$A(X,8)*256+$A(X,7)
+ S A=A+10 G WR1
+WR2 S OFF=A V 2046:0:2:A,-BLK W "...Written" Q
+WR3 S B=B+1 G WR2:B>N S S=REPAIR(B)
+ F Y=1:1:$L(S) V A:0:1:$A(S,Y) S A=A+1
+ V A:0:"2O":REPVAL(B)
+ V A+2:0:1:$P(REPVAL(B),"^",2)
+ V A+3:0:"3O":$P(REPVAL(B),"^",3)
+ V A+6:0:"3O":$P(REPVAL(B),"^",4)
+ S A=A+9 G WR3

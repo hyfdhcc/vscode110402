@@ -1,0 +1,294 @@
+ROUTINE GBLOCKCOPY1 [Type=INT]
+GBLOCKCOPY1 ; GBLOCKCOPY reports ; LFT1320 11/09/04
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+MONITORREPORT(InName) [] PUBLIC {
+ s $zt="MONITORREPORTE"
+ u 0::"^%X364"
+ d CLEAR(1,24)
+ s page=1,POP=0,Detail=1
+ s totalblocks=+$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",InName,1,"TOTALBLOCKS"),0),totaltime=$zh,blkspersec=0
+ f  d  i POP d CLEAR(1,24) q 
+ . w /cup(1,1)
+ . w $$CENTER("GBLOCKCOPY Monitor at "_$ZDATETIME($h),80)
+ . w /cup(2,1)," #",?3,"Source DB=>Destination DB/NS",?40,"    Job#",?49,"Last Update",?61,"Done/ToDo/Err",?75,"State"
+ . w /cup(3,1)," -",?3,"----------------------------",?40,"    ----",?49,"-----------",?61,"-------------",?75,"-----" h 0
+ . k DISPLAY
+ . i InName'="*" s Name=InName d MONITORREPORT1
+ . i InName="*" s Name="" f  s Name=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name)) q:Name=""  d MONITORREPORT1 s DISPLAY($i(DISPLAY(0)))=$j("",80)
+ . s Count=4
+ . f i=page*20-19:1:page*20 d
+ . . i $d(DISPLAY(i)) w /cup(Count,1),DISPLAY(i)
+ . . e  w /cup(Count,1),$j("",80)
+ . . s Count=Count+1
+ . w /cup(24,1) w "(N)ext, (P)rev, (D)etail, (S)ummary, (R)efresh (Q)uit? Refresh => "
+ . u 0:(:"+S")
+ . r *x:10
+ . u 0:(:"-S")
+ . i (x=78)!(x=110) s page=page+1 i '$d(DISPLAY(page*20-19)) s page=page-1
+ . i (x=80)!(x=112) s page=page-1 i page=0 s page=1
+ . i (x=68)!(x=100) s Detail=1 q
+ . i (x=83)!(x=115) s Detail=0
+ . i (x=81)!(x=113) s POP=1
+ q
+MONITORREPORT1
+ d GETJOBSTATUS^GBLOCKCOPY(Name,0,0,.JobInfo)
+ d GETJOBS^GBLOCKCOPY(Name,.Jobs,.JobsDir)
+ s line="Batch Name: "_Name_"  "_JobInfo(0)_" of "_Jobs_" Processes running, "_JobsDir_" per directory, "
+ i $zh-totaltime>20 d
+ . s ptotalblocks=totalblocks,totalblocks=+$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,1,"TOTALBLOCKS"),0),blocks=totalblocks-ptotalblocks
+ . s ptotaltime=totaltime,totaltime=$zh,time=totaltime-ptotaltime
+ . s blkspersec=$s(time=0:blocks,1:blocks\time)
+ s line=line_blkspersec_" blocks/sec"
+ s DISPLAY($i(DISPLAY(0)))=line_$j("",80-$l(line))
+ s Index="" f  s Index=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)) q:Index=""  d
+ . s Status=$$GETSTATUS^GBLOCKCOPY(Name,Index)
+ . s line=$j(Index,2)_" "_$$LJ($p(Status,"~",3),46)_$$LJ($$DISPLAYDATE($p(Status,"~",9)),12)
+ . s line=line_$j($p(Status,"~",8),4)_"/"_$j(($p(Status,"~",6)+$p(Status,"~",7)+$p(Status,"~",8)),4)_"/"_$j($p(Status,"~",10),3)_" "_$$LJ($p(Status,"~",4),5)
+ . s DISPLAY($i(DISPLAY(0)))=line_$j("",80-$l(line))
+ . q:Detail=0
+ . s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo),1,cvtdata) q:glo=""  d
+ . . s Job=+$p(cvtdata,"~",1)
+ . . s line="   "_$$LJ($p(cvtdata,"~",8),37)_$j($s(($zversion(1)=1):$zhex(+Job),1:Job),8)_" "_$$LJ($$DISPLAYDATE($p(cvtdata,"~",4)),12)
+ . . s nblocks=+$p(cvtdata,"~",6),blockstocopy=+$p(cvtdata,"~",11)
+ . . s error=$p(cvtdata,"~",9) i error[">" s error=$p(error,">",1)_">"
+ . . i error="" d
+ . . . s pdone="0%"
+ . . . s line=line_$j(nblocks,4)_"/"_$j(blockstocopy,4) i blockstocopy'=0 s pdone=$p((nblocks/blockstocopy*100),".")_"%"
+ . . . s line=line_$j("",80-$l(line)-5)
+ . . . i JobInfo(0)=0 s line=line_$$LJ("Crash",5) q
+ . . . i $p(cvtdata,"~",12)'="" s line=line_$$LJ($p(cvtdata,"~",12),5) q
+ . . . s line=line_$$LJ(pdone,5)    
+ . . i error'="" s line=line_error
+ . . s DISPLAY($i(DISPLAY(0)))=line_$j("",80-$l(line))
+ q
+MONITORREPORTE s $zt=""
+ u 0:(:"+S")
+ q:$ze["<INTERRUPT>"
+ w !,"Error: "_$ze
+ q
+ }
+SUMMARYREPORT(Name,Detail) [] PUBLIC {
+ d GETJOBSTATUS^GBLOCKCOPY(Name,0,0,.JobInfo)
+ d GETJOBS^GBLOCKCOPY(Name,.Jobs,.JobsDir)
+ w !
+ w !,"Batch Name: "_Name_"  "_JobInfo(0)_" of "_Jobs_" Processes running, "_JobsDir_" per directory"
+ i Detail d
+ . w !," #",?3,"Source DB=>Destination DB/NS",?40,"    Job#",?49,"Last Update",?61,"Done/ToDo/Err",?75,"State"
+ . w !,"--",?3,"----------------------------",?40,"    ----",?49,"-----------",?61,"-------------",?75,"-----"
+ i 'Detail d
+ . w !," #",?3,"Source DB=>Destination DB/NS",?49,"Last Update",?61,"Done/ToDo/Err",?75,"State"
+ . w !,"--",?3,"----------------------------",?49,"-----------",?61,"-------------",?75,"-----"
+ s (grandnblocks,grandblockstocopy)=0
+ s Index="" f  s Index=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)) q:Index=""  d
+ . s Status=$$GETSTATUS^GBLOCKCOPY(Name,Index)
+ . w !,$j(Index,2),?3,$p(Status,"~",3)
+ . w ?49,$$DISPLAYDATE($p(Status,"~",9)),?61,$j($p(Status,"~",8),4)_"/"_$j(($p(Status,"~",6)+$p(Status,"~",7)+$p(Status,"~",8)),4)_"/"_$j($p(Status,"~",10),3)
+ . w ?75,$p(Status,"~",4)
+ . q:'Detail
+ . s (totnblocks,totblockstocopy)=0
+ . If $d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"EMPTYSOURCE")) w !,?3,"The database is empty" q  
+ . s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSENDED",glo),1,cvtdata) q:glo=""  d
+ . . w !,?3,glo,?40,$j($s(($zversion(1)=1):$zhex(+$p(cvtdata,"~",1)),1:$p(cvtdata,"~",1)),8),?49,$$DISPLAYDATE($p(cvtdata,"~",4))
+ . . s error=$p(cvtdata,"~",9)
+ . . s nblocks=$p(cvtdata,"~",6),blockstocopy=$p(cvtdata,"~",11),totnblocks=totnblocks+nblocks,totblockstocopy=totblockstocopy+blockstocopy 
+ . . i error="" d
+ . . . w ?61,$j(nblocks,4)_"/"_$j(blockstocopy,4) i nblocks'=blockstocopy w "<="
+ . . i error'="" w ?61,error
+ . . w ?75,"Done"
+ . s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo),1,cvtdata) q:glo=""  d
+ . . s Job=+$p(cvtdata,"~",1)
+ . . w !,?3,$e($p(cvtdata,"~",8),1,36),?40,$j($s(($zversion(1)=1):$zhex(+Job),1:Job),8),?49,$$DISPLAYDATE($p(cvtdata,"~",4))
+ . . s error=$p(cvtdata,"~",9) i error[">" s error=$p(error,">",1)_">"
+ . . s pdone="0%"
+ . . s nblocks=$p(cvtdata,"~",6),blockstocopy=$p(cvtdata,"~",11),totnblocks=totnblocks+nblocks,totblockstocopy=totblockstocopy+blockstocopy 
+ . . i error="" d
+ . . . i blockstocopy'=0 s pdone=$p((nblocks/blockstocopy*100),".")_"%"
+ . . . w ?61,$j(nblocks,4)_"/"_$j(blockstocopy,4) i nblocks'=blockstocopy w "<="
+ . . i error'="" w ?61,error
+ . . w ?75
+ . . i $d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"STOP")) w "Stop"
+ . . e  i error'="" w "Error"
+ . . e  i JobInfo(0)=0 w "Crash"
+ . . e  i $p(cvtdata,"~",12)'="" w $p(cvtdata,"~",12)
+ . . e  w pdone
+ . s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED",glo),1,cvtdata) q:glo=""  d
+ . . w !,?3,glo,?75,"Queue"
+ . w !,"TOTAL",?61,$j(totnblocks,4)_"/"_$j(totblockstocopy,4) i totnblocks'=totblockstocopy w "<=",!
+ . s grandnblocks=grandnblocks+totnblocks,grandblockstocopy=grandblockstocopy+totblockstocopy
+ i Detail w !,"GRAND TOTAL",?61,$j(grandnblocks,4)_"/"_$j(grandblockstocopy,4) i grandnblocks'=grandblockstocopy w "<="
+ q
+ }
+DETAILREPORT(Name) [glinfo] PUBLIC {
+ w !!,"Batch Name: ",?17,Name
+ s Time=$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,1,"START"))
+ w !,"Start Time:  ",?17,$s(Time="":"Not Started",1:$zdatetime(Time))
+ s Index="",lastupdate=0  f  s Index=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)) q:Index=""  d  q:lastupdate="Running"
+ . i '$d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"END")) s lastupdate="Running",elapsedtime=$h q
+ . s date=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"END")
+ . s lastupdate=$s(+lastupdate>+date:lastupdate,+lastupdate<+date:date,+$p(lastupdate,",",2)>+$p(date,",",2):lastupdate,1:date)
+ d GETJOBSTATUS^GBLOCKCOPY(Name,0,1,.JobInfo)
+ i lastupdate'="Running" s elapsedtime=lastupdate,lastupdate=$zdatetime(lastupdate)
+ e  i JobInfo(0)=0 s lastupdate="Crashed",elapsedtime=$h
+ i $d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,1,"STOP")) s lastupdate="Stopped"
+ i Time="" s lastupdate="",elapsedtime=""
+ w !,"End Time: ",?17,lastupdate
+ i elapsedtime'="" d
+ . s elapsedtime=((elapsedtime*86400)+$p(elapsedtime,",",2))-((Time*86400)+$p(Time,",",2))
+ . s h=(elapsedtime\3600),m=(elapsedtime#3600\60),s=(elapsedtime#3600#60)
+ . s:$l(h)=1 h="0"_h s:$l(m)=1 m="0"_m s:$l(s)=1 s="0"_s
+ . s elapsedtime=h_":"_m_":"_s
+ w !,"Elapsed Time:",?17,elapsedtime
+ d GETJOBS^GBLOCKCOPY(Name,.Jobs,.JobsDir)
+ w !,"Jobs Scheduled: ",?17,Jobs
+ w !,"Jobs/Directory: ",?17,JobsDir
+ w !,"Jobs Running:   ",?17,JobInfo(0)
+ w !,$j("Job #",8),?9,"Status",?17,"  #",?22,"Start Time",?34,"Global/EndTime/Error"
+ s Job=0 f  s Job=$o(JobInfo(Job)) q:Job=""  d
+ . s JobIndex=0 f  s JobIndex=$o(JobInfo(Job,JobIndex)) q:JobIndex=""  d
+ . . s Status=$p(JobInfo(Job,JobIndex),"~",1)
+ . . s Start=$$DISPLAYDATE($p(JobInfo(Job,JobIndex),"~",2))
+ . . s Stop=$$DISPLAYDATE($p(JobInfo(Job,JobIndex),"~",3))
+ . . s Index=$p(JobInfo(Job,JobIndex),"~",4)
+ . . s Glo=$p(JobInfo(Job,JobIndex),"~",5)
+ . . s Err=$p(JobInfo(Job,JobIndex),"~",6)
+ . . w !,$j($s(($zversion(1)=1):$zhex(+Job),1:Job),8),?9,Status,?17,$j(Index,3),?22,Start,?34
+ . . i Glo'="" w Glo
+ . . e  w Stop,"  ",Err
+ s (grandnblocks,grandblockstocopy)=0
+ s Index="" f  s Index=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)) q:Index=""  d
+ . d DETAILED2
+ . s grandnblocks=grandnblocks+totnblocks,grandblockstocopy=grandblockstocopy+totblockstocopy
+ i $g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,1,"START")) d
+ . s start=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,1,"START")
+ . s Index="",end=0,Index=""  f  s Index=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index)) q:Index=""  d
+ . . i '$d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"END")) s end=$h q
+ . . s date=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"END")
+ . . s end=$s(+end>+date:end,+end<+date:date,+$p(end,",",2)>+$p(date,",",2):end,1:date)
+ . s elapsed=((end*86400)+$p(end,",",2))-((start*86400)+$p(start,",",2))
+ . w !,"GRAND TOTAL",?32,$j(grandnblocks,7)_"/"_grandblockstocopy i grandnblocks'=grandblockstocopy w "<="
+ . w ?73,$s(elapsed=0:(grandnblocks),1:+$p(((grandnblocks)/elapsed),".",1))
+ q
+DETAILED2
+ w !!,"Batch Entry: ",?17,Index
+ w !,"Source DB: ",?17,$e(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"SRCDIR"),3,*)
+ s srcdirtype=$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"SRCDIRTYPE"),"CACHE.DAT")
+ i srcdirtype'="CACHE.DAT" w "  (formerly "_srcdirtype_")"
+ s dstdir=^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"DSTDIR")
+ i $e(dstdir,1,2)="^^" w !,"Destination DB: ",?17,$e(dstdir,3,*)
+ e  w !,"Destination NS: ",?17,dstdir
+ s Time=$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"START"))
+ w !,"Start Time:",?17,$s(Time="":"Not Started",1:$zdatetime(Time))
+ s Endtime=$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"END"))
+ w !,"End Time:",?17,$s($d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,1,"STOP")):"Stopped",Endtime="":"",1:$zdatetime(Endtime))
+ s Info=$$GETSTATUS^GBLOCKCOPY(Name,Index)
+ w !,"Last Update:",?17 i $p(Info,"~",9)'="" w $zdatetime($p(Info,"~",9))
+ i Time="" s elapsedtime=""
+ i Endtime'="" s elapsedtime=Endtime
+ e  s elapsedtime=$p(Info,"~",9)
+ i elapsedtime'="" d
+ . s elapsedtime=((elapsedtime*86400)+$p(elapsedtime,",",2))-((Time*86400)+$p(Time,",",2))
+ . s h=elapsedtime\3600,m=elapsedtime#3600\60,s=elapsedtime#3600#60
+ . s:$l(h)=1 h="0"_h s:$l(m)=1 m="0"_m s:$l(s)=1 s="0"_s
+ . s elapsedtime=h_":"_m_":"_s
+ w !,"Elapsed Time:",?17,elapsedtime
+ w !,"Global List:",?17,$p(Info,"~",5)
+ w !,"Journaling:",?17,$s($g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"JOURNAL"))=1:"Enabled",1:"Disabled")
+ w !,"Status:",?17,$p(Info,"~",4)
+ w !,"Errors:",?17,$p(Info,"~",10)
+ w !,"Completed:",?17,$p(Info,"~",8)_" of "_($p(Info,"~",8)+$p(Info,"~",6)+$p(Info,"~",7))
+ w !,"Running:",?17,($p(Info,"~",7)-$p(Info,"~",10))
+ w !,"Queued:",?17,$p(Info,"~",6)
+ d GETJOBSTATUS^GBLOCKCOPY(Name,Index,0,.JobInfo)
+ i JobInfo(0) d
+ . w !,"Jobs Assigned: ",?17,JobInfo(0)
+ . w !,$j("Job #",8),?9,"Status",?17,"Start Time",?29,"Global"
+ . s Job=0 f  s Job=$o(JobInfo(Job)) q:Job=""  d
+ . . s JobIndex=0 f  s JobIndex=$o(JobInfo(Job,JobIndex)) q:JobIndex=""  d
+ . . . s Status=$p(JobInfo(Job,JobIndex),"~",1)
+ . . . s Start=$$DISPLAYDATE($p(JobInfo(Job,JobIndex),"~",2))
+ . . . s Glo=$p(JobInfo(Job,JobIndex),"~",5)
+ . . . w !,$j($s(($zversion(1)=1):$zhex(+Job),1:Job),8),?9,Status,?17,Start,?29,Glo
+ i $p(Info,"~",10) d
+ . w !!,"Globals with ERRORS:"
+ . w !,"Global",?32,"Block #",?40,"%ETN #",?47,"Error/LastReference"
+ . s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo),1,cvtdata) q:glo=""  d
+ . . s error=$p(cvtdata,"~",9) q:error=""
+ . . s errnum=$p(cvtdata,"~",10) s:+errnum=0 errnum=""
+ . . w !,glo,?32,$j($p(cvtdata,"~",5),7),?40,$j(errnum,5)
+ . . f  q:error=""  w ?47,$e(error,1,33) s error=$e(error,34,$l(error)) i error'="" w !
+ . . s lastref=$p(cvtdata,"~",8)
+ . . f  q:lastref=""  w !,?47,$e(lastref,1,33) s lastref=$e(lastref,34,$l(lastref))
+ i $d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"RESTART")) d
+ . w !!,"Globals which were RESTARTED:"
+ . w !,"Global",?32,"Restart Time",?52,"Original error"
+ . s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"RESTART",glo),1,Info) q:glo=""  d
+ . . f i=1:1 s data=$p(Info,"*",i) q:data=""  d
+ . . . s time=$zdatetime($p(data,"~",1))
+ . . . s error=$p(data,"~",2) s:error="" error="Crash"
+ . . . w !,glo,?32,time
+ . . . f  q:error=""  w ?52,$e(error,1,27) s error=$e(error,28,$l(error)) i error'="" w !
+ s (totnblocks,totblockstocopy)=0
+ w !!,"Copy Statistics:"
+ w !,"Global",?31,"Blk Done/ToDo",?49,"Start Time",?61,"Last Update",?73,"Blk/sec"
+ i '$d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"START")) d  q
+ . i $d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSLIST","*")) d  q
+ . . k glinfo set rc=$$GetGlobalDirectoryInfo^%SYS.DATABASE(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"SRCDIR"),"glinfo")
+ . . s glo="" f  s glo=$o(glinfo(glo)) q:glo=""  w !,glo
+ . s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSLIST",glo)) q:glo=""  w !,glo
+ If $d(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"EMPTYSOURCE")) w !,?3,"The database is empty" q  
+ s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSENDED",glo),1,cvtdata) q:glo=""  d
+ . s nblocks=$p(cvtdata,"~",6),blockstocopy=$p(cvtdata,"~",11),start=$p(cvtdata,"~",2),end=$p(cvtdata,"~",4),elapsed=((end*86400)+$p(end,",",2))-((start*86400)+$p(start,",",2))
+ . w !,glo,?32,$j(nblocks,7)_"/"_blockstocopy i nblocks'=blockstocopy w "<="
+ . w ?49,$$DISPLAYDATE(start),?61,$$DISPLAYDATE(end),?73,$s(elapsed=0:(nblocks),1:+$p((nblocks)/elapsed,".",1))
+ . s totnblocks=totnblocks+nblocks,totblockstocopy=totblockstocopy+blockstocopy
+ s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSSTARTED",glo),1,cvtdata) q:glo=""  d
+ . s nblocks=$p(cvtdata,"~",6),blockstocopy=$p(cvtdata,"~",11),start=$p(cvtdata,"~",2),end=$p(cvtdata,"~",4),elapsed=((end*86400)+$p(end,",",2))-((start*86400)+$p(start,",",2))
+ . w !,$e($p(cvtdata,"~",8),1,31),?32,$j(nblocks,7)_"/"_blockstocopy i nblocks'=blockstocopy w "<="
+ . w ?49,$$DISPLAYDATE(start),?61,$$DISPLAYDATE(end),?73,$s(elapsed=0:(nblocks),1:+$p(((nblocks)/elapsed),".",1))
+ . s totnblocks=totnblocks+nblocks,totblockstocopy=totblockstocopy+blockstocopy
+ s glo="" f  s glo=$o(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"GLOBALSQUEUED",glo)) q:glo=""  d
+ . w !,glo,?32,"Queue"
+ s end=$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"END")) i end="" s end=$h
+ s start=$g(^|"^^"_$zu(12)|%SYS("GBLOCKCOPY",Name,Index,"START"))
+ s elapsed=((end*86400)+$p(end,",",2))-((start*86400)+$p(start,",",2))
+ w !,"TOTAL",?32,$j(totnblocks,7)_"/"_totblockstocopy i totnblocks'=totblockstocopy w "<="
+ w ?73,$s(elapsed=0:(totnblocks),1:+$p(((totnblocks)/elapsed),".",1))
+ q
+}
+CENTER(str,rm) [] PRIVATE {
+ Q $J(str,$L(str)+rm\2)
+}
+CLEAR(first,last) [] PRIVATE {
+ s Blank=$j("",80)
+ w /cup(first,1)
+ f i=first:1:last w /cup(i,1),Blank
+ w /cup(1,1)
+ q
+}
+LJ(var,pad) [] PRIVATE {
+ s $zt="LJE"
+ s var=var_$j("",pad)
+ q $e(var,1,pad)
+LJE s $zt=""
+ q var
+}
+DISPLAYDATE(Date) [] PRIVATE {
+ i Date="" q Date
+ s cvtdate=$zdatetime(Date)
+ q $p(cvtdate,"/",1,2)_" "_$p($p(cvtdate," ",2),":",1,2)
+ }

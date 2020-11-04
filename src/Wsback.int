@@ -1,0 +1,466 @@
+ROUTINE Wsback [Type=INT]
+Wsback ;System Management backup functions ; STC2489 1/19/16
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+maskincl(mask,item,ext) New e,i,include,m,m1,m2
+ Set include=0,ext=$ZCVT($g(ext,""),"U")
+ For i=1:1 Set m=$p(mask,";",i),e="" Quit:m=""  Do:m'["'"  Quit:include
+ . Set:m["." m=$$ParseRoutineName^%R(m,.e),e=$s(e="*":"",e="SRC":".INC.MAC.INT.BAS",e="":"",1:"."_e)
+ . If m["*" Do  Quit
+ . . Set m=$p(m,"*")
+ . . If m=$e(item,1,$l(m)),(e=""!(e[ext)) Set include=1 Quit
+ . If m[":" Do  Quit
+ . . Set m1=$p(m,":"),m2=$p(m,":",2)
+ . . If m1=$e(item,1,$l(m1))!(item]m1) Do
+ . . . If m2=$e(item,1,$l(m2))!(m2]item) Do
+ . . . . Set:e=""!(e[ext) include=1
+ . If m=item,(e=""!(e[ext)) Set include=1 Quit
+ If include,mask["'" For i=1:1 Set m=$p(mask,";",i),e="" Quit:m=""  Do:m["'"  Quit:'include
+ . Set m=$e(m,2,*)
+ . Set:m["." m=$$ParseRoutineName^%R(m,.e),e=$s(e="*":"",e="SRC":".INC.MAC.INT.BAS",e="":"",1:"."_e)
+ . If m["*" Do  Quit
+ . . Set m=$p(m,"*")
+ . . If m=$e(item,1,$l(m)),e=""!(e[ext) Set include=0
+ . If m[":" Do  Quit
+ . . Set m1=$p(m,":"),m2=$p(m,":",2)
+ . . If m1=$e(item,1,$l(m1))!(item]m1) Do
+ . . . If m2=$e(item,1,$l(m2))!(m2]item) Do
+ . . . . Set:e=""!(e[ext) include=0 ; SJ bug fix
+ . If m=item,(e=""!(e[ext)) Set include=0 Quit
+ Quit include
+ w !,"This is not an interactive routine, enter only at specified entry points."
+ q
+GetFirst() ; Get first line of backup history to display on client
+ ; The first line is different from the rest.
+ n
+ s tmp=$G(^SYS("BACKUP","LASTFULL","DATE"))
+ i tmp="" q "" ; No backup data
+ s date=$p(tmp,",",1)
+ i date'="" s date=$$dec2dat^%Wmdc(date)
+ s time=$p(tmp,",",2)
+ i time'="" s time=$$dec2tim^%Wmdc(time)
+ s tmp=date_";"_time_";"_$G(^SYS("BACKUP","LASTFULL","TYPE"))
+ s tmp=tmp_";"_$G(^SYS("BACKUP","LASTFULL","DEVICE"))
+ s tmp=tmp_";"_$G(^SYS("BACKUP","LASTFULL","LOG"))
+ s tmp=tmp_";"_$G(^SYS("BACKUP","LASTFULL","DESC"))
+ q tmp
+GetHist()   ;
+ ; Get backup history to display on client.  Return null to terminate.
+ I '$D(^TMP($J,"GetHist")) S ^TMP($J,"GetHist")=""
+ d ConvHistDate^DBACK
+ i $l(^TMP($J,"GetHist"),",")=2 s ^TMP($J,"GetHist")=(+^TMP($J,"GetHist")*1000000+$p(^TMP($J,"GetHist"),",",2))
+ S ^TMP($J,"GetHist")=$O(^SYS("BACKUP","HISTORY",^TMP($J,"GetHist")))
+ S tmp=^TMP($J,"GetHist")
+ i tmp="" q "" ; No backup data
+ s date=$$dec2dat^%Wmdc((tmp\1000000))
+ s time=$$dec2tim^%Wmdc((tmp#1000000))
+ s tmp=date_";"_time_";"_$G(^SYS("BACKUP","HISTORY",^TMP($J,"GetHist"),"TYPE"))
+ s tmp=tmp_";"_$G(^SYS("BACKUP","HISTORY",^TMP($J,"GetHist"),"DEVICE"))
+ s tmp=tmp_";"_$G(^SYS("BACKUP","HISTORY",^TMP($J,"GetHist"),"LOG"))
+ s tmp=tmp_";"_$G(^SYS("BACKUP","HISTORY",^TMP($J,"GetHist"),"DESC"))
+ q tmp
+ ;
+test ;
+ s return=$$BACKUP^DBACK("","F","Description","C:\openm\backup.ful","N","C:\openm\backup.log","NOISY","N","N","")
+ q
+ ;
+BACKUP(sub)      ; Started from Control Panel
+ ;P0,P1,P2,P3,P4,P5,P6,P7,P8,P9,P10
+ ; called from progress3
+ s $zt="^%ET"
+ s return=$$IjcOpen^%Wprima("Job")
+ i return=0 q
+ i $$IjcMsg^%Wprima("PD"_$J) ; Send a PID message to Message2 
+ ;                            procedure in Progress3 form
+ ; The parameter list is too long to be shelled so
+ ; we get the parameters from a Openm1.tmp file
+ n (sub)
+ I '$d(^CacheTempUtil("BACKUP",sub)) Q
+ s string=^CacheTempUtil("BACKUP",sub)
+ s del1=$$del1^%Wprim
+ f i=1:1:11 s parm="P"_(i-1),@parm=$p(string,del1,i)
+ k ^CacheTempUtil("BACKUP",sub)
+ ;o file::1 u file
+ ;r P0,P1,P2,P3,P4,P5,P6,P7,P8,P9
+ ;c file
+ ;i $zf(-1,"del "_file) ; delete the temp file
+ ; use this code to prompt a user
+ ;s prompt="Enter a tape device",default="default",title="Title"
+ ;s ans=$$IjcIB^%Wprima(prompt,title,default)
+ ;s ans=$e(ans,3,999)
+ ;i $$IjcMsg^%Wprima("DI"_ans)
+ i '($zversion(1)=1) g BACKUP1
+ s dev=0
+ i '$$IsFile^%Wprim(P3) d  q:return
+ . s dev=$P(P3,":")
+ . i dev<47!(dev>54) s return=0 q  ; not tape
+ . s dev="SYS$MT"_dev_":" ; build logical name SYS$MTnn:
+ . s return=$ZU(148,3,dev) ; obtain mount status for tape
+ . i return d  q  ; status failure
+ . . i $$IjcMsg^%Wprima("DI"_$C(13,10)_"STATUS check failed for "_dev_$C(13,10)_"Error code = "_return)
+ . . i $$IjcMsg^%Wprima("JS"_"0")
+ . . i $$IjcClose^%Wprima("Job") 
+ . i return]"0" s return=1 d  q  ; already mounted by some process
+ . . i $$IjcMsg^%Wprima("DI"_$C(13,10)_"Device "_dev_" is unavailable (mounted)")
+ . . i $$IjcMsg^%Wprima("JS"_"0")
+ . . i $$IjcClose^%Wprima("Job") 
+ . s return=$ZU(148,1,dev) ; try to mount the tape
+ . i 'return q  ; success
+ . i $$IjcMsg^%Wprima("DI"_$C(13,10)_"MOUNT failed for "_dev_$C(13,10)_"Error code = "_return)
+ . i $$IjcMsg^%Wprima("JS"_"0")
+ . i $$IjcClose^%Wprima("Job") 
+BACKUP1 ;
+ s return=$$BACKUP^DBACK(P0,P1,P2,P3,P4,P5,P6,P7,P8,P9,,P10)
+ i $$IjcMsg^%Wprima("DI"_$C(13,10)_"Return status = "_return)
+ ; BACKUP^DBACK calls SetStatus because we passed the taskname (P10)
+ i ($zversion(1)=1) i $E(dev,1,6)="SYS$MT" d
+ . n return
+ . s return=$ZU(148,2,dev,1) ; dismount the tape/nolunload
+ . i 'return q  ; success
+ . i $$IjcMsg^%Wprima("DI"_$C(13,10)_"DISMOUNT failed for "_dev_$C(13,10)_"Error code = "_return)
+ i $$IjcMsg^%Wprima("JS"_$S(return:"1",1:"0"))
+ s return=$$IjcClose^%Wprima("Job")
+ q  ; Called with the JOB command, so no return value
+SetStatus       ; Update Set status
+ q:P10=""
+ s $p(^SYS("BACKUPTASK",P10),"^",9)=$s(return=1:"Completed",return=0:"Failed",$e(return,1,2)="1,":"Warning",return="CANCEL":"Cancelled",1:return)
+ q
+setGlo(P0) ; Saves backup parameters in global for job command.
+ n (P0)
+ f cnt=1:1 I '$D(^CacheTempUtil("BACKUP",cnt)) Q
+ s ^CacheTempUtil("BACKUP",cnt)=P0
+ Q cnt
+text(file) ;
+ ; inputs: file to be opened
+ ;  
+ ; return value:
+ ;  status flag (1=sucess; 0=failure)
+ ; output record:
+ ;  error, tag, time, process, line of code
+ ;
+ ;s return=1
+ c file o file:"r":4
+ i $t=0 q 0
+ s $zt="eof"
+ s %UI="GUI"
+ k %UI("CANCEL")
+ ; Only get the first 1000 records to browse
+ ; if you get too many the text box will overfill
+ f i=1:1:1000 d
+ . u file 
+ . r x
+ . i $ZEOF,$ZUTIL(96,0,42)
+ . I $$callback^%Wprim(0,"",x_$c(13,10))
+ u 0
+eof i $ze["ENDOFFILE" S $ze=""
+ c file
+ w $$callback^%Wprim(1,"","")
+ q i
+GetDir()        ; Get the directories
+ n
+ s (str,dir)=""
+ i '$d(^SYS("BACKUP","DIRECTORIES")) q "" ; No backup information at all
+ l +^SYS("BACKUP","DIRECTORIES"):2 i $t=0 q 0
+ f  s dir=$o(^SYS("BACKUP","DIRECTORIES",dir)) q:dir=""  s str=str_";"_dir
+ l -^SYS("BACKUP","DIRECTORIES")
+ s str=$e(str,2,$l(str))
+ q str
+GetAllDir(DirStr)     ;
+ ;inputs:
+ ;  None
+ ;  DirStr is a return parameter passed by value call like this
+ ;  MVB1.Code = "$$GetAllDir(.P0)"
+ ;return value:
+ ;  success/failure flag (0_message=failure, 1 = success)
+ ;
+ n (DirStr)
+ s $ze="",$zt="StdErr^"_$zname
+ s message="Error in GetAllDir"
+ s DirStr="",del1=$$del1^%Wprim
+ s dir="" f  s dir=$O(^SYS("UCI",dir)) q:dir=""  d
+ . i ^SYS("UCI",dir)'="" q  ;skip secondary volumes
+ . s DirStr=DirStr_$c(22,35,1)_dir
+ s DirStr=$p(DirStr,del1,2,999)
+ q 1
+ ;
+GetBDir(DirStr)     ;
+ ;inputs:
+ ;  None
+ ;  DirBStr is a return parameter passed by value call like this
+ ;  MVB1.Code = "$$GetBDir(.P0)"
+ ;  The return value of DirStr is
+ ;  a pieced string where the first character of each piece is the
+ ;  backup flag, the rest of the
+ ;return value:
+ ;  success/failure flag (0_message=failure, 1 = success)
+ ;
+ n (DirStr)
+ s $ze="",$zt="StdErr^"_$zname
+ s message="Error in GetAllDir"
+ s DirStr="",del1=$$del1^%Wprim
+ s dir="" f  s dir=$O(^SYS("UCI",dir)) q:dir=""  d
+ . i ^SYS("UCI",dir)'="" q  ;skip secondary volumes
+ . s DirStr=DirStr_$c(22,35,1)_$S($D(^SYS("BACKUP","DIRECTORIES",dir))>0:1,1:0)_dir
+ s DirStr=$p(DirStr,del1,2,999)
+ q 1
+ ;
+PutDir(str) ;
+ n (str)
+ q:str="" 1
+ l +^SYS("BACKUP","DIRECTORIES"):2 i $t=0 q 0
+ k ^SYS("BACKUP","DIRECTORIES")
+ f i=1:1:$l(str,";") S X=$P(str,";",i) I X'="" S ^SYS("BACKUP","DIRECTORIES",X)=""
+ l -^SYS("BACKUP","DIRECTORIES")
+ q 1
+ ;
+StdErr ; Standard error trap
+ s message=0_$$del1^%Wprim_message_$c(13,10)_$ze
+ s $ze=""
+ q message
+SaveSet(str)    ; For Control Panel use: save backup Set definitions
+ ; Called from New and Edit
+ ; ^SYS("BACKUPTASK",SETNAME)=Set data delimited by gsD1
+ ; P1 = setname
+ ; P2 = Backup Type (ful,inc,cum)
+ ; P3 = Device
+ ; P4 = Selected Databases (delimited by gsD2)
+ ; P5 = Switch Journal flag (1 = yes, 0 = no)
+ ; P6 = Description (max 256 characters)
+ ; P7 = Last modified date and time
+ ; P8 = Last run date and time   ;this is updated when run
+ ; P9 = Last run status          ;this is updated when run
+ ; P10= System designed flag (1 = system designed, null = user defined)
+ n (str)
+ s $ze="",$zt="SaveSetErr^Wsback"
+ s setname=$p(str,"^"),str=str_"^"_$$cvtdate($h)
+ s $P(str,"^",4)=""  ;set database list to null, current list will be used
+ s $p(^SYS("BACKUPTASK",setname),"^",1,7)=str
+ q 1
+SaveSetErr      ;
+ q 0_$$del1^%Wprim_"Unable to save backup set definition for "_setname_$s($ZE'="":$c(13,10,10)_"$ze="_$ZE,1:"")
+ ;
+DbList(data)    ; get backup Database List for Control Panel
+ ; Called from NodeSelect, frmMain
+ ; ^SYS("BACKUP","DIRECTORIES",database name)=database directory
+ ; If this list exists, get it.
+ ; If not, build all from the existing database list except the CACHETEMP
+ n (%UI,data)
+ s $ze="",$zt="DbListErr"
+ s data="",stop=0,return=1
+ s db="",del1=$$del1^%Wprim,del2=$$del2^%Wprim
+ if $D(^SYS("BACKUPCHUI")) s sc=$$UpgradeDBList() if '+sc q sc
+ d GetCompactDBList(.cdblist)
+ f  s db=$o(^SYS("BACKUPDB",db)) q:db=""  d  i ('sc) s return="0,"_del1_$SYSTEM.Status.GetErrorText(sc) q
+ . s sc=##class(Config.Databases).Get(db,.p)
+ . q:('sc)
+ . s dir=p("Directory")
+ . s dir=##class(%Library.File).ComputeFullDBDir(dir)
+ . q:(dir="")!('##class(%Library.File).DirectoryExists(dir))
+ . Set info=$g(cdblist(dir),"-1^0") ; defaut to -1 SFN and not readonly.
+ . q:$p(info,"^")=$ZU(173)  ;don't backup cachetemp
+ . s readonly=$p(info,"^",2)
+ . s data=data_db_del2_dir_del2_readonly_del1
+ q return
+ ;
+DbListErr       ;
+ q 0_$$del1^%Wprim_"Unable to get backup database list."_$s($ZE'="":$c(13,10,10)_"$ze="_$ZE,1:"")
+ ;
+GetCompactDBList(list) {
+	Set rs=##class(%Library.ResultSet).%New("SYS.Database:CompactLocalList")
+	Do rs.Execute()
+	while (rs.Next()) {
+		s list(rs.Data("Directory"))=rs.Data("SFN")_"^"_rs.Data("ReadOnly")
+	}
+}
+SvDbList(str)   ; Save database list
+ ; ^SYS("BACKUPDB",dbname)=dbdirectories
+ n (str)
+ q:str="" 1
+ s $ze="",$zt="SvDbListErr"
+ s db="",del1=$$del1^%Wprim,del2=$$del2^%Wprim
+ l +^SYS("BACKUPDB"):2 i $t=0 q 0
+ k ^SYS("BACKUPDB")
+ f i=1:1:$l(str,del1) S db=$P(str,del1,i) d
+ . q:$p(db,del2)=""
+ . s ^SYS("BACKUPDB",$p(db,del2))=""
+ l -^SYS("BACKUPDB")
+ q 1
+SvDbListErr     ;
+ q 0_$$del1^%Wprim_"Unable to save backup database list."_$s($ZE'="":$c(13,10,10)_"$ze="_$ZE,1:"")
+ ;
+UpgradeDBList() { ;
+    q:'$D(^SYS("BACKUPCHUI"))
+    s del1=$$del1^%Wprim,del2=$$del2^%Wprim
+	s context=""
+	do {
+ 	   s done=$$List^Wsdba(.datalist,.context)
+ 	   s cnt=$L(datalist,del1)
+ 	   f i=1:1:cnt {
+ 		  s db=$p(datalist,del1,i)
+ 		  s dbname=$p(db,del2)
+		  s dbdir=$p(db,del2,2)
+		  if $L(dbdir),+$p(db,del2,4)'=$ZU(173)  { ;skip cachetemp
+ 		     s index=$I(list(dbdir))
+ 		     s list(dbdir,index)=dbname
+ 		     s dbdir2=$ZU(12,dbdir,2)
+ 		     i $L(dbdir2),dbdir2'=dbdir {
+	 		    s index=$I(list(dbdir2))
+	 		    s list(dbdir2,index)=dbname
+ 	         }
+ 	      }
+ 	   }
+	} while (done)
+	;
+	s status=1  ;return status
+	s dir=$O(^SYS("BACKUPCHUI","DIRECTORIES",""))
+	while dir'="" {
+	   if $g(list(dir)) {
+	      f i=1:1:list(dir) s ^SYS("BACKUPDB",list(dir,i))=""
+		  s dir=$O(^SYS("BACKUPCHUI","DIRECTORIES",dir))
+	   } else {
+		  s msg=$C(13,10)_"Unable to translate directory "_dir
+		  s msg=msg_$C(13,10)_"to a database name for backups"
+		  s msg=msg_$C(13,10)_"Removing backup list and all databases will be included"
+		  s msg=msg_$C(13,10)_"until a new database list is defined."
+		  do $ZU(9,"",msg)
+		  s status=0_$$del1^%Wprim_msg
+		  s dir=$o(list(""))
+		  while dir'="" {
+			f i=1:1:list(dir) s ^SYS("BACKUPDB",list(dir,i))=""
+			s dir=$o(list(dir))
+		  }
+		  k ^SYS("BACKUP")  ; Delete backup history
+		  ;Don't include the CACHELIB and DOCBOOK in the backup list.
+		  k ^SYS("BACKUPDB","CACHELIB"),^SYS("BACKUPDB","DOCBOOK"),^SYS("BACKUPDB","SAMPLES")
+		  ;dir will be null here and it will terminate the outer while loop.
+	   }
+	}
+ 	s ^SYS("BACKUPDB","CACHEAUDIT")=""   ; add CACHEAUDIT in the backup list.
+ 	merge ^SYS("BACKUP")=^SYS("BACKUPCHUI") ; transfer history
+ 	s fulldate=$g(^SYS("BACKUPCHUI","LASTFULL","DATE"),"")
+ 	if fulldate'="" {
+	 	s hindex=(+fulldate*1000000+$p(fulldate,",",2))
+	 	merge ^SYS("BUHISTORY",hindex)=^SYS("BACKUPCHUI","LASTFULL")
+	 	;don't need date for history, the subscript is the date already.
+	 	k ^SYS("BUHISTORY",fulldate,"DATE")
+ 	}
+ 	;set the non full backup history.
+ 	s hdate=""
+ 	f  {
+	 	s hdate=$o(^SYS("BACKUPCHUI","HISTORY",hdate))
+	 	q:hdate=""
+	 	s hindex=(+hdate*1000000+$p(hdate,",",2))
+	 	merge ^SYS("BUHISTORY",hindex)=^SYS("BACKUPCHUI","HISTORY",hdate)
+ 	}
+ 	k ^SYS("BACKUPCHUI")
+	if +status do $ZU(9,"","Wsback: Upgraded CHUI backup information")
+	q status
+ }
+SaveDir(str)    ; Save database directories for this run
+ ; This sub is called to save the current run databases
+ ; in ^SYS("BACKUP","DIRECTORIES"). The set from the last 
+ ; backup run was saved by the backup in ^SYS("BACKUP","LASTDIRECTORIES")
+ ; and when we run the backup it will decide whether there have been
+ ; any changes
+ n (str)
+ q:str="" 1
+ s $ze="",$zt="SaveDirErr"
+ s db="",del1=$$del1^%Wprim
+ l ^SYS("BACKUP","DIRECTORIES"):2 i $t=0 g SaveDirErr
+ k ^SYS("BACKUP","DIRECTORIES")
+ f i=1:1:$l(str,del1) s db=$p(str,del1,i) d
+ . q:db=""
+ . s ^SYS("BACKUP","DIRECTORIES",db)=""
+ l
+ q 1
+SaveDirErr      ;
+ q 0_$$del1^%Wprim_"Unable to save backup database directories."_$s($ZE'="":$c(13,10,10)_"$ze="_$ZE,1:"")
+ ;
+List(data,context)  ;get backup Set definitions for Control Panel
+ ;inputs:
+ ;       .data = data to be returned
+ ;       .context = context variable to resume fetching
+ ;return value:
+ ;       success/failure flag (0_message=failure, #databases=success)
+ ;       success/failure/more data flag
+ ;               0_message=failure,
+ ;               0 = success
+ ;               1 = more data, pass the returned context back in
+ ;output record:
+ ;       name, backup type, device, databases, switch journal flag, description
+ ;       logfile, last run date and time, last modified date and time
+ ;Note:  You must take into consideration the four system sets which the user
+ ;       cannot modify: case 1: the first time it's used; case 2: after it's run
+ ;
+ n (%UI,data,context)
+ s $ze="",$zt="ListErr"
+ s data="",stop=0,return=1,size=1000
+ s bckset=context,del1=$$del1^%Wprim
+ ;clean up old nodes prior to build 47.
+ ;i $d(^%SYS("BACKUPLIST","EVERYTHING")),$d(^("Custom")) k ^("EVERYTHING"),^("Custom")
+ s setdef("FullAllDatabases")="0^^^1^Full backup of ALL databases, whether or not they are in the backup database list.^^^^1"
+ s setdef("FullDBList")="0^^^1^Full backup of all databases that are in the backup database list.^^^^1"
+ s setdef("IncrementalDBList")="1^^^1^Incremental backup of all databases that are in the backup database list.^^^^1"
+ s setdef("CumuIncrDBList")="2^^^1^Cumulative and Incremental backup of all databases that are in the backup database list.^^^^1"
+ ;set the listview in this order
+ s setdef(0)="FullAllDatabases"_"^"_"FullDBList"_"^"_"IncrementalDBList"_"^"_"CumuIncrDBList"
+ ;k ^%SYS("BACKUPLIST","CumulativeIncrementalDBList")
+ ;take care of the very first time
+ i context="" d
+ . s set=0 
+ . f  s set=$o(setdef(set)) q:set=""  d:'$d(^SYS("BACKUPTASK",set))
+ . . s ^SYS("BACKUPTASK",set)=set_"^"_setdef(set)
+ . ;always set FullAllDatabases first and in this order
+ . f i=1:1:4 s data=data_$$List1($p(setdef(0),"^",i))_del1
+ f  s bckset=$O(^SYS("BACKUPTASK",bckset)) d  Quit:stop
+ . i bckset="" s stop=1,return=0,context="" Quit
+ . q:$d(setdef(bckset))  ;system designed tasks have already been set.
+ . s data=data_$$List1(bckset)_del1
+ . i $l(data)>size s context=bckset,stop=1 quit
+  Quit return
+ListErr ;error
+ Q 0_$c(22,35,1)_"Unable to fetch backup set definitions!"_$s($ZE'="":$c(13,10,10)_"$ze="_$ZE,1:"")                
+ ;
+List1(set)      ; translate into displayable form
+ s rec=$g(^SYS("BACKUPTASK",set))
+ ;i rec="",set="Custom" q set
+ s type=$p(rec,"^",2)
+ s type=$s(type=0:"Full",type=1:"Incremental",type=2:"Cumulative",1:"")
+ s $p(rec,"^",2)=type
+ q rec
+cvtdate(datetime)       ; convert $h style date into displayable date and time
+ ; date style: mmm dd yyyy
+ ; time style: hh:mmAM or PM
+ q:datetime="" ""
+ q $zdate(datetime,6)_" "_$zt($p(datetime,",",2),4)
+SetLast(setname)        ; set the last run date and time, status
+ ; also update the last file name
+ ;return value:
+ ;       success/failure flag
+ q:setname="" 0
+ s $p(^SYS("BACKUPTASK",setname),"^",8)=$$cvtdate($h)
+ s $p(^SYS("BACKUPTASK",setname),"^",9)="Running"
+ s ^SYS("BACKUPTASK",setname,"LASTFILE")=$$getname(setname)
+ q 1
+getname(setname)        ;get file name
+ ;this is also called from GUI to display new file name
+ ;on the backup window
+ n last,file
+ s last=$G(^SYS("BACKUPTASK",setname,"LASTFILE"))
+ s last=$tr(last,"_",".")
+ s file=$$getname^JRNSTART(last)
+ q $tr(file,".","_")

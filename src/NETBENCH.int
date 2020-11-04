@@ -1,0 +1,54 @@
+ROUTINE NETBENCH [Type=INT]
+NETBENCH ;PTR BENCHMARK NETWORK GLOBAL USAGE ;JLC215 05/22/00
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ R "System name:",s w !
+ R "Directory:",d w !
+ n ENV 
+ i s="" s ENV=d
+ e  s ENV="^"_s_"^"_d
+ N X S X=$ZU(68,28,0)
+ K ^|ENV|TSA,^|ENV|TSB,^|ENV|TSC,^|ENV|TST,^|ENV|TSW,^|ENV|TSX,^|ENV|TSY
+ S X=$ZU(68,28,X)
+ W "This benchmark is a simple test of the ability of the global module",!
+ W "to do sets in sequential, descending, and 'random' order and to retrieve",!
+ W "the data so set.",!!,"A is 30 char, B is 5 char, C is 12345",!!
+ H 10 ;GIVE GARBAGE COLLECTOR A CHANCE TO RUN
+SET N TIME S A="" F I=1:1:30 S A=A_"A"
+ S B="ABCDE",C=12345
+ D TIM(0,"F I=1:1:6000 S ^|ENV|TST(I)=A",6000)
+ D TIM(1,"F I=1:1:1500 S D=^|ENV|TST(I)",1500)
+ D TIM(0,"F I=6000:-1:1 S ^|ENV|TSW(I)=A",6000)
+ D TIM(1,"F I=1500:-1:1 S D=^|ENV|TSW(I)",1500)
+ D TIM(0,"F X=1:1:40 F Y=1:1:50 S ^|ENV|TSX(X,Y,0)=A,^(1)=B,^(2)=C",6000)
+ D TIM(0,"F X=1:1:40 F Y=1:1:50 S ^|ENV|TSY(Y,X,0)=A,^(1)=B,^(2)=C",6000)
+ D TIM(1,"F X=1:1:20 F Y=1:1:25 S D=^|ENV|TSX(X,Y,0),E=^(1),F=^(2)",1500)
+ D TIM(1,"F X=1:1:20 F Y=1:1:25 S D=^|ENV|TSY(Y,X,0),E=^(1),F=^(2)",1500)
+ D TIM(0,"F I=1:1:2000 S ^|ENV|TSA(I)=A,^|ENV|TSB(I)=B,^|ENV|TSC(I)=C",6000)
+ D TIM(1,"F I=1:1:500 S D=^|ENV|TSA(I),E=^|ENV|TSB(I),F=^|ENV|TSC(I)",1500)
+ S X=$ZU(68,28,0)
+ K ^|ENV|TSA,^|ENV|TSB,^|ENV|TSC,^|ENV|TST,^|ENV|TSX,^|ENV|TSY,^|ENV|TSW w !
+ S X=$ZU(68,28,X)
+ W TIME(0)," seconds for ",TIME(2)," SETS, "
+ W TIME(2)*100+.5\TIME(0)/100," SETS per second",!
+ W TIME(1)," seconds for ",TIME(3)," GETS, "
+ W TIME(3)*100+.5\TIME(1)/100," GETS per second",!
+ q
+TIM(rcv,xec,n) s TIME=$P($H,",",2) x xec s TIME=$P($H,",",2)-TIME
+ w TIME," seconds for: ",xec,!
+ s TIME(rcv)=$G(TIME(rcv))+TIME,TIME(rcv+2)=$G(TIME(rcv+2))+n
+ q

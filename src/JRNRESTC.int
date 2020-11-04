@@ -1,0 +1,1251 @@
+ROUTINE JRNRESTC [Type=INT]
+JRNRESTC ;Cluster Restore Journal from a File, ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/jrnrestc.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ ; BITWISE.INC, DPB139 07/09/93
+ ;
+DecodeDejrnBeg(beg) ;
+ n code s code=+beg
+ i code=0 q "the beginning of cluster session <"_$p(beg,",",2)_">"
+ i code=1 q "the end of last restored backup "_$p(beg,",",3)
+ i code=2 q "the journal marker located at"
+ i code=3 q "the beginning of the cluster journal log"
+ i code=4 q "the end of last journal restore"
+ i code=5 s beg=$P(beg,",",2) q "the "_$P(beg,";",3)_" backup at "_$P(beg,";",2)_" "_$P(beg,";")
+ q ""
+DecodeDejrnEnd(end) ;
+ n code s code=+end
+ i code=0 q "the end of cluster session <"_$p(end,",",2)_">"
+ i code=1 q "current journal location"
+ i code=2 q "the journal marker located at"
+ i code=3 q "the end of the cluster journal log"
+ i code=5 s end=$P(end,",",2) q "the "_$P(end,";",3)_" backup at "_$P(end,";",2)_" "_$P(end,";")
+ q ""
+ ;variables:
+ ; jrnlogdef - default cluster journal log on current system
+ ; jrnlog - cluster journal log to use
+ ;   jrnlog(i)=csn,jrnf : the i-th line of the log
+ ; jrnlogr - cluster journal log with redirection (jrnredir) applied to
+ ; jrnredir - 1 if there is redirection
+ ;   jrnredir(olddir)=newdir or "" if not redirected
+ ; dejrnbeg,dejrnend - range of journal restore
+ ;   format of dejrnbeg and dejrnend: code,parameter(s)
+ ;   format of dejrnbeg/dejrnend subscript level: dejrnbeg/end(jrnf)=addr
+ ;
+ ;   [dejrnbeg] code (meanings)		parameters		subscript level
+ ;              ---------------------------------------------------------------
+ ;                 0 (beg of session)	CluSesID		N/A
+ ;                 1 (end of backup)	RestoreTime,BackupDev	jrnmark loc	
+ ;                 2 (journal marker)	N/A			jrnmark loc
+ ;                 3 (beg of jrnlog)	N/A			N/A
+ ;                 4 (end of jrnrest)	RestoreTime		jrnmark loc
+ ;                 5 (end of backup)	jrnmark text jrnmark loc        [JO1728]
+ ;
+ ;   [dejrnend] code (meanings)		parameters		subscript level
+ ;              ---------------------------------------------------------------
+ ;                 0 (end of session)	CluSesID		N/A
+ ;                 1 (cur journal loc)	N/A			jrnmark loc	
+ ;                 2 (journal marker)	N/A			jrnmark loc
+ ;                 3 (end of jrnlog)	N/A			N/A
+ ;                 5 (start of backup)	jrnmark text jrnmark loc        [JO1728]
+ ;
+ShowMenuSetupMain ;
+ w !
+ w !,"Cluster Journal Restore - Setup - Main Settings"
+ w !,"1. Start restore at ",$$DecodeDejrnBeg(dejrnbeg)
+ d ShowJrnMarkLoc(.dejrnbeg,1)
+ w !,"   End restore at ",$$DecodeDejrnEnd(dejrnend)
+ d ShowJrnMarkLoc(.dejrnend,1)
+ w !,"2. Locate journal files using cluster journal log"
+ w !,?6,jrnlog
+ w !,?3,"with",$s('$g(jrnredir):" NO",1:"") w " redirections of journal files"
+ i $g(jrnredir) d ShowJrndir
+ q
+ ;caller: SETUP^JRNRESTO
+ ;callees:
+ ; SetJrnlog - set cluster journal log (jrnlog)
+ ; SetDejrnDef - set default range of journal restore (dejrnbeg,dejrnend)
+ ; SetDejrn - set upper & lower bound of the range of journal restore 
+ ;           (dejrnbeg/dejrnend)
+ ; ShowMenuSetupMain
+ ; convert ?
+ ;output:
+ ; nojrn - journaling disabled (and to be re-enabled after restore)
+ ; notresto - 1 => abort journal restore
+ ; clujrn - '$d(clujrn) => abort cluster journal restore
+SETUP ;
+ n dejrnswt,dejrndis,jrnlog,jrnlogr,jrnlogdef,jrnredir,dejrnbeg,dejrnend,jrninfo
+ n rc,key
+ n jrnmarklog,jrnmarkinfo,jrnmarklogdef
+ s $zt="etSETUP",rc=0
+ ; There is no reason the user has to switch journal files any more so
+ ; the default is now no. In the past to end a restore at the end of the
+ ; current journal file while you were journaling the restore required that
+ ; you switch journal files to create an endpoint. Now when you choose end
+ ; at the end of the current journal file we put a marker down and end there.
+ s dejrnswt=0,dejrndis=0 ;default
+ s (jrnlog,jrnlogdef)=$s($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0):$p($zu(78,20),",",2),1:"") ;"" if not a clustered system
+ s (jrnmarklog,jrnmarklogdef)=$s($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0):$p($zu(78,20),",",3),1:"")  ;"" if not a clustered system
+ i jrnlog]"" d
+ . i $$ImportJrnlog(.jrnlog)<0 d errout(("Unable to open "_jrnlog)) s jrnlog="" q
+ . d ImportJrndir,SetDejrnDef
+ i jrnlog="" s rc=$$SetJrnlog() i rc<0 g Abort
+ if $L(jrnlog),$L($g(jrnmarklog)),'$D(jrnmarkinfo) d  ;i rc<0 g Abort
+ . s rc=$$ImportJrnMarklog(jrnmarklog,.jrnmarkinfo) 
+ . i rc<0 d errout(("Unable to open "_jrnmarklog_". Start/End restore at backup not available.")) k jrnmarkinfo s jrnmarklog=""
+ ; There are some special values of fromrest set by CLUMENU^JRNRESTO which
+ ; change how we select the input file.
+ ;    fromrest=6 is a restore based on backup 
+ ;    fromrest=7 is a restore following a cache backup restore
+ ; These are evaluated by SetDejrn() but we start with a call to SetDejrn()
+ ; rather than displaying the main menu first.
+ s rc=0
+ if (fromrest=6)!(fromrest=7) s rc=$$SetDejrn() s:((rc=0)&(fromrest=7)) rc=-1 d  g:rc'=1 Abort g autodejrn
+ . i rc<1 W !!,"Not able to establish a proper Start or Stop point. Aborting Recovery."
+ . i rc>0 d switjrnfiletrans s:rc>0 rc=$$ConfirmDone() s:rc>0 rc=$$Convert()
+goback ; 
+ s key="" f  d  q:rc<0  d:rc>0 switjrnfiletrans s:rc>0 rc=$$ConfirmDone() q:rc>0
+ . i $d(key) d ShowMenuSetupMain 
+ . w !!,"Select an item to modify ([Q]uit or ENTER to accept and continue)/[?][H]elp: " r key
+ . i key="" s rc=$$Convert() q
+ . i ("Hh"[key)!(key="?") s rc=$$SetupmainHelp^JRNRESTCHELP() q
+ . i "Qq"[key d  q
+ . . w ! i $$YN("Are you sure you want to Quit the cluster journal restore","N")="Y" s rc=-1 q
+ . i key=1 s rc=$$SetDejrn() q 
+ . i key=2 s rc=$$SetJrnlog() q
+ . w !,*7,"Invalid option ",key s rc=0 q
+ i rc<0 g Abort
+autodejrn ;path for options 1 and 2 to avoid main menu
+ i +dejrnend=1!(+dejrnend=3) s ROLLJRN=1
+ ; RestTime is set at the beginning of main^JRNRESTB
+ s ^SYS("RESTORE","JOURNAL",RestTime,"Jrnlog")=jrnlog
+ m:$d(jrnredir) ^SYS("RESTORE","JOURNAL",RestTime,"JrnRedir")=jrnredir
+ m ^SYS("RESTORE","JOURNAL",RestTime,"RangeEnd")=dejrnend
+ m ^SYS("RESTORE","JOURNAL",RestTime,"RangeBegin")=dejrnbeg
+ n csn s csn="" f  s csn=$o(clumember(csn)) q:csn=""  m ^SYS("RESTORE","JOURNAL",RestTime,"Files",csn)=clumember(csn,"files")
+ s ^SYS("RESTORE","JOURNAL",RestTime,"SeqFirst")=$g(minseq)_$s($g(minclumstart)="":"",1:","_minclumstart)
+ s ^SYS("RESTORE","JOURNAL",RestTime,"SeqLast")=$g(maxseq)_$s($g(maxclumsart)="":"",1:","_maxclumstart)
+ i $zu(78,22) d  g:((fromrest=6)!(fromrest-7))&(rc=0) Abort g:rc=0 goback
+ . i dejrnswt,'$zu(78,1,"","",0,0,5) d errout("Failed to switch journal file") d  
+ . . s rc=$$YN("Do you wish to continue (Y/N) ","N")="Y" w !!
+ . i 'dejrndis i $$CURRENT^%SYS.NOJRN() d DISABLE^%SYS.NOJRN s nojrn=1
+ q
+ ;purpose
+ ;to allow user to switch journal file before journal restore and 
+ ;to journal the dejournaled transactions
+ ; dejrnswt - if 1, switch journal file before dejournaling
+ ; dejrndis - if 1, disable journaling (process only) before dejournaling
+switjrnfiletrans
+ i $zu(78,22) d  
+ . w !!,"---------------------------------------------------------"
+ . s dejrnswt=$$YN("Switch journal file before journal restore (Y/N)","N")
+ . i dejrnswt="^" s dejrnswt=0 s rc=0 q
+ . s dejrnswt=$s(dejrnswt="N":0,1:1)
+ . w !!,*7,"Journal file WILL "_$s(dejrnswt:"BE",1:"NOT BE")_" switched before journal restore" 
+ . w !!!,"---------------------------------------------------------"
+ . s dejrndis=$$YN("Journal the dejournaled transactions (Y/N)","N") 
+ . i dejrndis="^" s dejrndis=0 s rc=0 q
+ . s dejrndis=$s(dejrndis="N":0,1:1)
+ . s disjrn='dejrndis
+ . w !!,*7,"Dejournaled transactions WILL "_$s(dejrndis:"BE",1:"NOT BE")_" Journaled"
+ . w !!,"---------------------------------------------------------"
+ q
+etSETUP ;
+ s $zt=""
+ i $e($ze,1,11)="<INTERRUPT>" d errout("Journal restore aborted") ZQ $ST q
+ u 0 d errout(("Error: "_$ze)) d BACK^%ETN
+ ZQ $ST
+ q
+Abort ;
+ k clujrn 
+ s notresto=$S($G(CLURESTORE):1,1:($$YN("Run private journal restore instead")="N"))
+ i notresto d errout("Journal restore aborted")
+ s POP=0
+ q
+ConfirmDone() ;
+ ;show the first and last couple of journal files to dejournal?
+ q ($$YN("Start journal restore? (Y/N)")="Y")
+ ;purpose:
+ ; specify cluster journal log and journal file redirections
+ ;input:
+ ; jrnlog, jrnlogdef
+ShowMenuSetupJrnlog ;
+ w !
+ w !,"Cluster Journal Restore - Setup - Journal File Info"
+ w !,"[I]dentify an existing cluster journal log to use for the restore"
+ i jrnlog]"" w !,?3,"Current: ",jrnlog d
+ . i jrnlog'=jrnlogdef w !,"[R]edirect journal files in ",jrnlog 
+ w !, "  - OR -"
+ w !,"[C]reate a cluster journal log by specifying where journal files are" 
+ q
+ ;caller: SETUP
+ ;callees:
+ ; SetJrnlogUse - new jrnlog
+ ; SetJrnlogNew - new jrnlog
+ ; SetJrnlogRedir - redirect journal files in jrnlog
+ ; ShowMenuSetupJrnlog
+ ;modified:
+ ; jrnlog, jrnlogr, jrnredir, dejrnbeg, dejrnend
+ ;return:
+ ; rc - 0 on success, -1 to quit cluster restore
+SetJrnlog() ;
+ n rc,key
+ s rc=0 f  d ShowMenuSetupJrnlog w !!,"Selection"_$S(jrnlog]"":" (<ENTER> if no change)",1:"")_" (^ to backup, Q to quit restore)/[?][H]elp: " r key d  q:key=""  q:rc<0
+ . i key="" d:jrnlog=""  q
+ . . w ! i $$YN("No cluster journal log specified. Quit cluster journal restore")="Y" s rc=-1 q
+ . . s key=0 ;retry
+ . i "Qq"[key d  q
+ . . w ! i $$YN("Are you sure you want to Quit the cluster journal restore","N")="Y" s rc=-1 q
+ . i key="^" s rc=0,key="" q
+ . i ("hH"[key)!(key="?") s rc=$$SetjrnlogHelp^JRNRESTCHELP() q
+ . i "Ii"[key d SetJrnlogUse q
+ . i "Rr"[key,jrnlog]"",jrnlog'=jrnlogdef d SetJrnlogRedir q
+ . i "Cc"[key s rc=$$SetJrnlogNew q
+ q rc
+ ;purpose: specify an existing journal log to use
+ ;caller: SetJrnlog
+ ;callees:
+ ; ImportJrnlog - jrnlog
+ ; ImportJrndir - jrnredir
+ ; SetDejrnDef - dejrnbeg,dejrnend
+ ; SetJrnlogWarning
+ ;modified (if the given one different from current):
+ ; jrnlog,jrnredir,dejrnbeg,dejrnend (see above) and jrnlogr (killed)
+SetJrnlogUse ;
+ n path,rc
+ i jrnlog]"" d SetJrnlogWarning
+ w !,"Enter the name of the cluster journal log (<ENTER> if no change)"
+ r !,"=> ",path
+ i path="" w "(no change)",! q
+ i path="^" q
+ s path=$zu(12,path) i path=jrnlog w "(no change)",! q  ;no change
+ s rc=$$ImportJrnlog(.path) i rc<0 d errout(("Unable to open "_path)) q
+ k jrnlog,jrnredir,jrnlogr,dejrnbeg,dejrnend,dejrnbegr,dejrnendr,jrninfo
+ m jrnlog=path d ImportJrndir,SetDejrnDef
+ k jrnmarkinfo s jrnmarklog=""
+ if $L(jrnmarklogdef) d
+ . ; Create the filename for the marker log out of the path for the journal
+ . ; log file. If there is no default marker log then we don't do this.
+ . n tmp,logfname
+ . s logfname=$p(jrnmarklogdef,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),$l(jrnmarklogdef,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")))
+ . s tmp=$p(path,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),$l(path,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")))
+ . s jrnmarklog=$E(path,1,$l(path)-$L(tmp))_logfname
+ . s rc=$$ImportJrnMarklog(jrnmarklog,.jrnmarkinfo) 
+ . i rc<0 d errout(("Unable to open "_jrnmarklog_". Start/End restore at backup not available.")) k jrnmarkinfo s jrnmarklog=""
+ q
+ ;purpose: create a new journal log to use
+ ;caller: SetJrnlog
+ ;callees:
+ ; CreateJrnlog - jrnlog
+ ; ImportJrndir - jrnredir
+ ; SetDejrnDef - dejrnbeg,dejrnend
+ ; SetJrnlogWarning
+ ;modified:
+ ; jrnlog,jrnredir,dejrnbeg,dejrnend (see above) and jrnlogr (killed)
+SetJrnlogNew() ;
+ n rc,path
+ i jrnlog]"" d SetJrnlogWarning
+Redo w !,"Enter the name of the cluster journal log to create (^ to go back to menu)"
+ r !,"=> ",path
+ i (path="")!(path="^") s jrnlog=jrnlogdef q 0
+ s path=$zu(12,path) o path:"r":0 i $t c path w !,"This file, "_path_", already exists!" i $$YN("Overwrite it")'="Y" g Redo
+ s rc=$$CreateJrnlog(.path) i rc<0 q:($p(rc,",",2)="") -1 d errout($p(rc,",",2,$l(rc))) q -1
+ k jrnlog,jrnredir,jrnlogr,dejrnbeg,dejrnend,dejrnbegr,dejrnendr,jrninfo
+ ; When the user creates a journal log file there is no corresponding support
+ ; for creating a marker log file but that's ok as they can enter the markers
+ ; by journal file + offset if that's what they want.
+ k jrnmarkinfo s jrnmarklog=""
+ m jrnlog=path d ImportJrndir,SetDejrnDef
+ q 0
+SetJrnlogWarning ;
+ w !!,*7,?30,"*** WARNING ***"
+ w !,?8,"If you specify a cluster journal log different from current one, you"
+ w !,?8,"may need to reenter info on journal redirection, restore range, etc."
+ w !
+ q
+ ;purpose: redirect journal files in jrnlog
+ ;caller: SetJrnlog
+ ;callees:
+ ; SetJrnlogRedirHelp^JRNRESTCHELP
+ ; ImportJrndir - jrnredir
+ ; RedirJrnlog - create jrnlogr by applying jrnredir to jrnlog
+ ; RedirDejrnRange - applying jrnredir to dejrnbeg and dejrnend
+ ;modified:
+ ; jrnredir - 1 if redirection on
+ ; jrnlogr,dejrnbegr,dejrnendr
+SetJrnlogRedir ;
+ n dir,src,dest,len
+ w !,"Journal directories in ",jrnlog 
+ i $g(jrnredir) w !,"... and current redirections (->)"
+ d ShowJrndir
+ i $g(jrnredir),$$YN("Keep current redirections")="N" k jrnredir d ImportJrndir
+ w !,"Enter the original and current locations of journal files (? for help)"
+ f  w !,"Journal files originally from (enter to quit)(? for help):",!,"---> " r src q:src=""  d
+ . i src="?" d SetJrnlogRedirHelp^JRNRESTCHELP q
+ . w !,"are currently located in (enter to quit-no change)(? for help):",!,"---> " r dest i dest="" w !,?4,"<no change>" q
+ . i dest="?" d SetJrnlogRedirHelp^JRNRESTCHELP q
+ . s src=$zu(12,src) i '$d(jrnredir(src)) w *7,!!,"Source directory not found in journal log!",! q 
+ . s dest=$zu(12,dest) i dest'=jrnredir(src) s jrnredir(src)=dest,jrnredir=1 w !,?4,src," -> ",dest q
+ . s dir=src,len=$l(src) f  s dir=$o(jrnredir(dir)) q:$e(dir,1,len)'=src  s dst=dest_$e(dir,len+1,$l(dir)) i jrnredir(dir)'=dst s jrnredir(dir)=dst,jrnredir=1 w !,?4,dir," -> ",jrnredir(dir)
+ i $g(jrnredir) d RedirJrnlog,RedirDejrnRange
+ q
+ ;purpose:
+ ; create a journal log by asking for journal file locations, load it to memory
+ ;(version # should be the first line)
+ ;input/output: jrnlog
+ ;return:
+ ; 0 on success, -1 if unable to open, -9 on other errors
+CreateJrnlog(jrnlog) ;
+ n i,j,dir,jrnf,prefix,wildcard
+ n shortname
+ s rc=0
+ o jrnlog:"wns":0 e  q -1_","_("Unable to open "_jrnlog) 
+ s $ze="",$zt="CreateJrnlogE"
+ f  r !,"How many cluster members were involved? (^ to go back) => ",numclu q:numclu'<1  q:numclu="^"
+ i numclu="^" c jrnlog s jrnlog=jrnlogdef k numclu q 0
+ w !,"For each cluster member, enter the location(s) and name prefix (if any) of the journal files to restore --"
+ w !!,*7,"Caution: Any entry errors will require an ABORT.  Enter Q to Abort the restore at any time",!
+ s i=jrnlog k jrnlog s jrnlog=i  ;clears subnodes of jrnlog
+ s wildcard="*.*"_$s(($zversion(1)=1):";",1:"") f i=0:1:(numclu-1) d  q:rc<0
+ . f  w !,"Cluster member #",i r ?40,"Journal File Name Prefix: ",prefix d:((prefix'="")&("qQ"[prefix)!(prefix="^"))  q:rc<0  i (prefix="")!((prefix'="^")&("qQ"'[prefix)) q
+ . . w ! i $$YN("Are you sure you want to Quit the cluster journal restore","N")="Y" s rc=-1
+ . i rc<0 q
+ . k jrnf f  r !,?2,"Directory: ",dir q:dir=""  d:((dir'="")&("qQ"[dir))  q:rc<0  s dir=$zu(12,dir),jrnf=$zse(dir_prefix_wildcard) f  q:jrnf=""  i $ZU(78,22,jrnf)=1 {s shortname=$case($ZBITGET($ZVERSION(0),46),0:$case($f(jrnf,";"),0:$e(jrnf,*-8-$l($p(jrnf,".",$l(jrnf,"."))),*),:$e(jrnf,*-8-$l($p(jrnf,".",$l(jrnf,"."))),$f(jrnf,";")-2)),:jrnf),jrnf($s($l(shortname)<19:$p(shortname,".")_$e(10000000000+$p(shortname,".",2),2,11),1:shortname)_"J")=jrnf} s jrnf=$zse("")
+ . . w ! i $$YN("Are you sure you want to Quit the cluster journal restore","N")="Y" s rc=-1
+ . i rc<0 q
+ . s jrnf="" f j=1+$o(jrnlog(""),-1):1 s jrnf=$o(jrnf(jrnf)) q:jrnf=""  s jrnlog(j)=i_","_jrnf(jrnf)
+ i rc<0 c jrnlog s jrnlog=jrnlogdef k numclu q -1
+ i ($zversion(1)=1) s i="" f  s i=$o(jrnlog(i)) q:i=""  s jrnlog(i)=$p(jrnlog(i),";")
+ i $d(jrnlog)=1 c jrnlog s jrnlog=jrnlogdef,rc=-1 w !!,"No entries selected" q -1
+ i $d(jrnlog)=11 s rc=$$REFINEJRNLOGLIST(.path,.jrnlog)
+ u jrnlog s i="" f  s i=$o(jrnlog(i)) q:i=""  w jrnlog(i),!
+CreateJrnlogE ;
+ s $zt=""
+ c jrnlog i $ze]"",$ze'["<Z" d BACK^%ETN q -9_","_("Error: "_$ze)
+ q 0
+ ;purpose
+ ;allow user to extract journal files from list prior to restore
+REFINEJRNLOGLIST(path,jrnlog)
+ n log,exclude,i,j,log1,log2,k,path1,jrnlogsave
+ m jrnlogsave=jrnlog
+ w !!,*7,*7,"WARNING: Removing files from the list could cause data inconsistencies since"
+ w !,?9,"journal files are sequential in nature."
+ w !!,"<<<enter>>> to contine...",*7,*7 r x
+REFINEJRN1 w !!,"Review the list and select those numbers that are to be EXCLUDED from the list"
+ s i="" f  s i=$o(path(i)) q:i=""  s log=path(i) w !,i,".",?5,log 
+ w !!,"Enter numbers to be EXCLUDED"
+ w !,?5,"separate numbers by a comma or use a dash for a range (ie. 1-5)"
+ w !,"(Q) to Quit this editing, lose any changes and accept the original list"
+ w !,"(R) to restore original list and begin editing list again"
+ w !,"(A) to accept changes and file the new list"
+ r !,"==> ",exclude
+ i exclude="" W "Please enter numbers or Q, R or A" g REFINEJRN1
+ i "Qq"[exclude k jrnlog m jrnlog=jrnlogsave q 0
+ i "Rr"[exclude k path m path=jrnlogsave g REFINEJRN1 
+ i "Aa"[exclude d  q 0
+ . k path1 s i=0,log="" f  s log=$o(path(log)) q:log=""  s i=i+1,path1(i)=path(log)
+ . s path1=jrnlog
+ . k jrnlog,path m jrnlog=path1
+ i '+exclude W "Please enter numbers or Q, R or A" g REFINEJRN1
+ i exclude=+exclude k path(exclude) g REFINEJRN1
+ i exclude["," s j="",log="" f j=1:1 s log=$p(exclude,",",j) g:log="" REFINEJRN1 d  
+ . i +log=log k path(log) q
+ . i log["-" s log1=$p(log,"-",1),log2=$p(log,"-",2) d  q
+ . . f k=log1:1:log2 k path(k)
+ i exclude["-" s log1=$p(exclude,"-",1),log2=$p(exclude,"-",2) d  g REFINEJRN1
+ . f k=log1:1:log2 k path(k)
+ q 0
+ ;purpose:
+ ; read journal log from disk into local array jrnlog
+ ;do version checking here (major version - backward, minor - forward)
+ ;input/output: jrnlog
+ ;return:
+ ; 0 on success, -1 if unable to open, -2 on version mismatch
+ImportJrnlog(jrnlog,ver) ;
+ n savemode,line,i o jrnlog:"r":0 e  q -1 
+ s savemode=$zu(68,40,1) u jrnlog f i=1:1 r line q:line=""  s jrnlog(i)=line
+ c jrnlog i $zu(68,40,savemode)
+ q 0
+ ;purpose:
+ ; read journal marker log from disk into passed local array
+ ;input: fname = name of file to open
+ ;output: infoarray(1..n) = data from file in order read,
+ ;        infoarray("index",marker id,<yyyymmdd hh:mm>)=1..n
+ ;          where <yyyymmdd hh:mm> is the $H timestamp from the log file entry
+ ;          marker id = -1 is a backup. ID's > 0 are user defined. There are no
+ ;          other system defined markers at the moment (eg. < 0)
+ ;return:
+ ; 0 on success, -1 if unable to open
+ImportJrnMarklog(fname,infoarray) ;
+ n savemode,line,i,markerid,ds
+ o fname:"r":0 e  q -1 
+ s savemode=$zu(68,40,1) 
+ u fname f i=1:1 r line q:line=""  d
+ . s infoarray(i)=line
+ . s markerid=+$P(line,"^",4)
+ . s ds=$ZDATETIME($P(line,"^"),8) ;$H timestamp of log entry
+ . s infoarray("index",markerid,ds)=i
+ c fname
+ i $zu(68,40,savemode)
+ q 0
+ ;purpose: extract journal directory info from jrnlog into jrnredir
+ ;callers:
+ ; SetJrnlogUse
+ ; SetJrnlogNew
+ ; SetJrnlogRedir
+ ;input: jrnlog
+ ;output: jrnredir
+ImportJrndir ;
+ n i,slash,jrnf,dir
+ s slash=$s(($zversion(1)=1):"]",($zversion(1)=3):"/",1:"\")
+ s i="" f  s i=$o(jrnlog(i)) q:i=""  s jrnf=$p(jrnlog(i),",",2),dir=$p(jrnf,slash,1,$l(jrnf,slash)-1)_slash,jrnredir(dir)=$g(jrnredir(dir))
+ q
+ ;purpose: create jrnlogr by applying journal redirection info to jrnlog 
+ ;caller: SetJrnlogRedir
+ ;input: jrnlog
+ ;output: jrnlogr, jrninfo (killed as it is derived from jrnlogr)
+RedirJrnlog ;
+ n i,slash,jrnf,dir
+ s slash=$s(($zversion(1)=1):"]",($zversion(1)=3):"/",1:"\") k jrnlogr,jrninfo
+ s i="" f  s i=$o(jrnlog(i)) q:i=""  s jrnf=$p(jrnlog(i),",",2),dir=$p(jrnf,slash,1,$l(jrnf,slash)-1)_slash i jrnredir(dir)]"" s $e(jrnf,1,$l(dir))=jrnredir(dir),jrnlogr(i)=+jrnlog(i)_","_jrnf
+ q
+ ;caller: SetJrnlogRedir
+RedirDejrnRange d RedirDejrn(.dejrnbeg,.dejrnbegr),RedirDejrn(.dejrnend,.dejrnendr) q
+ ;callers:
+ ; RedirDejrnRange
+ ; SetDejrnBegBck
+ ; SetDejrnBegOth
+ ; SetDejrnEndOth
+ ;input: loc (dejrnbeg or dejrnend) 
+ ;output: cur (dejrnbegr or dejrnendr)
+ ;perhaps we should verify (newf,addr) is a valid journal record??
+RedirDejrn(loc,cur) ;
+ n slash,jrnf,dir,newf
+ i $d(loc)\10=0 q  ;no specific location
+ s slash=$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"") k cur
+ s jrnf="" f  s jrnf=$o(loc(jrnf)) q:jrnf=""  s dir=$p(jrnf,slash,1,$l(jrnf,slash)-1)_slash i jrnredir(dir)]"" s newf=jrnredir(dir)_$e(jrnf,$l(dir)+1,$l(jrnf)),cur(newf)=loc(jrnf)
+ q
+ ;Given a file in its original path, return the location it is redirected to
+RedirFile(path) ;
+ n dir,slash 
+ s slash=$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),dir=$p(path,slash,1,$l(path,slash)-1)_slash i jrnredir(dir)="" q path
+ q jrnredir(dir)_$e(path,$l(dir)+1,$l(path))
+ShowJrnMarkLoc(loc,showredir) ;
+ n f 
+ s f="" f  s f=$o(loc(f)) q:f=""  w !,$j(loc(f),12),",",f i $g(jrnredir),$d(showredir) w !,$j("->",12)," ",$$RedirFile(f)
+ q
+ShowJrndir ;
+ n dir 
+ s dir="" f  s dir=$o(jrnredir(dir)) q:dir=""  w !,?6,dir i jrnredir(dir)]"" w " -> ",jrnredir(dir)
+ q
+errout(err) w !!,*7,"[",err,"]",! q
+ImportJrninfo(log) ;
+ n i,csn,jrnf,gseq,seqinfo,gseq
+ i '$d(log) q:$d(jrnlogr) $$ImportJrninfo(.jrnlogr) q $$ImportJrninfo(.jrnlog)
+ n index s index=$$initjrninfo^JRNINFO() 
+ s gseq=jrninfo s i="" f  s i=$o(log(i)) q:i=""  d
+ . s csn=+$p(log(i),","),jrnf=$p(log(i),",",2),jrninfo(1,csn,i)=jrnf
+ . s jrninfo(-1,jrnf)=csn_","_i_","_$$updseqinfo^JRNINFO(jrnf,csn,i)
+ m jrninfo(0)=@seqinfo
+ d killjrninfo^JRNINFO(index)
+ q 0
+ ;purpose:
+ ; set default range of journal restore 
+ ;algorithm:
+ ; default beg: where backup ends (journal marker) or 
+ ;              beginning of current session (on own system) or journal log
+ ;   [Advanced] begin from last journal restore if jrnlog matches
+ ; default end: current location (on own system) or end of log
+ ;callers:
+ ; SETUP
+ ; SetJrnlogUse
+ ; SetJrnlogNew
+ ;callee: IsInJrnlog
+ ;input: jrnlog, jrnlogdef, ^SYS("RESTORE")
+ ;output: dejrnbeg, dejrnend
+ ;NB: jrnf of dejrnbeg should match what is in jrnlog (redirected or not)
+SetDejrnDef d SetDejrnDefBeg,SetDejrnDefEnd q
+SetDejrnDefBeg ;
+ n dbrestime,dejrntime,node,jrnf
+ k dejrnbeg,dejrnbegr
+ s dbrestime=$o(^SYS("RESTORE","BACKUP",""),-1)
+ ;locate last cluster journal restore, if any
+ s dejrntime="" f  s dejrntime=$o(^SYS("RESTORE","JOURNAL",dejrntime),-1) q:dejrntime=""  q:$g(^SYS("RESTORE","JOURNAL",dejrntime,"Jrnlog"))]""
+ ;Continue from prior journal restore only if it
+ ;  1. was performed after last backup; AND
+ ;  2. used the same journal log as current; AND
+ ;  3. ended at a journal marker (a limitation for now)
+ i dejrntime]dbrestime,^SYS("RESTORE","JOURNAL",dejrntime,"Jrnlog")=jrnlog,$d(^SYS("RESTORE","JOURNAL",dejrntime,"RangeEnd"))'<10 m dejrnbeg=^SYS("RESTORE","JOURNAL",dejrntime,"RangeEnd") s dejrnbeg=("4,"_dejrntime)
+ e  i dbrestime]"" s node=$name(^SYS("RESTORE","BACKUP",dbrestime)),dejrnbeg=("1,"_dbrestime_","_@node@("device")),node=$name(@node@("jrnmarker")) s i="" f  s i=$o(@node@(i)) q:i=""  s jrnf=$p(@node@(i),",",2),dejrnbeg(jrnf)=+@node@(i) i '$$IsInJrnlog(.jrnf) k dejrnbeg q
+ i '$d(dejrnbeg) s dejrnbeg=$s(jrnlog=jrnlogdef:("0,"_$zdt($zdth($ZU(78,30,0),-2),8)),1:"3,10000101")
+ q
+SetDejrnDefEnd ;
+ k dejrnend,dejrnendr
+ i jrnlog=jrnlogdef,$zu(78,22) s dejrnend=("1,"_""_","_"")
+ e  s dejrnend="3,30000101"
+ q
+ ;input: jrnf
+ ;return: if jrnf is in jrnlog, index of jrnf in jrnlog; 0 otherwise
+IsInJrnlog(jrnf) ;
+ ;i $d(jrninfo) q $d(jrninfo(-1,jrnf))
+ s jrnf=$zu(12,jrnf)
+ n i s i="" f  s i=$o(jrnlog(i)) q:i=""  q:jrnf=$p(jrnlog(i),",",2)
+ q $s(i="":0,1:i)
+IsInJrnlogRedir(jrnf) ;
+ n i s i="" i $d(jrnlogr) f  s i=$o(jrnlogr(i)) q:i=""  q:jrnf=$p(jrnlogr(i),",",2)
+ q $s(i="":0,1:i)
+ ;Q: Are beg and end journal markers specifed in original or current locations?
+ ;A: beg and end are always specified in original locations.
+ ;Specify where to start journal restore
+ShowMenuSetupDejrnBeg() ;
+ n okopt
+ s okopt="12"  ;these options are always valid
+ n time,device
+ w !!,"Cluster Journal Restore - Setup - Where to Start Restore"
+ w ! w:+$g(dejrnbeg)=0 "*" w ?2,"1. At the beginning of a cluster session "
+ i +$g(dejrnbeg)=0 w ": <",$p(dejrnbeg,",",2),">"
+ w ! w:+$g(dejrnbeg)=2 "*" w ?2,"2. At a specific journal marker "
+ i +$g(dejrnbeg)=2 w ":" d ShowJrnMarkLoc(.dejrnbeg)
+ i +$g(dejrnbeg)=1 d  i 1
+ . s time=$p(dejrnbeg,",",2),device=$p(dejrnbeg,",",3) 
+ . w !,"*",?2,"3. Following the restore of backup ",device
+ . w !,"     i.e., at the journal marker located at" d ShowJrnMarkLoc(.dejrnbeg)
+ . s okopt=okopt_"3"
+ e  s time=$o(^SYS("RESTORE","BACKUP",""),-1) d:time]"" 
+ . w !,?2,"3. Following the restore of backup ",$g(^SYS("RESTORE","BACKUP",time,"device"),"???")
+ . s okopt=okopt_"3"
+ i +$g(dejrnbeg)=4 d  i 1
+ . w !,"*",?2,"4. Following the journal restore ended at ",$p(dejrnbeg,",",2)
+ . w !,"     i.e., at the journal marker located at" d ShowJrnMarkLoc(.dejrnbeg)
+ . s okopt=okopt_"4"
+ e  s time=$o(^SYS("RESTORE","JOURNAL",""),-1) d:time]""
+ . w !,?2,"4. Following the journal restore ended at ",time
+ . s okopt=okopt_"4"
+ i +$g(dejrnbeg)=5 d  i 1
+ . n text,type,date,time 
+ . s text=$P(dejrnbeg,",",2),type=$P(text,";",3),date=$P(text,";"),time=$P(text,";",2)
+ . w !,"*",?2,"5. Following the ",type," backup at ",time," on ",date
+ . s okopt=okopt_"5"
+ e  d:($O(jrnmarkinfo("index",-1,""))'="")
+ . w !,?2,"5. Based on a journal marker from a Cache' backup"
+ . s okopt=okopt_"5"
+ q okopt
+ ; SetDejrn()
+ ; Purpose: Allow the user to change the upper/lower bounds for the
+ ;          restore
+ ; Input: fromrest
+ ;    There are some special values of fromrest set by CLUMENU^JRNRESTO which
+ ;    change how we select the starting/ending point.
+ ;       fromrest=6 is a restore based on backup 
+ ;       fromrest=7 is a restore following a cache backup restore
+ ; Returns: 0 (no change), -1 (error), 1 (changed)
+ ;          dejrnbeg & dejrnend set to describe where to start/stop
+SetDejrn() ;
+ n rc,key,okopt
+ s rc=0
+top ;
+ if fromrest=6 s rc=$$SetDejrnBegBck() g:rc=0 top i rc>0 d  q rc
+ . i +$g(dejrnbeg)=5 d  
+ . . n text,type,date,time 
+ . . s text=$P(dejrnbeg,",",2),type=$P(text,";",3),date=$P(text,";"),time=$P(text,";",2)
+ . . w !!,"--------------------------------------------------------------"
+ . . w !,"Start: Following the ",type," backup at ",time," on ",date
+ . . w !,"---------------------------------------------------------------"
+ . w !,"And to Stop at the current journal location."
+ if fromrest=7 s rc=$$SetDejrnBegRestore() i rc>0 d  q rc
+ . w !,"And to Stop at the current journal location."
+ f  s okopt=$$ShowMenuSetupDejrnBeg() w !!,"Option with (*) is Current Start position - <ENTER> to accept",!!,"Selection (<ENTER> if no change)",!,"(^ to backup, Q to quit restore)/[?][H]elp: " r key d  q:rc  q:((key="")!(key="^"))
+ . i (okopt'[key)&("qQhH?"'[key)&(key'="^") w !,*7,"Invalid option ",key q
+ . i key="^" q
+ . i key="" q
+ . i "Qq"[key d  q
+ . . w ! i $$YN("Are you sure you want to Quit the cluster journal restore","N")="Y" s rc=-1 q
+ . i ("Hh"[key)!(key="?") s rc=$$SetdejrnstartHelp^JRNRESTCHELP() q
+ . i key=1 w "  working......" s rc=$$SetDejrnBegClu() q:rc=1  k:rc<0 jrninfo s rc=0 q
+ . i key=2 s rc=$$SetDejrnBegOth() q:rc=1  s rc=0 q
+ . i key=3 s rc=$$SetDejrnBegRestore() q:rc=1  s rc=0 q
+ . i key=4 s rc=$$SetDejrnBegJrn() q:rc=1  s rc=0 q
+ . i key=5 s rc=$$SetDejrnBegBck() d:rc=1  q:rc=1  s rc=0 q
+ . . i +$g(dejrnbeg)=5 d  
+ . . . n text,type,date,time 
+ . . . s text=$P(dejrnbeg,",",2),type=$P(text,";",3),date=$P(text,";"),time=$P(text,";",2)
+ . . . w !!,"--------------------------------------------------------------"
+ . . . w !,"Start: Following the ",type," backup at ",time," on ",date
+ . . . w !,"---------------------------------------------------------------"
+ q:rc<0 -1
+ i $d(key),key="^" q 0  
+ s rc=0
+ f  s okopt=$$ShowMenuSetupDejrnEnd() w !!,"Option with (*) is Current Stop position - <ENTER> to accept",!!,"Selection (<ENTER> if no change)",!,"(^ to backup, Q to quit restore)/[?][H]elp: " r key d  q:rc  i (key="")!(key="^") q  
+ . i (okopt'[key)&(key'="^")&("QqhH?"'[key) w !,*7,"Invalid option ",key q
+ . i key="" q
+ . i key="^" q
+ . i "Qq"[key d  q
+ . . w ! i $$YN("Are you sure you want to Quit the cluster journal restore","N")="Y" s rc=-1 q
+ . i ("Hh"[key)!(key="?") s rc=$$SetdejrnstopHelp^JRNRESTCHELP() q
+ . i key=1 w "  working......" s rc=$$SetDejrnEndClu() q:rc=1  k:rc<0 jrninfo s rc=0 q
+ . i key=3 s rc=$$SetDejrnEndOth() q:rc=1  s rc=0 q
+ . i key=4 s rc=$$SetDejrnEndBck() d:rc=1  q:rc=1  s rc=0 q
+ . . if $O(jrnmarkinfo("index",-1,""))'="" d  
+ . . . i +$g(dejrnend)=5 d  
+ . . . . n text,type,date,time 
+ . . . . s text=$P(dejrnend,",",2),type=$P(text,";",3),date=$P(text,";"),time=$P(text,";",2)
+ . . . . w !!,"-----------------------------------------------------------------------"
+ . . . . w !,"Stop: At a Cache' backup: <",type," backup at ",time," on ",date,">"
+ . . . . w !,"------------------------------------------------------------------------"
+ . q:key'=2 
+ . i jrnlog=jrnlogdef,$zu(78,22) s rc=$$SetDejrnEndCur(0) q:rc=1  s rc=0 d  q
+ . .w !!,*7,"[Not able to change, already set at the current end of the journal]"
+ . s rc=$$SetDejrnEndLog()
+ if key="^" s rc=0,key="",okopt="" q:fromrest=7 0 g top
+ q:rc<0 -1
+ q 0 ;success
+ ;purpose: start restore at the beginning of a cluster session
+ ;callee: ImportJrninfo
+ ;input/output: jrninfo
+ ;output: dejrnbeg
+ ;return:
+ ; 0 (no change), -1 (error), 1 (changed)
+SetDejrnBegClu() ;
+ n i,cst,n,key
+ i '$d(jrninfo),$$ImportJrninfo()
+ s cst="",i=0 f  s cst=$o(jrninfo(0,cst)) q:cst=""  s cst($i(i))=$zdt($zdth(cst,-2),8) 
+ i 'i w !!,*7,"[No cluster session found. Is journal log or redirection given correctly?]" q -1
+ s n=i ;# of cluster sessions
+ f  d   r !!,"=> ",key q:key=""  q:"Qq"[key  s key=key\1 i 0<key,key<(n+1) q
+ . w !!,"To start journal restore at the beginning of cluster session ..."
+ . f i=1:1:n w !,i,". ",cst(i)
+ i key=""!("Qq"[key) q 0
+ k dejrnbeg,dejrnbegr s dejrnbeg=("0,"_cst(key\1))
+ q 1
+ ;return:
+ ; 0 (no change), -1 (error), 1 (changed)
+SetDejrnBegBck() ;
+ n index,line,jrnf,addr,text
+ ;Begin following a backup using the information in the journal
+ ;marker log to select the journal marker for the backup to start with.
+ if $g(jrnmarklog)="" d errout("There is no cluster journal marker log to locate the backup information") q 0
+ if '$D(jrnmarkinfo("index",-1)) d errout("The cluster journal marker log does not contain any backup information") q 0
+ s index=$$getrestore("start")
+ i index=0 q 0
+ i index=-1 q -1
+ s line=jrnmarkinfo(index)
+ s addr=$P(line,"^",2),jrnf=$P(line,"^",3),text=$P(line,"^",5)
+ i '$$IsInJrnlog(.jrnf) d errout((jrnf_" is not found in journal log "_jrnlog)) q -1
+ k dejrnbeg,dejrnendr 
+ s dejrnbeg(jrnf)=addr
+ s dejrnbeg=("5,"_text)
+ d RedirDejrn(.dejrnbeg,.dejrnbegr)
+ q 1
+SetDejrnBegRestore() ;
+ ;Begin at the end of a backup restore which has been performed
+ ;on this system so it is recorded in ^SYS("RESTORE")
+ n i,time,node,beg,jrnf,addr
+ s time=$o(^SYS("RESTORE","BACKUP",""),-1)
+ i time="" d errout("No backup has been restored on this system") q 0
+ s node=$name(^SYS("RESTORE","BACKUP",time))
+ s i="" f  s i=$o(@node@("jrnmarker",i)) q:i=""  d  q:('$d(beg))
+ . s jrnf=$p(@node@("jrnmarker",i),",",2),addr=+@node@("jrnmarker",i),beg(jrnf)=addr
+ . i '$$IsInJrnlog(.jrnf) d errout((jrnf_" is not found in journal log "_jrnlog)) k beg q
+ . w !!,"You have chosen to start journal restore at",!,$j(addr,12),",",jrnf
+ i '$d(beg) q -1
+ w !,"the journal location by the end of backup. ",@node@("device")
+ k dejrnbeg m dejrnbeg=beg s dejrnbeg=("1,"_time_","_@node@("device"))
+ d RedirDejrn(.dejrnbeg,.dejrnbegr)
+ q 1
+ ;return:
+ ; 0 (no change), -1 (error), 1 (changed)
+SetDejrnBegJrn() ;
+ n i,time,node,beg,jrnf,addr
+ s time="" f  s time=$o(^SYS("RESTORE","JOURNAL",time),-1) q:time=""  q:$g(^SYS("RESTORE","JOURNAL",time,"Jrnlog"))]""
+ i time="" d errout("No cluster journal restore has been done on this system") q 0
+ s node=$name(^SYS("RESTORE","JOURNAL",time))
+ w !!,"You have chosen to start journal restore at the end of last journal restore:"
+ i $d(@node@("RangeEnd"))<10 d errout("Last journal restore didn't end at a journal marker") q 0
+ m beg=@node@("RangeEnd") s jrnf="" f  s jrnf=$o(beg(jrnf)) q:jrnf=""  s addr=beg(jrnf) w !,$j(addr,12),",",jrnf i '$$IsInJrnlog(.jrnf) d errout((jrnf_" is not found in journal log "_jrnlog)) k beg q
+ i '$d(beg) q -1
+ k dejrnbeg m dejrnbeg=beg s dejrnbeg=("4,"_time)
+ d RedirDejrn(.dejrnbeg,.dejrnbegr)
+ q 1
+ ;return:
+ ; 0 (no change), -1 (error), 1 (changed)
+SetDejrnBegOth() ;
+ n jrnf,addr
+ w !!,"To start restore at a journal marker location (in original form)"
+ r !,"journal file (^ or <ENTER> if no change): ",jrnf i (jrnf="")!(jrnf="^") w !!,"[no change]" q 0
+ i '$$IsInJrnlog(.jrnf) d errout((jrnf_" is not found in journal log "_jrnlog)) q -1
+ r !,"offset: ",addr i addr="" w !!,"[1st marker: not implemented]" q 0
+ ;should verify address here and in SetDejrnBegBck??
+ k dejrnbeg,dejrnendr s dejrnbeg=2,dejrnbeg(jrnf)=addr 
+ d RedirDejrn(.dejrnbeg,.dejrnbegr)
+ q 1
+ ;Specify where to stop journal restore
+ShowMenuSetupDejrnEnd() ;
+ n okopt
+ s okopt="123"  ; these are always valid options
+ w !!,"Cluster Journal Restore - Setup - Where to Stop Restore"
+ w ! w:+$g(dejrnend)=0 "*" w ?2,"1. At the end of a cluster session"
+ i +$g(dejrnend)=0 w "<",$p(dejrnend,",",2),">"
+ w ! w:+$g(dejrnend)=1 "*" w ?2,"2. " 
+ i jrnlogdef=jrnlog,$zu(78,22) w "At current journal location"
+ e  w "At the end of "_jrnlog
+ w ! w:+$g(dejrnend)=2 "*" w ?2,"3. At a specific journal marker"
+ i +$g(dejrnend)=2 w ":" d ShowJrnMarkLoc(.dejrnend)
+ if $O(jrnmarkinfo("index",-1,""))'="" d  s okopt=okopt_4
+ . w ! w:+$g(dejrnend)=5 "*" w ?2,"4. At a Cache' backup"
+ . i +$g(dejrnend)=5 d  i 1
+ . . n text,type,date,time 
+ . . s text=$P(dejrnend,",",2),type=$P(text,";",3),date=$P(text,";"),time=$P(text,";",2)
+ . . w ": <",type," backup at ",time," on ",date,">"
+ q okopt
+SetDejrnEndClu() ;
+ n i,cst,n,m,key
+ i '$d(jrninfo),$$ImportJrninfo()
+ s cst="",i=0 f  s cst=$o(jrninfo(0,cst)) q:cst=""  s cst($i(i))=$zdt($zdth(cst,-2),8) 
+ i 'i w !!,*7,"[No cluster session found. Is journal log or redirection given correctly?]" q -1
+ s n=i ;# of cluster sessions
+ s m=1,cst=$p(dejrnbeg,",") i cst f  q:cst']cst(m)  q:m'<n  s m=m+1
+ f  d   r !!,"=> ",key q:key=""  q:"Qq"[key  s key=key\1 i (m-1)<key,key<(n+1) q
+ . w !!,"To stop restore at the end of cluster session"
+ . f i=m:1:n w !,i,". ",cst(i)
+ i key=""!("Qq"[key) q 0
+ k dejrnend,dejrnendr s dejrnend=("0,"_cst(key\1))
+ q 1
+SetDejrnEndCur(finalflag) ;
+ ; finalflag = 1 if we're called from Convert when the user
+ ; is done making selections or 0 if we're called from the
+ ; main menu (option 2) to set the end of the restore at the
+ ; current end of the journal. We don't put a marker into the
+ ; journal file until finalflag = 1.
+ if 'finalflag q:$G(dejrnend)=("1,"_""_","_"") 0 k dejrnend,dejrnendr s dejrnend=("1,"_""_","_"") q 1
+ n rc,jrnf,addr
+ s rc=$$CLUSET^JRNMARK(-2,$zdt($g(dejrntim,$h),8))
+ i rc'>0 d errout(("Error marking current journal location - "_$p(rc,",",2,$l(rc)))) q rc
+ s addr=+rc,jrnf=$p(rc,",",2)
+ w !!,"Setting journal marker at offset ",addr," in "
+ w !,?5,jrnf
+ w !,"as the end point for this restore."
+ w !
+ k dejrnend,dejrnendr s dejrnend=("1,"_jrnf_","_addr),dejrnend(jrnf)=addr
+ q 1
+SetDejrnEndLog() ;
+ k dejrnend,dejrnendr s dejrnend="3,30000101"
+ q 1
+SetDejrnEndBck() ;
+ n index,line,jrnf,addr,text
+ ;End at the start of a backup using the information in the journal
+ ;marker log to select the journal marker for the backup to restore up to
+ if $g(jrnmarklog)="" d errout("There is no cluster journal marker log to locate the backup information") q 0
+ if '$D(jrnmarkinfo("index",-1)) d errout("The cluster journal marker log does not contain any backup information") q 0
+ s index=$$getrestore("end")
+ if index=0 q 0
+ s line=jrnmarkinfo(index)
+ s addr=$P(line,"^",2),jrnf=$P(line,"^",3),text=$P(line,"^",5)
+ i '$$IsInJrnlog(.jrnf) d errout((jrnf_" is not found in journal log "_jrnlog)) q -1
+ k dejrnend,dejrnendr 
+ s dejrnend=("5,"_text)
+ s dejrnend(jrnf)=addr
+ d RedirDejrn(.dejrnend,.dejrnendr)
+ q 1
+SetDejrnEndOth() ;
+ n jrnf,addr
+ w !!,"To stop restore at a journal marker location (in original form)"
+ r !,"journal file (^ or <ENTER> if no change): ",jrnf i (jrnf="")!(jrnf="^") w !!,"[no change]" q 0
+ i '$$IsInJrnlog(.jrnf) d errout((jrnf_" is not found in journal log "_jrnlog)) q -1
+ r !,"offset: ",addr i addr="" w !!,"[last marker: not implemented]" q 0
+ ;should verify address here and in SetDejrnEndBck??
+ k dejrnend,dejrnendr s dejrnend=2,dejrnend(jrnf)=addr 
+ d RedirDejrn(.dejrnend,.dejrnendr)
+ q 1
+curloc(jrnf,addr,cst,seq) ;
+ n dev
+ s jrnf=$zu(78,3),dev=$zu(78,5,jrnf,0)
+ i dev<0 q "-1,unable to open current journal file "_jrnf
+ i $zu(78,6,dev)
+ s addr=$zu(78,18,$zu(78,18,0))
+ s cst=$zdt($ZU(78,30,1),8),seq=$zu(78,41,0)
+ i $zu(78,7,dev)
+ q 0
+getrestore(optext)	;
+	; called from SetDejrnBegBck()/SetDejrnEndBck() to display a list 
+	; of choices for which backup to start or end the restore at and
+	; get an answer from the user.
+	n i,index,list,x,restdate,date,choice,resp,done,type,text,OK,mmyyyy
+	s index=$O(jrnmarkinfo("index",-1,""),-1)
+	if '$L(index) q 0  ;shouldn't happen, we already checked for this  
+	;format of index is "yyyymmdd hh:mm:ss"
+	s restdate=$ZDATE($ZDATEH(+index,8),1)_" "_$P(index," ",2)
+	s text=$P(jrnmarkinfo(jrnmarkinfo("index",-1,index)),"^",5)
+	s type=$P(text,";",3)
+	w !!,"The most recent backup was a ",type," backup run on ",restdate," UTC"
+	i fromrest'=6 s x=$$YN("Is this where you want to "_optext_" the journal restore (^ to backup)","Y")
+	i fromrest=6 s x=$$YN("Is this where you want to "_optext_" the journal restore (^ to Abort)","Y")
+	i x="^" s POP=0,rc=0 d:fromrest=6  q rc
+	. w ! i $$YN("Are you sure you want to Quit the cluster journal restore","N")="Y" s rc=-1 q
+	i x="Y" q jrnmarkinfo("index",-1,index)
+	s resp="L",choice=0,mmyyyy=0
+	f  d  q:choice!(resp="Q")
+	. w !,"Choose the journal files to restore based on"
+	. do ASKSET("(B)ackup date, (L)ist all, (Q)uit ",.resp)
+	. k list
+	. i "BbLlQq"'[$E(resp_"X") d  q  
+	. . w ?40,"Invalid selection - ",resp,". Use Q to quit",!
+	. i "Bb"[$E(resp_"X") d  
+	. . set date="",OK=0,resp=""
+	. . f  d  q:OK  q:resp="Q"
+	. . . D ASKSET("Date (mm/dd/yyyy or mm/yyyy) the backup was performed (Q to Quit) ",.date)
+	. . . i date'="","qQ"[date s resp="Q" q
+	. . . i date'?1.2N1"/".1(1.2N1"/")4N w !,"...invalid date, year must be 4 digits - ",date s date="" q
+	. . . i date?1.2N1"/"4N d
+	. . . . s x=$f(date,"/")-1
+	. . . . s $e(date,x,x)="/01/",mmyyyy=1  ;add in "day" for $ZDATEH()
+	. . . i $p(date,"/",3)<1900 w !,"...date out of range year must be 4 digits and greater than 1900 - ",date s date="" q
+	. . . i date?1.2N1"/"1.2N1"/"4N d
+	. . . . s OK=$ZDATEH(date,1,,,,,,,-1)
+	. . . . i OK=-1 w !,"...invalid date - ",date s date="",OK=0 q
+	. . . . i mmyyyy s x=$E($ZDATE($ZDATEH(date,1),8),1,6)  ;convert to yyyymm
+	. . . . i 'mmyyyy s x=$ZDATE($ZDATEH(date,1),8)   ;convert to yyyymmdd
+	. . . . s done=0,OK=1
+	. . . . s index=x_" "  ;add the trailing space so its a string not a number
+	. . . . f  s index=$O(jrnmarkinfo("index",-1,index)) q:(index="")!done  d
+	. . . . . i $e(index,1,$l(x))'=x s done=1 q
+	. . . . . s list("xref",$I(list))=index
+	. . . . . s list(index)=jrnmarkinfo("index",-1,index)
+	. . i resp="Q" q
+	. i "Ll"[$E(resp_"X") do
+	. . s index=""
+	. . f  s index=$O(jrnmarkinfo("index",-1,index)) q:index=""  d
+	. . . s list("xref",$I(list))=index
+	. . . s list(index)=jrnmarkinfo("index",-1,index)
+	. i "Qq^"[$E(resp_"X") s choice=0,resp="Q" quit
+	. i '$G(list) d  quit  ;repeat choice selection
+	. .  w !,"No backups were found that match your criteria - Try again"
+	. s choice=$$choosebackup(optext,.list)
+	i 'choice q 0
+	q jrnmarkinfo("index",-1,choice)
+choosebackup(optext,list)
+	; takes a list of possibilities (could be only one) which match
+	; what the user asked for and asks them to pick one. Returns 0
+	; if they don't pick any or the index into list (yyyymmmdd subscript
+	; into ^jrnmarkinfo("index",-1,...)) of the one they want.
+	; 
+	n index,backdate,x,more,choice,type,text
+	if list=1 d  q:x="Y" index  q 0
+	. s index=list("xref",1)
+	. s backdate=$ZDATE($ZDATEH(+index,8),1)_" "_$P(index," ",2)
+	. s text=$P(jrnmarkinfo(jrnmarkinfo("index",-1,index)),"^",5)
+	. s type=$P(text,";",3)
+	. w !,"There is one backup matching your criteria: "
+	. w !,"  ",type," backup made on ",backdate," UTC"
+	. w !
+	. s x=$$YN("Is this where you want to "_optext_" the journal restore","Y")
+	;
+listdisplay
+	w !,"There are ",list," backups listed"
+	w !,"Choice",?10,"Date of backup (new->old)",?35,"Backup type"
+	s more=1
+	f i=1:1:list d  q:'more
+	. s index=list("xref",list-i+1)  ;display choices in reverse order
+	. s backdate=$ZDATE($ZDATEH(+index,8),1)_" "_$P(index," ",2)
+	. s text=$P(jrnmarkinfo(jrnmarkinfo("index",-1,index)),"^",5)
+	. s type=$P(text,";",3)
+	. w !,$J(i,4)," ",?10,backdate," UTC ",?35,type
+	. if '(i#20) r !,"...more (n to stop)",x if "Nn"[$E(x_"X") s more=0
+	s choice=1
+	w !
+	do ASKSET("Enter choice: (0 for none) ",.choice)
+	s choice=+choice
+	if (choice<0)!(choice>i) w !,"Invalid selection - try again" g listdisplay
+	q:'choice 0
+	quit list("xref",list-choice+1)
+ ;input:
+ ; jrnlog/r, dejrnbeg/r, dejrnend/r
+ ;return:
+ ;  1, successful conversion, continue to cluster restore
+ ;  0, fail to convert, retry setup of cluster restore
+ ; -1, quit cluster restore
+Convert() ;
+ n beg,end,log,rc,err
+ i dejrnend=("1,"_""_","_""),$$SetDejrnEndCur(1)<0 q 0
+ i $d(jrnlogr) m log=jrnlogr s log=$g(jrnlog)
+ e  m log=jrnlog
+ i +$g(dejrnbeg)=+("0,"_"") s beg=$p(dejrnbeg,",",2)
+ e  i $g(dejrnbeg)="3,10000101" s beg=$p(dejrnbeg,",",2)
+ e  s rc=$$ConvertDejrn(.dejrnbeg,.beg) i rc<0 q 0
+ i +$g(dejrnend)=+("0,"_"") s end=$p(dejrnend,",",2)
+ e  i $g(dejrnend)="3,30000101" s end=$p(dejrnend,",",2)
+ e  s rc=$$ConvertDejrn(.dejrnend,.end) i rc<0 q 0
+ s rc=$$convert(.beg,.end,.log,.err) i rc<0 d errout($p(rc,",",2,$l(rc))) q 0
+ i $g(err)]"" d errout(err) i $$YN("Continue despite the warning")="N" q 0
+ ;print out the first and last journal files and seq #s to restore
+ q 1
+ConvertDejrn(loc,cur) ;
+ i '$g(jrnredir) m cur=loc zk cur
+ e  d RedirDejrn(.loc,.cur)
+ q $$ConvertJrnoff(.cur)
+ ;purpose:
+ ; convert a journal location to a sequence point
+ ; NB: currently applicable to one journal location only
+ConvertJrnoff(loc) ;
+ n jrnf,addr,dev,cst,seq
+ ;i $p($g(loc),",")]"" q 0  ;already use sequence point
+ s jrnf=$o(loc("")) i jrnf'=$o(loc(""),-1) q 0  ;more than one locations given
+ s dev=$zu(78,5,jrnf,0) i dev<0 d errout(("Invalid journal file "_jrnf)) q -1
+ i $zu(78,6,dev)
+ s cst=$ZU(78,30,0) i 'cst d errout((jrnf_" doesn't belong to a clustered system")),jrnclose(dev) q -1
+ s addr=loc(jrnf),seq=$zu(78,11,addr) 
+ i $zu(78,7,dev)
+ i seq'>0 d errout(("Invalid sequence # at offset "_addr_" of "_jrnf)) q -1
+ s $p(loc,",",1,2)=$zdt($zdth(cst,-2),8)_","_seq
+ q 0
+ ;purpose: 
+ ; Convert restore begin/end & jrnlog to values restore^JRNCLUREST understands
+ ;input:
+ ; beg - where to begin (cluster sequence point or journal marker location)
+ ;   beg=cluster sequence point, OR
+ ;   beg(jrnf)=addr (journal marker location)
+ ; end - where to end (similar to beg), inclusive (i.e., end is restored)
+ ;   end=cluster sequence point or "(END OF CLUSTER JOURNAL LOG)", OR
+ ;   end(jrnf)=addr (journal marker location)
+ ; log - an array of csn,jrnf, imported from cluster journal log line by line
+ ;output:
+ ; (minclumstart,)minseq - first cluster sequence point to restore
+ ; (maxclumstart,)maxseq - last cluster sequence point to restore
+ ; numclu - # of cluster members - 1
+ ; clumember(csn,n), n=0,1,...
+ ; clumember(csn,"files",00..0n:YYYYMMDD.NNNJ)
+ ;return:
+ ; 0 (success), <0 (error)
+convert(beg,end,log,err) ;
+ n rc
+ s $zt="convertE",rc=0
+ k clumember ;we'll reinitialize this
+ i $g(beg) s rc=$$convertbegseq(.beg,.log) q:rc<0 rc i 1
+ e  s rc=$$convertbegjrn(.beg,.log) q:rc<0 rc s err=$p(rc,",",2)
+ i $g(end) s rc=$$convertendseq(.end) q:rc<0 rc i 1
+ e  s rc=$$convertendjrn(.end) q:rc<0 rc
+ s rc=$$convertjrninfo(.beg,.end)
+ s minseq=$g(minseq),maxseq=$g(maxseq)
+ i rc<0 q rc
+ q $$CheckJournalIntegrity()
+CheckJournalIntegrity() ;
+ n rc,csn,index,dev,jrnf,prevjrnf,jrnend,prevend
+ s $zt="convertE"
+ s csn="" f  s csn=$o(clumember(csn)) q:csn=""  d
+ . s prevjrnf=""
+ . s index="" f  s index=$o(clumember(csn,index),1,jrnf) q:index=""  d:index=+index
+ . . s dev=$zu(78,5,jrnf,0) 
+ . . i dev<0 s rc="-1,"_("Invalid journal file "_jrnf) ztrap "OPEN" 
+ . . i $g(prevjrnf)]"" d
+ . . . s prevend=$p($zu(78,22,jrnf,99),",",11+1)
+ . . . i prevend,prevend>jrnend s rc="-1,"_("Corruption in "_prevjrnf_": The last reachable journal record ends @ offset "_jrnend_", different from the journal end offset "_prevend) ztrap "JEND"
+ . . i $zu(78,6,dev)
+ . . s jrnend=$zu(78,18,0),prevjrnf=jrnf
+ . . d $zu(78,7,dev) s dev=-1
+ q +$g(rc)
+ ;purpose:
+ ; create a clumember(csn,"files") entry for every journal file to restore
+ ;input:
+ ; beg(jrnf)=addr, an array of journal locations to begin restore at
+ ; end(jrnf)=addr, an array of journal locations to end restore at
+ ; clumember(csn,i) - a list of journal files to restore per csn
+ ;input/output:
+ ; clumember(csn)=firstfile^lastfile(^prefix)
+ ;  NB: prefix (or even the whole entry) is not used by restore^JRNCLUREST
+ ;output:
+ ; clumember(csn,"files") - journal file info per file per csn
+ ;return:
+ ; 0 (success), <0 (error)
+convertjrninfo(beg,end) ;
+ n i,n,csn,jrnf,addr,dev,cst,seq,shortnam
+ s $zt="convertE"
+ s csn="" f  s csn=$o(clumember(csn)) q:csn=""  d
+ . s n=clumember(csn) i n="" k clumember(csn) q
+ . s clumember(csn)=$case($ZBITGET($ZVERSION(0),46),0:$case($f($p(clumember(csn,0),"^"),";"),0:$e($p(clumember(csn,0),"^"),*-8-$l($p($p(clumember(csn,0),"^"),".",$l($p(clumember(csn,0),"^"),"."))),*),:$e($p(clumember(csn,0),"^"),*-8-$l($p($p(clumember(csn,0),"^"),".",$l($p(clumember(csn,0),"^"),"."))),$f($p(clumember(csn,0),"^"),";")-2)),:$p(clumember(csn,0),"^"))_"^"_$case($ZBITGET($ZVERSION(0),46),0:$case($f($p(clumember(csn,n),"^"),";"),0:$e($p(clumember(csn,n),"^"),*-8-$l($p($p(clumember(csn,n),"^"),".",$l($p(clumember(csn,n),"^"),"."))),*),:$e($p(clumember(csn,n),"^"),*-8-$l($p($p(clumember(csn,n),"^"),".",$l($p(clumember(csn,n),"^"),"."))),$f($p(clumember(csn,n),"^"),";")-2)),:$p(clumember(csn,n),"^"))
+ . s i="" f  s i=$o(clumember(csn,i)) q:i=""  d
+ . . s jrnf=clumember(csn,i),dev=$zu(78,5,jrnf,0) 
+ . . i dev<0 s rc="-1,"_("Invalid journal file "_jrnf) ztrap "CNVT" 
+ . . i $zu(78,6,dev)
+ . . s shortnam=$case($ZBITGET($ZVERSION(0),46),0:$case($f(jrnf,";"),0:$e(jrnf,*-8-$l($p(jrnf,".",$l(jrnf,"."))),*),:$e(jrnf,*-8-$l($p(jrnf,".",$l(jrnf,"."))),$f(jrnf,";")-2)),:jrnf)_"J"
+ . . s shortnam=$e(10000000000+(i),2,11)_":"_shortnam,jrnf(shortnam)=jrnf
+ . . i $d(beg(jrnf)) s $p(jrnf(shortnam),"^",3)=beg(jrnf)
+ . . e  s $p(jrnf(shortnam),"^",3)=$zu(78,17,0)
+ . . i $d(end(jrnf)) s $p(jrnf(shortnam),"^",6)=end(jrnf)
+ . . e  s $p(jrnf(shortnam),"^",6)=$zu(78,18,$zu(78,18,0))
+ . . s $p(jrnf(shortnam),"^",9)=$ZU(78,30,0)
+ . . i $zu(78,7,dev) k dev
+ . ;don't want "files" entries to interfere $o() on i
+ . zk jrnf m clumember(csn,"files")=jrnf k jrnf
+ s numclu=$o(clumember(""),-1)
+ q 0
+ ;purpose:
+ ; Collect journal files for each cluster member in the journal log
+ ; that do not entirely predate the sequence point beg
+ ;assumption:
+ ; journal file entries in jrnlog are chronically ordered per csn
+ ;input:
+ ; beg - cluster session ID (YYYYMMDD HH:MM:SS),sequence #
+ ; log - an array of csn,jrnf (from journal log)
+ ;output:
+ ; (minclumstart,)minseq - sequence point corresponding to beg
+ ;   NB: restore^JRNCLUREST ignores minclumstart, assuming 1st jrnf is the one
+ ; clumember(csn),clumember(csn,i) - a list of journal files to restore
+ ;return:
+ ; 0 (success), <0 (error)
+convertbegseq(beg,log) ;
+ n i,csn,jrnf,addr,dev,cst,seq
+ s $zt="convertE"
+ s minclumstart=$$cvtclustime^SHDWX($p(beg,",")),minseq=$p(beg,",",2) 
+ s i="" f  s i=$o(log(i)) q:i=""  d  d jrnclose(.dev)
+ . s csn=+log(i),jrnf=$p(log(i),",",2)
+ . i +$g(clumember(csn)) s clumember(csn,$i(clumember(csn))-1)=jrnf q
+ . s dev=$zu(78,5,jrnf,0) q:dev<0  i $zu(78,6,dev)
+ . s cst=$ZU(78,30,0) i cst<minclumstart q
+ . i cst>minclumstart s addr=$zu(78,17,0) s:addr>0 clumember(csn,0)=jrnf,clumember(csn)=1,beg(jrnf)=addr q
+ . s addr=$zu(78,18,0) f  s addr=$zu(78,18,addr) q:addr'>0  s seq=$zu(78,11,addr) q:seq>0
+ . q:addr'>0  q:seq<minseq  ;jrnf predates beg
+ . s addr="" f  s addr=$zu(78,17,addr) q:addr'>0  q:$zu(78,11,addr)'<minseq
+ . s clumember(csn,0)=jrnf,clumember(csn)=1,beg(jrnf)=addr
+ q 0
+ ;purpose:
+ ; Collect journal files for each cluster member in the journal log
+ ; that do not predate the journal files in beg
+ ;caveat: 
+ ; There may be fewer journal markers than # of cluster members in the
+ ; log (some members may not have joined the cluster when the marker
+ ; was set), thus we still need to get a max sequence point of the
+ ; markers -- any node joining after the marker was set must have got a
+ ; bigger seq -- conversely, if the last journal file of a node ends
+ ; with a seq smaller than the max and the node does not have a marker,
+ ; then the node must have died before the marker was set and thus is
+ ; irrelevant to the restore. (We assume journal markers are set properly,
+ ; of course.) 
+ ;input:
+ ; beg(jrnf)=addr, an array of journal locations
+ ; log - an array of csn,jrnf
+ ;output:
+ ; clumember(csn,i) - a list of journal files to restore per csn
+ ;return:
+ ; 0 (success), <0 (error)
+convertbegjrn(beg,log) ;
+ n i,rc,csn,jrnf,addr,dev,cst,seq,min,mincst
+ s $zt="convertE",rc=0
+ s i="" f  s i=$o(log(i)) q:i=""  d
+ . s csn=+log(i),jrnf=$p(log(i),",",2)
+ . i +$g(clumember(csn)) s clumember(csn,$i(clumember(csn))-1)=jrnf q
+ . i '$d(beg(jrnf)) s clumember(csn)="" q  ;jrnf predates beg or missing member
+ . s dev=$zu(78,5,jrnf,0) i dev<0 s rc=("-1,"_("Invalid journal file "_jrnf)) ztrap "CNVT"
+ . i $zu(78,6,dev)
+ . s cst=$ZU(78,30,0),addr=beg(jrnf)
+ . i $zu(78,8,addr)<0 s rc=("-2,"_("Invalid offset "_addr_" of journal file "_jrnf)) ztrap "CNVT"
+ . s seq(jrnf)=$zu(78,11,addr) ;what if seq<0?? should we enforce jrnmark?
+ . i $zu(78,7,dev)
+ . s clumember(csn,0)=jrnf,clumember(csn)=1
+ ;see if the journal marker missed any cluster member (clumember(csn)="")
+ s csn="" f  s csn=$o(clumember(csn)) q:csn=""  q:'clumember(csn)
+ i csn="" q rc ;none missing and we are done
+ ;find the greatest sequence # of all given journal markers
+ s (min,mincst,csn)="" f  s csn=$o(clumember(csn)) q:csn=""  d:+clumember(csn)
+ . s jrnf=clumember(csn,0),addr=beg(jrnf),seq=seq(jrnf)
+ . s cst=$p(clumember(csn,"files",$e(10000000000+(0),2,11)_":"_$case($ZBITGET($ZVERSION(0),46),0:$case($f(jrnf,";"),0:$e(jrnf,*-8-$l($p(jrnf,".",$l(jrnf,"."))),*),:$e(jrnf,*-8-$l($p(jrnf,".",$l(jrnf,"."))),$f(jrnf,";")-2)),:jrnf)_"J"),"^",9) 
+ . i mincst="" s mincst=cst
+ . i cst'=mincst s rc="0,ignore cluster members without the journal marker because journal markers are in different cluster sessions" ztrap "CNVT"
+ . i seq'>0 s rc=("0,ignore cluster members without the journal marker because the record at offset "_addr_" of "_jrnf_" doesn't have a valid cluster journal sequence") ztrap "CNVT"
+ . i seq>min s min=seq
+ ;see if a missing cluster member has journal files with seq > min
+ s i="" f  s i=$o(log(i)) q:i=""  k:clumember(csn) log(i)
+ s rc=$$convertbegseq(mincst_","_seq,.log) k minclumstart,minseq
+ q rc
+ ;nothing more to do if we are to restore to the end of the log
+convertendlog(log) ;
+ q 0
+ ;purpose:
+ ; delist journal files that are past the ending sequence point
+ ;input:
+ ; end - cluster session ID (YYYYMMDD HH:MM:SS),sequence #
+ ;  NB: if sequence # is "" (not 0!), then defaults to end of session
+ ;input/output:
+ ; clumember(csn),clumember(csn,i) - a list of journal files to restore
+ ;output:
+ ; (maxclumstart,)maxseq - sequence point corresponding to end
+ ;  NB: maxclumstart is implied, rather than used explicitly, by restore
+ ;  as the last cluster session among the list of journal files.
+ ;return:
+ ; 0 (success), <0 (error)
+ ;question: is it an error if we cannot open a file?
+convertendseq(end) ;
+ n i,rc,csn,jrnf,addr,dev,cst,seq
+ s $zt="convertE",rc=0
+ s maxclumstart=$$cvtclustime^SHDWX($p(end,",")),maxseq=$p(end,",",2) 
+ i maxseq="" s maxseq=2**64 ;end of cluster session
+ s csn="" f  s csn=$o(clumember(csn)) q:csn=""  d  i $d(clumember(csn))=1 s clumember(csn)=""
+ . s i="" f  s i=$o(clumember(csn,i),-1) q:i=""  d  d jrnclose(.dev) q:i=""
+ . . s jrnf=clumember(csn,i),dev=$zu(78,5,jrnf,0) q:dev<0  i $zu(78,6,dev)
+ . . s cst=$ZU(78,30,0) i cst>maxclumstart k clumember(csn,i) q
+ . . i cst<maxclumstart s clumember(csn)=i,i="" q
+ . . s addr=0 f  s addr=$zu(78,17,addr) q:addr'>0  s seq=$zu(78,11,addr) q:seq>0
+ . . i addr>0,seq'>maxseq s clumember(csn)=i,i="" q
+ . . k clumember(csn,i)
+ q rc
+ ;restore^JRNCLUREST doesn't really look at the ending offsets, thus we have to
+ ;convert them to an ending sequence point (unless restore is changed).
+convertendjrn(end) ;
+ n i,rc,csn,jrnf,addr,dev,cst,seq
+ s $zt="convertE",(rc,maxseq,maxclumstart)=0
+ ;delist journal files that are past the end
+ s csn="" f  s csn=$o(clumember(csn)) q:csn=""  d
+ . s n="" f  s n=$o(clumember(csn,n),-1) q:n=""  d  q:n=""
+ . . s jrnf=clumember(csn,n)
+ . . i $d(end(jrnf)) s clumember(csn)=n,n="" 
+ . . e  k clumember(csn,n)
+ ;calculate the lowest upper bound sequence point
+ s jrnf="" f  s jrnf=$o(end(jrnf)) q:jrnf=""  d  d jrnclose(.dev)
+ . s dev=$zu(78,5,jrnf,0) i dev<0 s rc="-1,unable to open "_jrnf ztrap "CNVT"
+ . i $zu(78,6,dev)
+ . s cst=$ZU(78,30,0) i cst<maxclumstart q
+ . f  s seq=$zu(78,11,addr) q:seq>0  s addr=$zu(78,18,addr) q:addr'>0 
+ . i cst>maxclumstart s maxclumstart=cst,maxseq=seq
+ . i seq>maxseq s seq=maxseq
+ ;filter remaining journal files using the sequence point
+ q $$convertendseq($zdt($zdth(maxclumstart,-2),8)_","_maxseq)
+convertE ;
+ s $zt=""
+ i $ze'["<Z" d $zu(9,"","ERROR: "_$ze,(1>0),1),BACK^%ETN s rc="-99,"_$ze
+ d jrnclose(.dev)
+ q $g(rc)
+jrnclose(dev) ;
+ i $g(dev)]"",dev'<0,$zu(78,7,dev)
+ k dev q
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R
+FIXDIR(dir) ;procedure, dir is passed by reference
+ Q:dir=""
+ i ($zversion(1)=1) d
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ i '($zversion(1)=1) Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))
+ i '($zversion(1)=1) s dir=dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+ Q
+fixdir(dir) ;function
+ Q:dir="" ""
+ i ($zversion(1)=1) d  q dir
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")) dir
+ Q dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+basename(f) ;similar to basename on UNIX
+ Q $P(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),1,$L(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))-1)_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+appdir(d1,d2) ;use $zu(12,d2) to append d2 to canonic dir
+ i ($zversion(1)=1) S $E(d1,$L(d1))="."_d2_"]"
+ i '($zversion(1)=1) S d1=d1_d2
+ Q d1
+VALIDIR(dir) ;validate directory dir and create it if dir doesn't exist
+ new flag
+ s flag=1
+ g vdir2
+validir(dir,flag) ;validate directory dir and optionally create it if it
+vdir2 ; VALIDIR(dir) comes here with flag set to 1
+ quit:$$ChkDirOrSpecEXISTS(dir)'="" 1   ; dir is valid and exists
+ quit:$$ChkDirVALID(dir)="" 0    ; dir is not valid
+ i flag'=1 q 0  ; flag says don't create, return failure
+ new x
+ set x=$$mkdir(dir)  ; returns 0 for success, 1 for failure
+ q:x=1 0  ; failed to create
+ quit:$$ChkDirOrSpecEXISTS(dir)="" 0   ; it doesn't we failed
+ q 1  ; success
+mkdir(dir) ;create a new directory
+ i ($zversion(1)=1) q:$$ChkDirVALID(dir)="" 1  ; dir is invalid, return failure
+ q '##class(%Library.File).CreateDirectoryChain(dir)
+jrnshort(jf,short) ;get/set short form of a journal file name FIXME HYY1999
+         N (jf,short)
+         S len=$L($P(jf,";"))
+         Q:$G(short)="" $E(jf,len-11,len) ;"GET" form
+         S $E(jf,len-11,len)=short ;"SET" form
+         Q jf
+GJrnPrefix(jf) ;extract prefix from the journal file name jf
+         N (jf)
+         S fname=$P(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),$L(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")))       
+         Q $e(fname,1,$l($p(fname,"."))-8)
+GetJrnFileName(path) { 
+	i $f(path,"/") q $p(path,"/",$l(path,"/")) ;presumably a Unix path
+	if $f(path,"\") q $p(path,"\",$l(path,"\")) ;presumably a Windows path
+	s vmsfile=$p(path,"]",2) i vmsfile="" q path ;a name only, not a path
+	q $p(vmsfile,";") ;return name from a VMS path without trailing ";"
+}
+dirinvalidmsg(dir1,dir2) 
+ n valid1,valid2,cnt,msg
+ s valid1=$$VALIDIR(dir1),valid2=$$VALIDIR(dir2)
+ s cnt=valid1+valid2 ; cnt = 0 if both invalid, 1 if one is valid
+ s msg="The following journaling "
+ s:cnt msg=msg_"directory is" 
+ s:'cnt msg=msg_"directories are"
+ s msg=msg_" not valid"_$C(13,10)
+ s:'valid1 msg=msg_"     "_dir1_$C(13,10)
+ s:'valid2 msg=msg_"     "_dir2_$C(13,10)
+ q msg
+ChkDirVALID(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,1)
+ChkDirEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkDirOrSpecEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,3)
+ChkDir(R) N N S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkBad S $ZT="" W !,"<"_$P($P($ZE,"<",2),">")_"> error -- invalid directory"
+ Q ""
+ASKSET(prompt,val,backup,help,pattern) ;procedure
+ N x,done,def,enahelp,helpavail,backupavail
+ s done=0
+ s def=$G(val)
+ s backup=$G(backup,0) 
+ s enabackup=$S(backup=-1:0,1:1)
+ s backupavail=$S(backup=1:1,1:0)
+ s help=$G(help)
+ s enahelp=$S(help="*":0,1:1) ;there might not be any help though
+ s helpavail=$s(enahelp&($L(help)!($D(help)>1)):1,1:0)
+ if 'enabackup n POP
+ s POP=0
+ f  d  q:done!POP
+ . W !,$G(prompt)
+ . w:($X+$L(def))>65 !,?5
+ . w:$L(def) " <",def,">"
+ . if helpavail!backupavail do
+ . . w " [" w:helpavail "?" w:backupavail "^" w "]"
+ . w:(($X+$L(def))>75) !,?5
+ . W " => " 
+ . R x,!
+ . if x="^" d  q
+ . . if 'enabackup s done=1 q
+ . . if backupavail s POP=1 q
+ . . w "...backup not available here"
+ . if enabackup,x="""^""" s x="^",done=1 q
+ . ;
+ . if x="?" d  q
+ . . if 'enahelp s done=1 q
+ . . if 'helpavail w "...help not available here" q
+ . . if $D(help)=1 w !?5,help q
+ . . s x="" f  s x=$O(help(x)) q:x=""  w !,?5,help(x)
+ . . w !
+ . if enahelp,x="""?""" s x="?",done=1 q
+ . i x]"",$g(pattern)]"",x'?@pattern w !?5,$s(helpavail:help,1:"[bad format]") q
+ . s:'$L(x) x=val 
+ . s done=1
+ s:'POP val=x
+ q

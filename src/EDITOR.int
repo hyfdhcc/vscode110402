@@ -1,0 +1,72 @@
+ROUTINE EDITOR [Type=INT]
+EDITOR ;(PTR,PK,ADF) ; LFT702 03/34/99
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+A s %A=$T(%)
+ i ($zversion(1)=2) S %A=$T(%NT)
+ s ^%=$P(%A," ;;",2,256)
+ F %I=1:1 S %A=$T(%+%I),%T=$P(%A," "),%B=$P(%A," ;;",2,256) Q:%T="END"  I $L(%T) S ^%(%T)=%B
+ G ^EDITOR1
+ ; This and the other EDIT* routines set up the ^% and ^%RS globals by
+ ; copying lines into them from within these routines themselves.  A
+ ; line here with tag "x" is copied into ^%(x), for instance.  Untagged
+ ; lines aren't copied, and therefore are comments.
+%NT ;;S %NX=1 X ^%(0) X:'$D(^%IS($I,1)) ^%("CON") X:'$D(XY)&'$D(^%IS($I,1)) ^%("LAT") S XY=$G(XY) F  X ^%(%NX) I '$D(%NX) U 0:(:3) Q
+% ;;S %NX=1 X ^%(0) X:'$D(^%IS($I,1)) ^%("LAT") S XY=$G(XY) F  X ^%(%NX) I '$D(%NX) U 0:0 Q
+0 ;;S %SL=30,%RM=80 K:$G(XY)]"" XY I $D(^%IS($I,1)) S %A=$P(^(1),"^",3) I %A]"",$D(^%IS(0,"SUB",%A)) S %SL=$P(^(%A),"^",3)-1,%RM=+^(%A) U $I:(%RM:0) I '$D(XY) S XY=$P(^(%A),"^",5),DX=0,DY=%SL-1 X XY
+1 ;;R !,"Edit: ",%X S %NX=$S(%X="":30,%X[$C(9):640,%X?1A.E&(%X[" "):500,%X?1"^".E:"GLO",%X?1".".E:600,%X="?":930,1:10)
+10 ;;S %T=%X,%NX=999 X ^%("TAG") Q:%L=""  S %NX=1 W:%X'=%T " "_%T S %TG=%T X $S(XY]"":^("EDXY"),1:^("ED")) S %NX=19
+ED ;;F  R " R ",%R Q:%R=""  X ^($S(%R="END":16,%R="end":16,%L[%R:14,%R["...":20,1:17))
+14 ;;R " W ",%W S %L=$P(%L,%R)_%W_$P(%L,%R,2,$L(%L,%R))
+15 ;;S %L=%LS W !,%L,!
+16 ;;R " W ",%W S %L=%L_%W
+17 ;;W " ???"
+18 ;;ZR @%TG ZI:%L]"" %L S %A=$P($P(%L,"(")," "),%NX=1 S:%A]"" %TG=%A I XY="" W ! I %L]"" P @%TG
+19 ;;X ^("LN1") S %NX=18 I %POP W !?5,"[Tag syntax]" X $S(XY]"":^("EDXY"),1:^("ED")) S %NX=19
+20 ;;S %A=$P(%R,"..."),%B=$P(%R,"...",2,999),%J=$F(%L,%A),%C=%J-1-$L(%A),%D=$S(%B="":$L(%L)+1,1:$F(%L,%B,%J)) W:%C<0!(%D<1) " ???" Q:%C<0!(%D<1)  R " W ",%W S %L=$E(%L,1,%C)_%W_$E(%L,%D,*)
+30 ;;S %X="*",%NX=10 ;S %NX=$S($D(%TG):31,1:999)
+40 ;;S %X="+"_(%TG+%X),%NX=10
+400 ;;S %NX=1 R "reak line: ",%X S %T=$S(%X]"":%X,$D(%TG):%TG,1:"") Q:%T=""  X ^("TAG") S %NX=999 I %L]"" S %NX=401 W:%X'=%T " "_%T S %TG=%T
+401 ;;S %NX=1 R " after characters: ",%R I %R'="",%L[%R S %LS=$P(%L,%R,2,999),%LS=$E(" ",%LS'?1" ".E)_%LS,%L=$P(%L,%R)_%R ZR @%TG ZI %L,%LS W !,%L,!,%LS
+500 ;;W ! S %NX=1 X %X
+550 ;;R "oin line: ",%X S %T=$S(%X]"":%X,1:$G(%TG)) Q:%T=""  X ^("TAG") S %NX=999 I %L]"" S %NX=555 W:%T'=%X "  "_%T
+555 ;;S %I=$P(%T,"+"),%J=$P(%T,"+",2),%C=$T(@%I+%J+1),%NX=999 W " and " I %C]"" W $S($E(%C)=" ":%I_"+"_(%J+1),1:$P($P(%C,"(")," ")) S %NX=560
+560 ;;S %B=$T(@%I+%J),%NX=565 I $L(%B)+$L(%C)<510 ZR @(%T_":"_%T_"+1") ZI %B_" "_$P(%C," ",2,999) S %NX=1 W ! P @%T S %TG=%T
+565 ;;W !,"The combined lines are toooooooooooooooooo long (over 510 characters)" S %NX=999
+ ;dot command lead-in:
+ ; .  = (601) end         .I = (620) insert     .C = (650) change every
+ ; .S = (750) search      .R = (900) remove     .F = (800) file
+ ; .M = (MV)  move        .B = (400) break      .J = (550) join
+ ; .E = (690) screen edit .D = (***) display    .FX = (***) file/exit
+ ; .G = (***) buffer get  .P = (***) buffer put
+ ;
+600 ;;S %A=$E(%X,2,*),%Z=$E(%A),%NX=$S(%A="":601,"Ii"[%Z:620,"Cc"[%Z:650,"Ss"[%Z:750,"Rr"[%Z:900,"Ff"[%Z:800,"Mm"[%Z:"MV","Bb"[%Z:400,"Jj"[%Z:550,"Ee"[%Z:690,"Dd"[%Z:"D00","Gg"[%Z:"G00","Pp"[%Z:"P00",1:999)
+601 ;;K %NX,%Y,%S,%A,%B,%L,%R,%W,%C,%D,%F,%Z,%J,%I,%K,%T,%POP,%X,%IED,%GLO,%E,%CTG,%RM,%SL
+620 ;;S %NX=1 R "nsert after: ",%X S %T=$S(%X]"":%X,1:$G(%TG)) Q:%T=""  X ^%("TAG") S %NX=999 I %L]"" W:%X'=%T " ",%T ZR @%T ZI %L S %NX=624,%TG=%T
+624 ;;S %NX=630 R !,"Line: ",%L X:%L="?" ^(625) Q:%L=""  S %NX=624 X ^%("LN1") W:%POP *7,!,?5,"[Tag syntax]" I '%POP ZI %L S %A=$P($P(%L,"(")," "),$P(%TG,"+",2)=$P(%TG,"+",2)+1 I %A]"" S %TG=%A X ^%("EDTAG") S %NX=624
+625 ;;W !,"Enter a line of Cache ObjectScript source code:",!?3,"[tag (if desired)] <SPACE> [Cache ObjectScript commands]" S %NX=624
+630 ;;I $D(%TG) S %NX="EDTAG"
+640 ;;S %NX=1,%L=$P(%X,$C(9))_" "_$P(%X,$C(9),2) X ("ZI %L:"_%TG) S $P(%TG,"+",2)=$P(%TG,"+",2)+1 S:$P(%L," ")]"" %TG=$P($P(%L," "),"(")
+EDTAG ;;S %NX=1 ;I $P(%TG,"+")]"" S %NX=300,%X=";"_$P(%TG,"+") W !,%X F %IEE=0:0 X ^%(%NX) I %NX=1 Q
+650 ;;S %NX=1 R "hange every: ",%R Q:%R=""  R " to: ",%W,! X ^("SELECT") S %D=$L(%W)-$L(%R),%NX=$S(%POP:999,1:655)
+655 ;;S %NX=1 F %A=%A:1:%I S %L=$T(+%A),%F=$F(%L,%R),%X=%F X:%X>0 ^(656) S:$P(%L," ")]"" %B=$P($P(%L,"(")," "),%C=0,%T=%B S %T=$S(%C:%B_"+"_%C,1:%B) W:%X>0 !,%T,$P($P(%L," "),%T,2,99),?6," ",$P(%L," ",2,99) S %C=%C+1
+656 ;;X ^(670) ZR +%A ZI %L
+670 ;;F  S %L=$E(%L,0,%F-$L(%R)-1)_%W_$E(%L,%F,*),%F=$F(%L,%R,%F+%D) Q:%F<1
+UC ;;S %=$zcvt(%,"u")
+690 ;;X:$D(^%qce) ^%("%qce") S %NX=1
+%qce ;;N ejob,file X ^%qce("ejob"),^%qce(1),^%qce(2) K ^mtemp(ejob)
+END ;;

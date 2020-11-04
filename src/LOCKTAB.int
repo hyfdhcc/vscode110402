@@ -1,0 +1,313 @@
+ROUTINE LOCKTAB [Type=INT]
+LOCKTAB ; LOCKTAB Utility  ; JO2010, 2/19/06
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ N PAGEF S PAGEF=1
+ N ViewOnly S ViewOnly=0
+start ;
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q
+ N COMMAND,INDEX
+ N MSYS,FF,SL,BS,RM,SUB,XY  ; from CURRENT^%IS
+ N context,LockTime,FreeSpace,StartOwner,LockData
+ N Ownersx,POP
+ N LockTmp
+ N HDL S HDL=8
+MAIN S $ZT=""
+ D CURRENT^%IS,GATHER,DISPLAY
+ G:PAGEF=0 EXIT
+ F  W !!,"Command=> " DO  I "^Qq"[$E(COMMAND_"?") Q
+ . I INDEX>(SL-HDL) W "<RETURN> for more... "
+ . R COMMAND#1
+ . I "Ss"[COMMAND D DISPLAY Q
+ . I "Qq^"[COMMAND QUIT
+ . I "Rr"[COMMAND D GATHER,DISPLAY Q
+ . I "Hh?"[COMMAND D HELP Q
+ . I $G(ViewOnly) Q
+ . I "Dd1"[COMMAND D DELONE,GATHER Q
+ . I "Jj"[COMMAND D DELJOB,GATHER Q
+ . I "Cc"[COMMAND D DELSYS,GATHER Q
+ ;
+EXIT S $ZT="" U 0:0 kill @LockTmp
+ QUIT
+GATHER  ;
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q
+ S LockTime=$H,context="",StartOwner=0,INDEX=SL
+ s LockTmp="^mtemp($j,""LockTab"")"
+ k @LockTmp
+ do buildtmp(LockTmp)
+ S FreeSpace=##Class(SYS.Lock).GetLockSpaceInfo()
+ s context=""
+ Q
+ALL ; entry point for display lock table without pause.
+ N PAGEF S PAGEF=0
+ N ViewOnly S ViewOnly=0
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q
+ G start
+View ; Entry point for only display lock table.
+ N PAGEF S PAGEF=1
+ N ViewOnly S ViewOnly=1
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q
+ G start
+buildtmp(tmpglo) []
+{
+	Set Rset=##class(%Library.ResultSet).%New("%SYS.LockQuery:Detail")
+	S idx=1
+	Do Rset.Execute("")
+	While Rset.Next() {
+		m @tmpglo@(idx)=Rset.Data
+		s idx=idx+1
+	}
+}
+DISPLAY ; Display contents of holder using necessary translation arrays etc.
+ ;  and being mindful of screen length
+ n BYTAVAIL,HEADER,rc,count,%T,%TIM,LineLeft,prev
+ n NODEHEAD
+ S %T=$p(LockTime,",",2) S %TIM=$ZTIME(%T,4,0,"")
+ S HEADER="LOCK table entries at "_%TIM_"  "_$ZDATE(LockTime,1,,4)
+ S BYTAVAIL=$P(FreeSpace,",",2)_" bytes usable, "_$P(FreeSpace,",",1)_" bytes available."
+ n NodeInfo s NodeInfo=##class(SYS.Lock).GetNodeInfo()
+ S NODEHEAD="Node Name: "_$p(NodeInfo,$C(0),1)
+ I $P(NodeInfo,$C(0),2) D
+ . S NODEHEAD=NODEHEAD_"  Cluster Master: "_$P(NodeInfo,$C(0),4)
+ . I $P(NodeInfo,$C(0),3) S NODEHEAD=NODEHEAD_", You are in the Master Node."
+ W @FF,?(RM-$L(NODEHEAD)/2),NODEHEAD,!
+ W ?(RM-$L(HEADER)/2),HEADER,!,?(RM-$L(BYTAVAIL)/2),BYTAVAIL
+ W !
+ N HDR D HDR(1)
+ S LineLeft=SL-HDL
+ S prev=context
+ If StartOwner=0 {
+	 s context=$O(@LockTmp@(context))
+	 If context=""&(prev="") W !,"**** EMPTY ****" QUIT
+	 k LockData m LockData=@LockTmp@(context) s LockData("LockEntryNum")=context
+ }
+again ;
+ S:PAGEF=0 LineLeft=1000
+ s StartOwner=$$Show(.LockData,.LineLeft,RM,StartOwner,0,1,0)
+ I LineLeft=0,StartOwner=0 s rc=context I $O(@LockTmp@(rc))="" s INDEX=0,context="" Q
+ S INDEX=SL
+ Q:LineLeft=0
+ s context=$O(@LockTmp@(context))
+ i context="" S INDEX=0 Quit
+ k LockData m LockData=@LockTmp@(context) s LockData("LockEntryNum")=context
+ g again
+Show(info,LineLeft,RM,StartOwner,pid,WaiterFlag,updateINDEX)
+ s updateINDEX=$g(updateINDEX,0)
+ N entry,LMode,ref,Owners,Waiters,Flags,LineIN,nline,nOwner,nWaiter,lineOK,PrintWaiter,i
+ S LineIN=LineLeft,lineOK=1,PrintWaiter=0
+ I LineIN=0 S WaiterFlag=0,pid=$g(pid,0)
+ E  S pid=0
+ S StartOwner=$g(StartOwner,1) I StartOwner=0 S StartOwner=1
+ S entry=info("LockEntryNum"),LMode=info("Mode")
+ S ref=info("FullReference"),Owners=$LB(info("Owner"),info("Counts"),$G(info("EscalateInfo"))),Waiters=$s($d(info("WaiterPID")):$LB(info("WaiterPID"),info("WaiterMode"),info("WaiterType")),1:$LB("","",""))
+ S Flags=info("Flags")
+ S nOwner=$L($LIST(Owners,1),","),nWaiter=$S($LIST(Waiters,1)="":0,1:$L($LIST(Waiters,1),","))
+ I LineIN DO  i updateINDEX s INDEX=INDEX+$s(lineOK=0:LineIN+20,1:$L($LIST(Owners,1),",")-StartOwner+nline+$s(nWaiter:1,1:0)-1)
+ . S nline=$l(ref)+$s(WaiterFlag:((((((0+6)+9)+5)+5+1)+4)+4+1),1:(((((0+6)+9)+5)+5+1)+4))-1\RM+1
+ . S LineLeft=LineLeft-nline I LineLeft<0 S (LineLeft,nOwner,lineOK)=0 Q
+ . I LineLeft=0 S:nWaiter!(nOwner>1) lineOK=0 S nOwner=$S(nWaiter:0,1:1) Q  ; No more space.
+ . ; There is at least one line space available
+ . ; Only one Owner or last owner to print
+ . I (nOwner=1!(StartOwner=nOwner)) S nOwner=1 S:nWaiter LineLeft=LineLeft-1,PrintWaiter=1 Q
+ . ; no enough lines for this lock entry
+ . I (nOwner-StartOwner)>LineLeft s nOwner=LineLeft+$s(nWaiter:0,1:1),(LineLeft,lineOK)=0 Q
+ . I (nOwner-StartOwner)=LineLeft s nOwner=LineLeft+$s(nWaiter:0,1:1),LineLeft=0 s:nWaiter lineOK=0 Q
+ . s nOwner=nOwner-StartOwner,LineLeft=LineLeft-nOwner
+ . S nOwner=nOwner+1
+ . I nWaiter S LineLeft=LineLeft-1,PrintWaiter=1
+ DO:nOwner
+ . N i
+ . I pid'=0 DO  Q:nOwner
+ . . F i=1:1:nOwner I $P($LIST(Owners,1),",",i)=pid S StartOwner=i,nOwner=0 Q
+ . W !,$J(entry,4),")",?(0+6)
+ . s Ownersx=$P($LIST(Owners,1),",",StartOwner)
+ . If Ownersx?1.N S Ownersx=$s(($zversion(1)=1):$ZH(+Ownersx),1:Ownersx)  ;Convert to hex to display.
+ . W Ownersx
+ . N ccnt s ccnt=$P($LIST(Owners,2),",",StartOwner)
+ . N escainfo s escainfo=$P($LIST(Owners,3),",",StartOwner)
+ . N xcnt,scnt,cnt,xeinfo,seinfo,ebcnt,edcnt,ebdcnt,eddcnt,ps
+ . I LMode="X" do
+ . . s xcnt=$p(ccnt,"|",1),xeinfo=$p(escainfo,"|",1)
+ . . s ebcnt=+$p(xeinfo,"^",2),edcnt=+$p(xeinfo,"^",3),ebdcnt=+$p(xeinfo,"^",4),eddcnt=+$p(xeinfo,"^",5)
+ . . i xcnt["D" s cnt=+xcnt-ebdcnt-eddcnt,ps="+" s:cnt=0 cnt="",ps="" s:ebdcnt cnt=cnt_ps_ebdcnt_"e",ps="+" s:eddcnt cnt=cnt_ps_eddcnt_"E" s cnt=cnt_"D"
+ . . i xcnt'["D" s cnt=+xcnt-ebcnt-edcnt,ps="+" s:cnt=0 cnt="",ps="" s:ebcnt cnt=cnt_ps_ebcnt_"e",ps="+" s:edcnt cnt=cnt_ps_edcnt_"E",ps="+" s:ebdcnt cnt=cnt_ps_ebdcnt_"de",ps="+" s:eddcnt cnt=cnt_ps_eddcnt_"dE"
+ . . W ?((0+6)+9),$j(cnt,5)
+ . . I ccnt["|" Do
+ . . . s scnt=$p(ccnt,"|",2),seinfo=$p(escainfo,"|",2)
+ . . . s ebcnt=+$p(seinfo,"^",2),edcnt=+$p(seinfo,"^",3),ebdcnt=+$p(seinfo,"^",4),eddcnt=+$p(seinfo,"^",5)
+ . . . i scnt["D" s cnt=+scnt-ebdcnt-eddcnt,ps="+" s:cnt=0 cnt="",ps="" s:ebdcnt cnt=cnt_ps_ebdcnt_"e",ps="+" s:eddcnt cnt=cnt_ps_eddcnt_"E" s cnt=cnt_"D"
+ . . . i scnt'["D" s cnt=+scnt-ebcnt-edcnt,ps="+" s:cnt=0 cnt="",ps="" s:ebcnt cnt=cnt_ps_ebcnt_"e",ps="+" s:edcnt cnt=cnt_ps_edcnt_"E",ps="+" s:ebdcnt cnt=cnt_ps_ebdcnt_"de",ps="+" s:eddcnt cnt=cnt_ps_eddcnt_"dE"
+ . . . W ?(((0+6)+9)+5),$j(cnt,5)
+ . I LMode="ZAX"&(ccnt["|") W ?(((0+6)+9)+5),$j($p(ccnt,"|",2),5)
+ . I LMode="S" Do
+ . . s scnt=ccnt,seinfo=escainfo
+ . . s ebcnt=+$p(seinfo,"^",2),edcnt=+$p(seinfo,"^",3),ebdcnt=+$p(seinfo,"^",4),eddcnt=+$p(seinfo,"^",5)
+ . . i scnt["D" s cnt=+scnt-ebdcnt-eddcnt,ps="+" s:cnt=0 cnt="",ps="" s:ebdcnt cnt=cnt_ps_ebdcnt_"e",ps="+" s:eddcnt cnt=cnt_ps_eddcnt_"E" s cnt=cnt_"D"
+ . . i scnt'["D" s cnt=+scnt-ebcnt-edcnt,ps="+" s:cnt=0 cnt="",ps="" s:ebcnt cnt=cnt_ps_ebcnt_"e",ps="+" s:edcnt cnt=cnt_ps_edcnt_"E",ps="+" s:ebdcnt cnt=cnt_ps_ebdcnt_"de",ps="+" s:eddcnt cnt=cnt_ps_eddcnt_"dE"
+ . . W ?(((0+6)+9)+5),$j(cnt,5)
+ . W ?((((0+6)+9)+5)+5+1),Flags
+ . W:WaiterFlag ?(((((0+6)+9)+5)+5+1)+4),$j($s(nWaiter:nWaiter,1:""),4)
+ . W ?$s(WaiterFlag:((((((0+6)+9)+5)+5+1)+4)+4+1),1:(((((0+6)+9)+5)+5+1)+4)),ref
+ . F i=1:1:nOwner-1 DO
+ . . W !,?(0+6)
+ . . s Ownersx=$P($LIST(Owners,1),",",StartOwner+i)
+ . . If Ownersx?1.N S Ownersx=$s(($zversion(1)=1):$ZH(+Ownersx),1:Ownersx)  ;Convert to hex to display.
+ . . W Ownersx
+ . . I LMode="X" W ?((0+6)+9),$j($P($LIST(Owners,2),",",StartOwner+i),5)
+ . . I LMode="S" W ?(((0+6)+9)+5),$j($P($LIST(Owners,2),",",StartOwner+i),5)
+ . DO:PrintWaiter
+ . . N tot,wpid S tot=8
+ . . W !,"Waiters:"
+ . . F i=1:1:nWaiter d
+ . . . s wpid=$P($LIST(Waiters,1),",",i)
+ . . . If wpid?1.N S wpid=$s(($zversion(1)=1):$ZH(+wpid),1:wpid)  ;Convert to hex to display.
+ . . . s wpid=wpid_"("_$P($LIST(Waiters,2),",",i)_$P($LIST(Waiters,3),",",i)_")" s tot=tot+$l(wpid)+1 q:tot>RM  W " ",wpid
+ Q $s(lineOK!((StartOwner+nOwner)>$L($LIST(Owners,1),",")):0,1:StartOwner+nOwner)
+HDR(Waiter) W ! ;display the column headers
+ S Waiter=$g(Waiter,0)
+ W "Entry",?(0+6),"Process"
+ W ?((0+6)+9),$j("X#",5)
+ W ?(((0+6)+9)+5),$j("S#",5)
+ W ?((((0+6)+9)+5)+5+1),"Flg"
+ W:Waiter ?(((((0+6)+9)+5)+5+1)+4),$j("W#",4)
+ W ?$s(Waiter:((((((0+6)+9)+5)+5+1)+4)+4+1),1:(((((0+6)+9)+5)+5+1)+4)),"Item Locked"
+ S HDR=1 Q  ;marks that the header was displayed
+DELONE ; Delete one entry
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q
+ N entry,data,ll
+delonein R !,"Entry to delete: ",entry I entry="?" D  G delonein
+ . W !,"Enter an entry number from the left column or the full entry"
+ . W !,"as listed in the right column."
+ I "Qq^"[entry QUIT
+ DO
+ . S entry=$$FindEntry(entry)
+ . I 'entry W !,"Entry #",entry," does not exist" Q
+ . s ll=0
+ . k data m data=@LockTmp@(entry) s data("LockEntryNum")=entry
+ . I $$Show(.data,.ll)
+ . I data("Flags")["D" D
+ . . W !,"WARNING ***"
+ . . W !,"The lock entry is in the middle of unlocking to remote server."
+ . . W !,"Remove this lock may cause problem unless you are cleaning"
+ . . W !,"the stranded lock entries."
+ . I data("RemoteOwner") D
+ . . W !,"WARNING ***"
+ . . W !,"The lock entry is owned by a remote owner."
+ . . W !,"Remove this lock may cause problem unless you are cleaning"
+ . . W !,"the stranded lock entries."
+ . I $$YN("Are you sure you want to delete this lock","N")'="Y" Q
+ . n rc s rc=##Class(SYS.Lock).DeleteOneLock(data("DelKey"),"",1)
+ . W:+rc " deleted" W:'+rc " failed, error=",$SYSTEM.Status.GetErrorText(rc)
+ G delonein
+FindEntry(entry)
+ If entry?.N Quit $s($d(@LockTmp@(entry))=0:0,1:entry)
+ New i
+ s i=""
+ For  s i=$O(@LockTmp@(i)) Q:i=""  Q:@LockTmp@(i,"FullReference")=entry
+ Quit +i
+DELJOB ; delete all locks for one job on the current system
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q
+ N job,R,SUB,CNT
+DJOB K job F  DO  Q:$D(job)  ;loop until a job is selected (or quits)
+ . R !,"Process # ",R I R["?" W ! DO  W ! Q
+ . . W !?4,"Select a job/process number from the list of jobs in"
+ . . W !?4,"lock table display."
+ . I "^Qq"[$E(R_"^") S job="" Q
+ . i ($zversion(1)=1) I $TR($$UC(R),"0123456789ABCDEF")]"" DO  Q
+ . . W *7,!?4,"process numbers are in hexadecimal, please."
+ . i '($zversion(1)=1) I R'?1.N,+R'=R W *7," that is not a valid process #" Q
+ . S job=R ;a valid process#
+ I job="" Q  ;done!
+ ;
+ S CNT=+##Class(SYS.Lock).DeleteAllLocks($s(($zversion(1)=1):$ZH(""_job),1:job))
+ W !,CNT_" lock"_$E("s",CNT'=1)_" deleted.",!
+ G DJOB ;ask another one
+DELSYS ; delete all entries for one system
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q
+ N sys,CNT,PROMPT,R,sys,name
+DSYS K sys F  DO  Q:$D(sys)  ;loop until a system is selected (or quits)
+ . R !,"Delete locks for System: ",R I R["?" DO HDELSYSQ Q
+ . I "^Qq"[$E(R_"^") S sys="" Q  ;done
+ . I R?1.N W *7,!?4,"'"_R_"' is not a system name.  Enter ? for help." Q
+ . S N=##Class(SYS.Lock).ClientSysNameToSysNum(R)
+ . I N<0 W *7,!?4,"'"_R_"' does not exist in the current tables.",! Q
+ . S sys=N
+ I sys="" Q  ;no system selected
+ ;
+ S name=##Class(SYS.Lock).ClientSysNumToSysName(sys) S:name="" name=sys
+ S PROMPT="Delete all locks for system '"_name_"'"
+ S:R'=name PROMPT=PROMPT_" ( = '"_R_"')"
+ I $$YN(PROMPT,"N")'="Y" G DSYS
+ ;
+ S CNT=##Class(SYS.Lock).DeleteAllLocks("C"_sys)
+ W !,CNT_" lock"_$E("s",CNT'=1)_" deleted.",!
+ G DSYS
+DDPDEL s $ZT="DDPDELE" ; Delete all DDP locks in all clustered DB's
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q
+ n
+ i '($zversion(1)=1) q
+ s x="",cludb(0)=0
+ f  s x=$o(^SYS("UCI",x)) q:x=""  d
+ . i $P($ZU(49,x,1),",",2)=0 q
+ . s cludb(0)=$g(cludb(0))+1
+ . s cludb(cludb(0))=x
+ Set Rset=##class(%Library.ResultSet).%New("%SYS.LockQuery:List")
+ Do Rset.Execute("NDDP")
+ While Rset.Next() {
+	s REF=Rset.Data("FullReference")
+	f i=1:1:cludb(0) i REF[cludb(i) s x=##Class(SYS.Lock).DeleteOneLock(Rset.Data("DelKey"),"",1) Q
+ }
+DDPDELE ;
+ q
+HELP ;
+ W !,"<RETURN> or ""S"" to show another screenful of items"
+ W !,"""R"" to Restart display"
+ W !,"""Q"" or ""^"" to quit"
+ W !,"""H"" or ""?"" for help (this text)"
+ I '$G(ViewOnly) Do
+ . W !,"""D"" or ""1"" to delete one lock"
+ . W !,"""J"" to delete ALL of one Process' locks"
+ . W !,"""C"" to delete ALL of one SYSTEM's (Computer's) locks"
+ W !!,"In display:"
+ W !,"  X#   Lock count of exclusive lock"
+ W !,"  S#   Lock count of share lock"
+ W !,"  W#   Number of processes are waiting for this lock"
+ W !!,"In Flg field:"
+ W !,"  *    outgoing (client) lock to another system; may be pending"
+ W !,"  L    Lost lock due to lock reset condition"
+ W !,"  Z    Lock granted by ZA command. The ZA and ZD commands are obsolete,"
+ W !,"       though the network daemons still grant the locks for remote client"
+ W !,"       with the ZA lock mode internally."
+ W !,"  P    Lock Pending, waiting for server to grant the lock"
+ W !,"  D    Delock Pending, waiting for server to release the lock"
+ Q
+HDELSYSQ ;
+ W !
+ W !?4,"To delete incoming locks held on this system ("
+ W ##Class(SYS.Lock).ClientSysNumToSysName(0),") by a remote system,"
+ W !?4,"enter the name of that system (as it appears in the "
+ W "Owner column)."
+ W !!?4,"To delete all locks held by processes on THIS system,"
+ W " enter:   ",##Class(SYS.Lock).ClientSysNumToSysName(0)
+ W !
+ Q 
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R
+UC(x) q $zcvt(x,"u")

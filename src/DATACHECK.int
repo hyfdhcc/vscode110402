@@ -1,0 +1,1224 @@
+ROUTINE DATACHECK [Type=INT]
+DATACHECK() {  ; Management utility for DataCheck package ; RJF157 11/12/13
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+	try {
+		s oldselectmode=$zu(115,5,2),oldprivmode=$zu(115,8,0)
+		i '$system.Security.Check("%Admin_Operate","USE") {
+			w !,"Operation requires %Admin_Operate:Use privilege"
+			q
+		}
+		s hasdbprivs=$$ScreenForDatabasePrivilege(.resourcename)
+		i 'hasdbprivs {
+			w !,"Operation requires "_resourcename_":Read privilege"
+			q
+		}
+		s list(1)="Create New Configuration"
+		s list(2)="Edit Configuration"
+		s list(3)="View Details"
+		s list(4)="Start"
+		s list(5)="Stop"
+		s list(6)="Delete Configuration"
+		s list(7)="Incoming Connections to this System as a DataCheck Source"
+		f  {
+			s v="",rc=##class(%Library.Prompt).GetMenu("Option?",.v,.list,,128+8) q:rc'=1
+			q:'v
+			i $case(v,1:1,2:1,6:1,:0) && (hasdbprivs<2) {
+				w !,"Operation requires "_resourcename_":Write privilege"
+				continue
+			}
+			i v=1 d New() continue
+			i v=2 d Setup() continue
+			i v=3 d ViewInt() continue
+			i v=4 d Start() continue
+			i v=5 d Stop() continue
+			i v=6 d Delete() continue
+			i v=7 d Source() continue
+		}
+	} catch err {
+		d $zu(115,8,oldprivmode),$zu(115,5,oldselectmode)
+		w !!,"Unexpected error occurred: ",!,"  ",err.DisplayString()
+	}
+	d $zu(115,8,oldprivmode),$zu(115,5,oldselectmode)
+}
+	; Public subroutine for view menu
+View() PUBLIC {
+	try {
+		s oldselectmode=$zu(115,5,2),oldprivmode=$zu(115,8,0)	
+		i '$system.Security.Check("%Admin_Operate","USE") {
+			w !,"Operation requires %Admin_Operate:Use privilege"
+			q
+		}
+		i '$$ScreenForDatabasePrivilege(.resourcename) {
+			w !,"Operation requires "_resourcename_":Read privilege"
+			q
+		}
+		d ViewInt()
+	} catch err {
+		d $zu(115,8,oldprivmode),$zu(115,5,oldselectmode)
+		w !!,"Unexpected error occurred: ",!,"  ",err.DisplayString()
+	}
+	d $zu(115,8,oldprivmode),$zu(115,5,oldselectmode)
+}
+	; Public subroutine to just display status summary loop
+Status() PUBLIC {
+	try {
+		s oldselectmode=$zu(115,5,2),oldprivmode=$zu(115,8,0)	
+		i '$system.Security.Check("%Admin_Operate","USE") {
+			w !,"Operation requires %Admin_Operate:Use privilege"
+			q
+		}
+		i '$$ScreenForDatabasePrivilege(.resourcename) {
+			w !,"Operation requires "_resourcename_":Read privilege"
+			q
+		}
+		s sys=$$GetSystem()
+		q:'sys
+		d ViewStatus(sys)
+	} catch err {
+		d $zu(115,8,oldprivmode),$zu(115,5,oldselectmode)
+		w !!,"Unexpected error occurred: ",!,"  ",err.DisplayString()
+	}
+	d $zu(115,8,oldprivmode),$zu(115,5,oldselectmode)
+}
+Start() { 
+	s sys=$$GetSystem() 
+	q:'sys 
+	s state=sys.GetState(.reason)
+	i state'="Stopped" {
+		w !,"Already started."
+		q
+	}
+	s nextphasenum=sys.Workflow.NewPhaseNumber
+	s:'nextphasenum nextphasenum=sys.Workflow.Phases.Next(sys.PhaseNumber)
+	s:'nextphasenum nextphasenum=sys.Workflow.Phases.Next("")
+	s timremain=sys.WorkflowTimeoutRemaining()
+	w !!,"State:  ",state
+	w:reason'=0 " due to "_##class(SYS.DataCheck.StateReason).LogicalToDisplay(reason)
+	d ViewWorkflow(sys)
+	i sys.Workflow.AbortCurrentPhase {
+		w !,"DataCheck is set to abort the current phase and transition to phase #",nextphasenum,"."
+		s offerrestart=(nextphasenum'=1)
+	} elseif 'timremain {
+		w !,"The workflow timeout has expired.  DataCheck will restart at phase #1."
+		s offerrestart=0
+	} elseif sys.Phase.%ClassName(1)="SYS.DataCheck.PhaseStop" {
+		w !,"DataCheck will transition to phase #",nextphasenum,"."
+		s offerrestart=(nextphasenum'=1)
+	} else {
+		w !,"DataCheck will resume processing where it left off."
+		s offerrestart=1
+	}
+	i offerrestart {
+		w !!,"You may enter RESTART to restart at phase #1"
+		s askstring="Start Datacheck configuration '"_sys.Name_"'? (yes/no/restart)"
+	} else {
+		s askstring="Start Datacheck configuration '"_sys.Name_"'?"
+	}
+	f  {
+		w !
+		s yn="",rc=##class(%Library.Prompt).GetString(askstring,.yn,,,,8)
+		q:(rc'=1)
+		continue:yn=""
+		s yn=$zcvt(yn,"U")
+		i $e(yn,1,$l(yn))=$e("YES",1,$l(yn)) {
+			Set sc=sys.Start(0) Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+			w !,"Starting..."
+			q
+		}
+		q:$e(yn,1,$l(yn))=$e("NO",1,$l(yn))
+		i offerrestart && (yn="RESTART") { ; don't allow abbreviations of restart
+			Set sc=sys.Start(1) Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+			w !,"Restarting at phase #1..."
+			q
+		}
+	}
+}
+Stop() { s sys=$$GetSystem() q:'sys  i $$GetStopped(sys)<0 { w !,"Already stopped." } }
+New() {
+	w !!,"You are creating a DataCheck destination configuration.  Each destination"
+	w !,"configuration checks data on this system against one source system.  Multiple"
+	w !,"configuration can be created to check against other sources, or to check a"
+	w !,"different set of data on the same source.  Results of the check are stored here"
+	w !,"on the destination.  You must enable the DataCheck service on the source."
+	s mirrorname=""
+	i $d(^SYS("MIRRORSET"))#2 {
+		s failover='^SYS("MIRRORSET")
+		s mirrorsets=$p(^SYS("MIRRORSET"),"^",2)
+		i failover {
+			s mirrorname=$p(mirrorsets,",")
+			w !!,"This system is a failover member of mirror "_mirrorname_"."
+			s yn=1,rc=##class(%Library.Prompt).GetYesNo("Are you configuring DataCheck to check this mirror?",.yn,,8)
+			q:(rc'=1)
+			i 'yn { s mirrorname="" }
+		} else {
+			f i=1:1:$l(mirrorsets,"^") { s list(i)=$p(mirrorsets,",",i) }
+			i $d(list(2)) {
+				w !!,"This system is an async member of multiple mirrors."
+				s yn=1,rc=##class(%Library.Prompt).GetYesNo("Are you configuring DataCheck to check one of them?",.yn,,8)
+				q:(rc'=1)
+				i yn {
+					s mirrorname="",rc=##class(%Library.Prompt).GetArray("Mirror:",.mirrorname,.list,,,,512+8+128+32)
+					q:(rc'=1)||(mirrorname="")
+				}
+			} elseif $d(list) {
+				s mirrorname=list(1)
+				w !!,"This system is an async member of mirror "_mirrorname_"."
+				s yn=1,rc=##class(%Library.Prompt).GetYesNo("Are you configuring DataCheck to check this mirror?",.yn,,8)
+				q:(rc'=1)
+				i 'yn { s mirrorname="" }
+			}
+		}
+	}
+	i mirrorname="" {
+		; no mirror, or not checking mirror
+		w !!,"When used to check the consistency of a shadowing system, this system"
+		w !,"should also be the shadow destination system.",!
+		while 1 {
+			s name="",rc=##class(%Library.Prompt).GetString("Name of this DataCheck configuration:",.name,1,50,,8)
+			q:(rc'=1)
+			i ##class(SYS.DataCheck.System).NameIndexExists(name) {
+				w !,"A configuration by that name already exists"
+			} else { q }
+		}
+		q:(rc'=1)
+		s sys=##class(SYS.DataCheck.Destination).%New(name,mirrorname)
+		Set sc=sys.%Save() Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+		d Setup(sys)
+		q
+	}
+	; We are checking a mirror
+	; get this member's name in the mirror
+	Set sc=##class(Config.MirrorMember).Get(.info) Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+	s thismembername=info("SystemName")
+	; get list of mirror members
+	s rs=##class(%Library.ResultSet).%New("Config.MapMirrors:List")
+	Set sc=rs.%Execute(mirrorname) Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+	f  {
+		s atend='rs.%Next(.sc) i ('sc) { Throw ##class(%Exception.StatusException).ThrowIfInterrupt(sc) } q:atend
+		continue:rs.%Get("Name")=thismembername
+		s isfailover='rs.%Get("MemberType")
+		s members('isfailover,$i(members('isfailover)))=rs.%Get("Name")
+	}
+	; Now, members(0) has the failover member names as second subscript
+	;      members(1) is all the other members
+	;      and this member is not in the array at all
+	s sourcemember="",primarysourcerequirement=0
+	i failover { ; I am a failover member
+		i $d(members(0,1)) {
+			s yn=1,rc=##class(%Library.Prompt).GetYesNo("Check against the other failover member, "_members(0,1)_"?",.yn,,8)
+			q:(rc'=1)
+			s:yn sourcemember=$lb(members(0,1))
+		} else { 
+			w !,"This is the only failover member"
+		}
+	} else { ; I am an async or relay member 
+		s yn=1
+		s rc=##class(%Library.Prompt).GetYesNo("Do you want to check against the failover member(s)?",.yn,,8)
+		q:(rc'=1)
+		i yn {
+			i $d(members(0,2)) {
+				w !!,"You may create one (or more) DataCheck configurations for each of the failover"
+				w !,"members, then choose to allow checking them concurrently, or restrict each"
+				w !,"configuration to only check when that member is in the desired role."
+				s yn=1,rc=##class(%Library.Prompt).GetYesNo("Create a DataCheck configuration for each failover member?",.yn,,8)
+				q:(rc'=1)
+				i yn {
+					s sourcemember=$lb(members(0,1),members(0,2))
+				} else {
+					k list m list=members(0)
+					s sourcemember="",rc=##class(%Library.Prompt).GetArray("Mirror member to check against:",.sourcemember,.list,,,,512+8+128+32)
+					q:(rc'=1)
+					q:sourcemember=""
+					s sourcemember=$lb(sourcemember)
+				}
+			} elseif $d(members(0,1)) {
+				s sourcemember=$lb(members(0,1))
+			} else {
+				w !,"No failover members found."
+				q
+			}
+			s primarysourcerequirement=$$GetPrimarySourceRequirement()
+			q:primarysourcerequirement=""
+		}
+	}
+	i sourcemember="" { ; not checking against a failover member
+		i '$d(members(1)) {
+			w !!,"No other mirror members to check."
+			q
+		}
+		i failover {
+			w !!,"When checking between a failover member and an async member, it is"
+			w !,"often better to use the async member as the DataCheck destination"
+			w !,"instead; the results of the check would then be available on the"
+			w !,"async member even if the source failover member is down."
+			s yn=0,rc=##class(%Library.Prompt).GetYesNo("Continue?",.yn,,8)
+			q:(rc'=1)||('yn)
+		}
+		k list m list=members(1)
+		s sourcemember="",rc=##class(%Library.Prompt).GetArray("Mirror member to check against:",.sourcemember,.list,,,,512+8+128+32)
+		q:(rc'=1)
+		q:sourcemember=""
+		s sourcemember=$lb(sourcemember)
+		; since we're not checking the failover members, this shouldn't matter,
+		; but if our source should happen to become the primary somehow, we
+		; probably want to pause.
+		s primarysourcerequirement=-1 
+	}
+	; Find an unused name of the form MIRRORNAME_SOURCEMEMBER_1 as a default choice of configuration name
+	s ok=0,num=1
+	while 'ok {
+		s ok=1
+		f i=1:1:$ll(sourcemember) {
+			i ##class(SYS.DataCheck.System).NameIndexExists(mirrorname_"_"_$li(sourcemember,i)_"_"_num) { 
+				s ok=0
+				s num=num+1
+				q
+			}
+		}
+	}
+	i $ll(sourcemember)>1 {
+		; multiple DataCheck systems being created, display the list of names
+		; and offer to change
+		w !,"The following DataCheck configurations will be created"
+		f i=1:1:$ll(sourcemember) { w !,"  "_mirrorname_"_"_$li(sourcemember,i)_"_"_num }
+		s yn=0,rc=##class(%Library.Prompt).GetYesNo("Do you want to change the names?",.yn,,8)
+		q:(rc'=1)
+		i 'yn { 
+			f i=1:1:$ll(sourcemember) { 
+				s name=mirrorname_"_"_$li(sourcemember,i)_"_"_num
+				s sys(i)=##class(SYS.DataCheck.Destination).%New(name,mirrorname)
+			}
+		} else {
+			s i=1
+			while (i<=$ll(sourcemember)) {
+				s name="",rc=##class(%Library.Prompt).GetString("Name of DataCheck configuration for "_$li(sourcemember,i)_":",.name,1,50,,8)
+				q:(rc'=1)
+				i ##class(SYS.DataCheck.System).NameIndexExists(name) {
+					w !,"A configuration by that name already exists"
+					continue
+				}
+				s sys(i)=##class(SYS.DataCheck.Destination).%New(name,mirrorname)
+				s i=i+1
+			}
+			q:(rc'=1)
+		}
+		f i=1:1:$ll(sourcemember) { 
+			s sys(i).Configuration.SourceMirrorMember=$li(sourcemember,i)
+			s sys(i).Configuration.PrimarySourceRequirement=primarysourcerequirement
+			Set sc=sys(i).%Save() Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+		}
+	} else {
+		; just one system, prompt for name with pre-selected default
+		while 1 {
+			s name=mirrorname_"_"_$li(sourcemember)_"_"_num
+			s rc=##class(%Library.Prompt).GetString("Name of DataCheck configuration:",.name,1,50,,8)
+			q:(rc'=1)
+			i ##class(SYS.DataCheck.System).NameIndexExists(name) {
+				w !,"A configuration by that name already exists"
+			} else { q }
+		}
+		q:(rc'=1)
+		s sys=##class(SYS.DataCheck.Destination).%New(name,mirrorname)
+		s sys.Configuration.SourceMirrorMember=$li(sourcemember,i)
+		s sys.Configuration.PrimarySourceRequirement=primarysourcerequirement
+		Set sc=sys.%Save() Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+		d Setup(sys)
+	}
+}	
+Delete() {
+	s sys=$$GetSystem() q:'sys
+	q:'$$GetStopped(sys,1)
+	s yn=0,rc=##class(%Library.Prompt).GetYesNo("Delete?",.yn,,8) 
+	q:('yn)||(rc'=1)
+	Set sc=sys.%DeleteId(sys.%Id()) Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+}
+Setup(sys) {
+	i '$g(sys) { s sys=$$GetSystem() q:'sys }
+	i sys.MirrorName="" {
+		s list(1)="Import Settings from a Shadow"
+		s list(2)="Connection Settings"
+		s list(3)="Database Mappings"
+		s list(4)="Globals to Check"
+		s list(5)="Performance Settings"
+		s list(6)="Manage Workflow"
+		f  {
+			s v="",rc=##class(%Library.Prompt).GetMenu("Option?",.v,.list,,128+8) q:rc'=1
+			q:'v
+			d Reload(sys)
+			i v=1 d SetupShadowImport(sys) continue
+			i v=2 d SetupConnection(sys) continue
+			i v=3 d SetupDBXMap(sys) continue
+			i v=4 d SetupGlobals(sys) continue
+			i v=5 d SetupPerformance(sys) continue
+			i v=6 d SetupWorkflow(sys) continue
+		}
+	} else {
+		s list(1)="Globals to Check"
+		s list(2)="Performance Settings"
+		s list(3)="Manage Workflow"
+		s list(4)="Change Mirror Settings (Advanced)"
+		f  {
+			s v="",rc=##class(%Library.Prompt).GetMenu("Option?",.v,.list,,128+8) q:rc'=1
+			q:'v
+			d Reload(sys)
+			i v=1 d SetupGlobals(sys) continue
+			i v=2 d SetupPerformance(sys) continue
+			i v=3 d SetupWorkflow(sys) continue
+			i v=4 d SetupMirror(sys) continue
+		}
+	}
+}
+SetupShadowImport(sys) {
+	q:'$$GetStopped(sys,1)
+	s shadowname="",rc=##class(%Library.Prompt).GetArray("Shadow name to import from:",.shadowname,$lb("SYS.Shadowing.Shadow:List"),,,,512+8+128)
+	q:(shadowname="")||(rc'=1) 0 
+	Set sc=sys.Configuration.ImportFromShadowDestination(shadowname) Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+	d GetSaved(sys.Configuration)
+}
+SetupConnection(sys) {
+	q:'$$GetStopped(sys,1)
+	s host=sys.Configuration.Host
+	s rc=##class(%Library.Prompt).GetString("IP or host name of source:",.host,,,,8)
+	q:(host="")||(rc'=1) 0
+	s sys.Configuration.Host=host
+	s port=sys.Configuration.Port
+	s rc=##class(%Library.Prompt).GetString("Port number of source:",.port,,,,8)
+	q:(port="")||(rc'=1) 0
+	s sys.Configuration.Port=port
+	s yn=''$l(sys.Configuration.SSLConfig)
+	s rc=##class(%Library.Prompt).GetYesNo("Use SSL?",.yn,,8) q:(rc'=1)
+	i yn { ; use SSL
+		s ssl=sys.Configuration.SSLConfig
+		s rc=##class(%Library.Prompt).GetString("Name of SSL configuration to use:",.ssl,,,,8)
+		q:(ssl="")||(rc'=1) 0
+		s sys.Configuration.SSLConfig=ssl
+	} else { ; no SSL
+		s sys.Configuration.SSLConfig=""
+	}
+	d GetSaved(sys.Configuration)
+}
+SetupMirror(sys) {
+	q:'$$GetStopped(sys,1)
+	q:sys.MirrorName=""
+	w !!,"The default mirror settings are selected when the DataCheck configuration"
+	w !,"is created, and typically do not need to be changed."
+	w !!,"Source Mirror Member: ",sys.Configuration.SourceMirrorMember
+	s psr=$$GetPrimarySourceRequirement(sys.Configuration.PrimarySourceRequirement)
+	q:psr=""
+	s sys.Configuration.PrimarySourceRequirement=psr
+	s yn=sys.Configuration.PauseCheckingBackupWhenNotActive
+	w !!,"If the source or destination is the backup failover member and it is not"
+	w !,"marked active, DataCheck can pause and wait for it to become active."
+	s rc=##class(%Library.Prompt).GetYesNo("Pause?",.yn,,8) 
+	q:(rc'=1)
+	s sys.Configuration.PauseCheckingBackupWhenNotActive=yn
+	d GetSaved(sys.Configuration)
+}
+SetupDBXMap(sys) {
+	q:'$$GetStopped(sys,1)
+	s list(1)="Add an entry"
+	s list(2)="Delete an entry"
+	s list(3)="List all entries"
+	f  {
+		s v="",rc=##class(%Library.Prompt).GetMenu("Option?",.v,.list,,128+8) q:rc'=1
+		q:'v
+		i v=1 d SetupDBXMapAdd(sys) continue
+		i v=2 d SetupDBXMapDelete(sys) continue
+		i v=3 d ViewDBXMap(sys) continue
+	}
+	d GetSaved(sys.Configuration)
+}
+SetupDBXMapAdd(sys) {
+	s rs=##class(%Library.ResultSet).%New("SYS.DataCheck.Destination:SourceDatabases")
+	s sc=rs.%Execute(sys.Name)
+	i (''sc) {
+		f i=1:1 {
+			s atend='rs.%Next(.sc) i ('sc) { Throw ##class(%Exception.StatusException).ThrowIfInterrupt(sc) } q:atend
+			s sourcelist(i)=rs.Directory
+		}
+	} else {
+		s help(1)="Source database list unavailable due to error: "
+		s help(2)=$system.Status.GetOneErrorText(sc)
+	}
+	f  {
+		w !
+		i $d(sourcelist) {
+			s sourcedb="",rc=##class(%Library.Prompt).GetArray("Source Database (other system):",.sourcedb,.sourcelist,,,8)
+		} else { 
+			s sourcedb="",rc=##class(%Library.Prompt).GetString("Source Database (other system):",.sourcedb,,,.help,8)
+		}
+		q:((rc'=1)||(sourcedb=""))
+		s destdb="",rc=##class(%Library.Prompt).GetArray("Destination Database (this system):",.destdb,$lb("SYS.Database:List","*"),,,8)
+		q:((rc'=1)||(destdb=""))
+		s destdb=##class(SYS.DataCheck.LocalDatabase).Normalize(destdb)
+		i destdb="" {
+			w !!,"Destination database specification is invalid"
+			continue
+		}
+		i sys.Configuration.DBXMap.IsDefined(sourcedb) {
+			w !!,"Source database "_sourcedb_" already has a mapping."
+			w !,"This entry will not be added!"
+			continue
+		} 
+		s found=0,key=""
+		f  {
+			s db=sys.Configuration.DBXMap.GetNext(.key)
+			q:key=""
+			i db=destdb {
+				s found=1
+				q
+			}
+		}
+		i found {
+			w !!,"Destination database "_destdb_" already has a mapping."
+			w !,"This entry will not be added!"
+			continue
+		}
+		d sys.Configuration.DBXMap.SetAt(destdb,sourcedb)
+	}
+}
+SetupDBXMapDelete(sys) {
+	f  {
+		k array
+		s sourcedb=""
+		f i=1:1 {
+			s destdb=sys.Configuration.DBXMap.GetNext(.sourcedb) q:sourcedb=""
+			s array(i)=sourcedb_" -> "_destdb
+		}
+		s v="",rc=##class(%Library.Prompt).GetArray("Entry to delete:",.v,.array,,,,512+8+128)
+		q:((rc'=1)||(v=""))
+		d sys.Configuration.DBXMap.RemoveAt($p(v," -> ")) 
+	}
+}
+SetupGlobals(sys) {
+	; If global selection masks aren't enabled then there's nothing
+	; to do except present the user with the option to enable them.
+	d:'sys.RunParameters.UseGlobalSelectionMask SetupGlobalSelectionType(sys)
+	; As long as they are enabled, present all the relevant options
+	while sys.RunParameters.UseGlobalSelectionMask {
+		k list
+		s list(1)="Options for selecting globals to check"
+		s list(2)="Set default include/exclude mask for databases with no mask defined"
+		s list(3)="Add or remove include/exclude mask for databases"
+		s list(4)="View include/exclude masks"
+		i sys.RunParameters.UseGlobalSelectionRangeLists {
+			s list(5)="Add/Edit Subscript Ranges for a Global"
+			s list(6)="Delete All Subscript Ranges for a Global"
+			s list(7)="Delete All Subscript Ranges"
+			s list(8)="View Defined Subscript Ranges"
+		}
+		s v="",rc=##class(%Library.Prompt).GetMenu("Option?",.v,.list,,128+8) q:rc'=1
+		q:'v
+		i v=1 d SetupGlobalSelectionType(sys) continue
+		i v=2 d SetupGlobalSelectionMaskDefault(sys) continue
+		i v=3 d SetupGlobalSelectionMasks(sys) continue
+		i v=4 d ViewGlobalSelectionMasks(sys) continue
+		i sys.RunParameters.UseGlobalSelectionRangeLists {
+			i v=5 d SetupGSRLAddEdit(sys) continue
+			i v=6 d SetupGSRLDelete(sys) continue
+			i v=7 d SetupGSRLDeleteAll(sys) continue
+			i v=8 d ViewGSRL(sys) continue
+		}
+	}
+}
+SetupGlobalSelectionType(sys) {
+	s list(1)="Check All Globals in All "_$s($l(sys.MirrorName):"Mirrored Databases",1:"Mapped Databases")
+	s list(2)="Include/Exclude Some Globals/Databases"
+	s list(3)="Include/Exclude Some Globals/Databases and Subscript Ranges"
+	s (old,v)=$s(sys.RunParameters.UseGlobalSelectionRangeLists:3,sys.RunParameters.UseGlobalSelectionMask:2,1:1)
+	s rc=##class(%Library.Prompt).GetMenu("Option?",.v,.list,,128+8) q:rc'=1
+	s sys.RunParameters.UseGlobalSelectionMask=(v>1)
+	s sys.RunParameters.UseGlobalSelectionRangeLists=(v=3)
+	i (v>1) && (old=1) && (sys.RunParameters.GlobalSelectionMask.Count() || (sys.RunParameters.DefaultGlobalSelectionMask'="*")) {
+		s keep=1
+		s rc=##class(%Library.Prompt).GetYesNo("Some Include/Exclude Masks were previously defined.  Keep them?",.keep,,8)
+		q:(rc'=1)
+		i 'keep {
+			Set sc=sys.RunParameters.GlobalSelectionMask.Clear() Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+			set sys.RunParameters.DefaultGlobalSelectionMask="*"
+		}
+	}
+	i (v=3) && (old<3) && $d(^SYS.DataCheck.RangeListD(sys.Name,"%GS")) {
+		s keepgsrl=1
+		s rc=##class(%Library.Prompt).GetYesNo("Some Include/Exclude Subscript Ranges were previously defined.  Keep them?",.keepgsrl,,8)
+		q:(rc'=1)
+		if 'keepgsrl {
+			s rs=##class(%SQL.Statement).%ExecDirect(.sql,"SELECT ID FROM SYS_DataCheck.RangeList WHERE (SystemName = ?) AND (ListSet = ?)",sys.Name,"%GS")
+			if (rs.%SQLCODE)<0 { Throw ##class(%Exception.StatusException).ThrowIfInterrupt($$Error^%apiOBJ(5521,rs.%SQLCODE,rs.%Message)) }
+			f  {
+				s atend='rs.%Next(.sc) i ('sc) { Throw ##class(%Exception.StatusException).ThrowIfInterrupt(sc) } q:atend
+				Set sc=##class(SYS.DataCheck.RangeList).%DeleteId(rs.%Get("ID")) Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+			}
+		}
+	}
+	d GetSaved(sys.RunParameters) 	
+}
+SetupGlobalSelectionMaskDefault(sys) {
+	s mask=sys.RunParameters.DefaultGlobalSelectionMask
+	s:mask="" mask="*"
+	s m=$$GetGlobalSelectionMask(mask,0)
+	q:m=""
+	s sys.RunParameters.DefaultGlobalSelectionMask=m
+	d GetSaved(sys.RunParameters)
+}
+SetupGlobalSelectionMasks(sys) {
+	s rs=##class(%Library.ResultSet).%New("SYS.DataCheck.Destination:DatabasesToCheck")
+	f  {
+		Set sc=rs.%Execute(sys.Name) Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+		k list
+		f i=1:1 {
+			s atend='rs.%Next(.sc) i ('sc) { Throw ##class(%Exception.StatusException).ThrowIfInterrupt(sc) } q:atend
+			s db=rs.%Get("Database")
+			i rs.%Get("HasMaskDefined") {
+				s defmask(db)=rs.%Get("Mask") ; if the mask is defined, it will be the default at the prompt to change (default to no change
+			} else { s defmask(db)="" }       ; otherwise, don't specify a default (there's no reasonable guess we can make)
+			s list(i)=db
+			i $l(defmask(db)) {
+				s list(i,0)=" ["_defmask(db)_"]"
+			} else {
+				s list(i,0)=" [no mask defined, use default]"
+			}
+		}
+		i '$d(list) {
+			w !,"No "_$s($l(sys.MirrorName):"Mirrored Databases",1:"Mapped Databases")
+			q
+		}
+		s db="",rc=##class(%Library.Prompt).GetArray("Database (multiple selections allowed):",.db,.list,,,,512+8+128+64+1024)
+		q:(rc'=1)
+		q:db=""
+		s m=$$GetGlobalSelectionMask($s($ll(db)>1:"",1:$g(defmask($li(db)))))
+		continue:m=""
+		f i=1:1:$ll(db) { 
+			i m="!" {
+				d sys.RunParameters.GlobalSelectionMask.RemoveAt($li(db,i))
+			} else {
+				d sys.RunParameters.GlobalSelectionMask.SetAt(m,$li(db,i))
+			}
+		}
+	}
+	d GetSaved(sys.RunParameters)
+}
+SetupGSRLAddEdit(sys) {
+	s db=$$GetDatabase(sys) q:db=""
+	s gn=$$GetGlobalName() q:gn=""
+	i ##class(SYS.DataCheck.RangeList).MainIndexExists(sys.Name,"%GS",db,gn,.id) {
+		s rl=##class(SYS.DataCheck.RangeList).%OpenId(id)
+	} else {
+		s rl=##class(SYS.DataCheck.RangeList).%New(sys.Name,"%GS",db,gn)
+		w !,"There are no subscript ranges defined for this global."
+		w !,"You may start by including all or excluding all subscripts."
+		k include
+		s rc=##class(%Library.Prompt).GetYesNo("Answer YES to include, NO to exclude:",.include,,8) 
+		q:((rc'=1)||(include=""))
+		d rl.Init($s(include:3,1:2))
+		d rl.SetCollation()
+	}
+	s cachetoken=""
+loop
+	f  {
+		w ! d rl.Output()
+		s from=$$GetGlobalReference(gn,"From (inclusive): ") q:((from="")||(from=-1))
+		s to=$$GetGlobalReference(gn,"To (exclusive): ") q:to=-1
+		k include
+		s rc=##class(%Library.Prompt).GetYesNo("Answer YES to include, NO to exclude:",.include,,8)
+		q:((rc'=1)||(include=""))
+		s cachetoken=rl.Insert(from,to,$s(include:3,1:2),cachetoken,.sc)
+		i ('sc) { d $system.Status.DisplayError(sc) q }
+	}
+	s yn=1,rc=##class(%Library.Prompt).GetYesNo("Continue editing subscript ranges for this global?",.yn,,8)
+	q:(rc'=1)
+	g:yn loop
+	w ! d rl.Output()
+	d GetSaved(rl)
+}
+SetupGSRLDelete(sys) {
+	s db=$$GetDatabase(sys) q:db=""
+	s gn=$$GetGlobalName() q:gn=""
+	i ##class(SYS.DataCheck.RangeList).MainIndexExists(sys.Name,"%GS",db,gn,.id) {
+		Set sc=##class(SYS.DataCheck.RangeList).%DeleteId(id) Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+	}
+}
+SetupGSRLDeleteAll(sys) {
+	s yn=0,rc=##class(%Library.Prompt).GetYesNo("Are you sure you want to delete ALL global subscript ranges?",.yn,,8) 
+	q:(rc'=1)
+	i yn { 
+		s rs=##class(%SQL.Statement).%ExecDirect(.sql,"SELECT ID FROM SYS_DataCheck.RangeList WHERE (SystemName = ?) AND (ListSet = ?)",sys.Name,"%GS")
+		if (rs.%SQLCODE)<0 { Throw ##class(%Exception.StatusException).ThrowIfInterrupt($$Error^%apiOBJ(5521,rs.%SQLCODE,rs.%Message)) }
+		f  {
+			s atend='rs.%Next(.sc) i ('sc) { Throw ##class(%Exception.StatusException).ThrowIfInterrupt(sc) } q:atend
+			Set sc=##class(SYS.DataCheck.RangeList).%DeleteId(rs.%Get("ID")) Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+		}
+	}
+}
+SetupPerformance(sys) {
+	s ans=sys.RunParameters.Throttle
+	s help(1)="Enter an integer between 1 and 10 to control how much of the system"
+	s help(2)="resources (CPU, disk I/O, database cache) the DataCheck system may use."
+	s help(3)="A value of 1 sets the system to use only a small amount of system"
+	s help(4)="resources (only one process using significant CPU and disk I/O)."
+	s help(5)="Higher values typically allow the system to perform checks faster"
+	s help(6)="while being more detrimental to the performance of other jobs.  A" 
+	s help(7)="value of 10 sets the DataCheck system to use as much of the system"
+	s help(8)="resources as possible."
+	s rc=##class(%Library.Prompt).GetNumber("Throttle (1-10):",.ans,1,10,.help,8)
+	q:(ans="")||(rc'=1) 0
+	s sys.RunParameters.Throttle=ans
+	s ans=sys.RunParameters.MinimumQuerySize
+	k help
+	s help(1)="The granularity, in number of global nodes, with which the system will"
+	s help(2)="isolate discrepant global subscript ranges.  A value of 1 means"
+	s help(3)="discrepancies will be isolated to a single global node.  Higher values"
+	s help(4)="allow much better performance through discrepant ranges.  It is "
+	s help(5)="recommended to set this to a number of global nodes that can be"
+	s help(6)="visually inspected with relative ease (if the discrepancy proves to "
+	s help(7)="not be transient after recheck attempts)." 
+	s rc=##class(%Library.Prompt).GetNumber("Minimum Query Size:",.ans,1,,.help,8)
+	q:(rc'=1) 0
+	s sys.RunParameters.MinimumQuerySize=ans
+	d GetSaved(sys.RunParameters)
+}
+SetupWorkflow(sys) {
+	d ViewWorkflow(sys)
+	s yn=0,rc=##class(%Library.Prompt).GetYesNo("Modify workflow phases?",.yn,,8) 
+	q:(rc'=1)
+	i yn {
+		s rs=##class(%Library.ResultSet).%New("%Dictionary.ClassDefinitionQuery:SubclassOf")
+		Set sc=rs.%Execute("SYS.DataCheck.Phase") Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+		f i=1:1 {
+			s atend='rs.%Next(.sc) i ('sc) { Throw ##class(%Exception.StatusException).ThrowIfInterrupt(sc) } q:atend
+			s list(i)=$s(($e(rs.%Get("Name"),1,$l("SYS.DataCheck.Phase"))="SYS.DataCheck.Phase"):$e(rs.%Get("Name"),$l("SYS.DataCheck.Phase")+1,*),1:rs.%Get("Name"))
+			s list(i,0)=" - "_$classmethod(rs.%Get("Name"),"%GetParameter","SHORTDESCRIPTION")
+		}
+		Set sc=sys.Workflow.Phases.Clear() Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+		s flags=128+8
+		f i=1:1 {
+			s v="",rc=##class(%Library.Prompt).GetArray("Phase "_i_":",.v,.list,,,,flags) 
+			q:(v="")||(rc'=1)
+			s phase=$classmethod($s(v[".":v,1:"SYS.DataCheck.Phase"_v),"%New")
+			s properties=phase.#SETUPPROPERTIES
+			f j=1:1 {
+				s p=$p(properties,",",j) q:p=""
+				s pv=$property(phase,p)
+				s rc=##class(%Library.Prompt).GetString("  "_p_":",.pv,,,,8) 
+				q:rc'=1
+				s $property(phase,p)=pv
+			}
+			Set sc=sys.Workflow.Phases.Insert(phase) Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+			s flags=8+512
+		}
+		q:'sys.Workflow.Phases.Count()
+	}
+	; If the user modified the workflow phases, we always want
+	; them to specify a new next phase, otherwise ask
+	i 'yn {
+		s yn=0,rc=##class(%Library.Prompt).GetYesNo("Specify new phase number to start?",.yn,,8) 
+		q:(rc'=1)
+	}
+	i yn {
+		s rc=##class(%Library.Prompt).GetNumber("New phase number (after current phase):",.ans,1,sys.Workflow.Phases.Count(),,8) 
+		q:(rc'=1)
+		s sys.Workflow.NewPhaseNumber=ans
+	}
+	s abort=0,rc=##class(%Library.Prompt).GetYesNo("Abort current phase?",.abort,,8) 
+	q:(rc'=1)
+	s sys.Workflow.AbortCurrentPhase=abort
+	k help
+    s help(1)="If DataCheck becomes stopped, disconnected, or paused (waiting for"
+	s help(2)="mirroring) in the middle of the check, then upon returning to the running"
+	s help(3)="state, it would normally resume the current phase from where it left off."
+	s help(4)="If the system returns to the running state only after an extended period"
+	s help(5)="it may be more desireable to restart from the first phase."
+	s help(7)=""
+	s help(8)="Enter the time, in seconds, within which DataCheck may resume a partially"
+	s help(9)="completed phase.  If this timeout is exceeded, it will restart from phase"
+	s help(10)="number one.  Enter 0 to always resume, never restart.  Default of five"
+	s help(11)="days (432000) assumes that this configuration will check a large amount"
+	s help(12)="of data and may take hours or days to complete normally.  A smaller value"
+	s help(13)="may be desired for configurations that complete more quickly."
+	s ans=+sys.Workflow.Timeout,rc=##class(%Library.Prompt).GetNumber("Workflow Timeout:",.ans,0,,.help,8)
+	q:(rc'=1)
+	s sys.Workflow.Timeout=ans
+	w !
+	d ViewWorkflow(sys)	
+	try {
+		d GetSaved(sys.Workflow)
+	} catch err {
+		i err.Code=5800 {
+			w !,"Save failed because workflow was modified by the system - please retry"
+		} else { throw err }
+	}	
+}
+ViewInt(sys) {
+	s sys=$$GetSystem()
+	q:'sys
+	s list(1)="View Status"
+	s list(2)="View Results"
+	s list(3)="View Queries"
+	s list(4)="View Log"
+	f  {
+		s v="",rc=##class(%Library.Prompt).GetMenu("Option?",.v,.list,,128+8)
+		q:(v="")||(rc'=1)
+		d Reload(sys)
+		i v=1 d ViewStatus(sys) continue
+		i v=2 d { d ViewResults(sys,.again) } while (again) continue
+		i v=3 d ViewQueries(sys) continue
+		i v=4 d ViewLog(sys) continue
+	}
+}
+ViewStatus(sys) {
+	s (lastdstm,lastsrcm,err)=""
+	s refresh=$s(5>10:5,1:10)
+	try {
+		f  {
+			d Reload(sys)
+			w !!, "--- Status of Configuration '",sys.Name,"' on "_$zdt($h)," ---",!
+			i $l(sys.MirrorName) { 
+				w !,"Mirror: ",sys.MirrorName,"  Source Member: ",sys.Configuration.SourceMirrorMember
+			} else { 
+				w !,"Source: ",sys.Configuration.Host,":",sys.Configuration.Port
+				i $l(sys.Configuration.SSLConfig) w !,"Using SSL Config: ",sys.Configuration.SSLConfig
+			}
+			s queries=sys.Stats.PhaseQueries-sys.Stats.PhaseQueriesDeleted+sys.Stats.PhaseQueriesSplit
+			s state=sys.GetState(.reason)
+			w !,"State:  ",state
+			w:reason'=0 " due to "_##class(SYS.DataCheck.StateReason).LogicalToDisplay(reason)
+			w !
+			d ViewWorkflow(sys)
+			w !,"Throttle: ",sys.RunParameters.Throttle
+			i state="Running" {
+				s srcm=sys.GetSourceWorkerMetrics(1,.device)
+				s dstm=sys.GetWorkerMetrics()
+				s zh=$zh
+				i $l(lastdstm) && $l(lastsrcm) && $l(dstm) && $l(srcm) {
+					w !,"Worker job metrics over current refresh interval:"
+					s dt=zh-lastzh
+					f i=2:1:4 { 
+						s $li(lastsrcm,i)=$li(srcm,i)-$li(lastsrcm,i)/dt
+						i $li(lastsrcm,i)<0 s $li(lastsrcm,i)=0
+						s $li(lastdstm,i)=$li(dstm,i)-$li(lastdstm,i)/dt
+						i $li(lastdstm,i)<0 s $li(lastdstm,i)=0
+					}
+					w !,"               #Jobs   global nodes/s   #CPUs utlzd   phys rds/s"
+					w !,"       source ",$j($li(lastsrcm,1),6),$j($li(lastsrcm,3),17,0),$j($li(lastsrcm,2),14,2),$j($li(lastsrcm,4),13,2)
+					w !,"  destination ",$j($li(lastdstm,1),6),$j($li(lastdstm,3),17,0),$j($li(lastdstm,2),14,2),$j($li(lastdstm,4),13,2)
+				} else {
+					w !,"Worker job metrics will be displayed on refresh"
+				}			
+				s lastdstm=dstm,lastsrcm=srcm,lastzh=zh
+			} else { s (lastdstm,lastsrcm)="" }
+			w !
+			i sys.Stats.HasPhaseCounts() {
+				w !,"Queries Completed This Phase: ",sys.Stats.PhaseQueriesCompleted,"/",queries
+				w:queries " (",sys.Stats.PhaseQueriesCompleted/queries*100\1,"%)"
+				w !,"Discrepancies Recorded This Phase: ",sys.Stats.PhaseDiscrepanciesRecorded
+			}
+			w !,"Answers Rcvd (since check started): ",sys.Stats.QueriesMatched," Matched, ",sys.Stats.QueriesUnmatched, " Unmatched"
+			try {
+				w !!,"Press RETURN to refresh, Q to quit, or specify refresh interval <",refresh,"> "
+				s intv=0
+				r intv:refresh
+			} catch { s intv="q" }
+			s:+intv refresh=intv
+			q:($e(intv)="q")||($e(intv)="Q")
+			w !
+		}
+	} catch err {}
+	if $g(device)'="" { close device }
+	throw:$isobject(err) err
+}
+ViewResults(sys,restart) {
+	s restart=0
+	s set=##class(SYS.DataCheck.RangeList).GetActiveResultsListSet(sys.Name)
+	i ##class(SYS.DataCheck.RangeList).GetListSetStartTime(sys.Name,set)="" {
+		w !!,"No results exist yet"
+		q
+	}
+	s list(1)="Active Results"
+	s list(1)=list(1)_"  ("_$zdt(##class(SYS.DataCheck.RangeList).GetListSetStartTime(sys.Name,set),3)_" - "_$s(##class(SYS.DataCheck.RangeList).GetListSetEndTime(sys.Name,set):$zdt(##class(SYS.DataCheck.RangeList).GetListSetEndTime(sys.Name,set),3),1:"present")_")"
+	i ##class(SYS.DataCheck.RangeList).GetListSetStartTime(sys.Name,set-1)'="" {
+		s list(2)="Last Completed Results"
+		s list(2)=list(2)_"  ("_$zdt(##class(SYS.DataCheck.RangeList).GetListSetStartTime(sys.Name,set-1),3)_" - "_$s(##class(SYS.DataCheck.RangeList).GetListSetEndTime(sys.Name,set-1):$zdt(##class(SYS.DataCheck.RangeList).GetListSetEndTime(sys.Name,set-1),3),1:"present")_")"
+	}
+	s v="",rc=##class(%Library.Prompt).GetMenu("Which set would you like to view?",.v,.list,,128+8) 
+	q:((rc'=1)||(v=""))
+	s listset=$case(v,1:set,2:set-1)
+	s discrepancies=0,rc=##class(%Library.Prompt).GetYesNo("Skip globals that matched between source and destination?",.discrepancies,,8) 
+	q:(rc'=1)
+	s details=1,rc=##class(%Library.Prompt).GetYesNo("View detailed subscript ranges?",.details,,8) 
+	q:(rc'=1)
+	s device="",rc=##class(%Library.Device).Get("Device:",.device,,8+4,,4)
+	q:rc'=1
+	try {
+		s starth=##class(SYS.DataCheck.RangeList).GetListSetStartTime(sys.Name,listset)
+		s endh=##class(SYS.DataCheck.RangeList).GetListSetEndTime(sys.Name,listset)
+		i starth="" {
+			w !!,"The results for that time period have been purged."
+			w !,"Please select again."
+			s restart=1
+			q
+		}
+		u device
+			w !,"DataCheck Destination System: ",sys.Name
+			w !,"Results for check started: ",$zdt(starth,3)
+		i endh {
+			w !,"                    ended: ",$zdt(endh,3)
+		} else {
+			w !,"         unfinished as of: ",$zdt($h,3)
+		}
+		w !!
+		i details {
+			s q="SELECT ID"
+		} else {
+			s q="SELECT Database,GlobalName,AggregateState"
+		}
+		s q=q_" FROM SYS_DataCheck.RangeList WHERE (SystemName = ?) AND (ListSet = ?)"
+		s:discrepancies q=q_" AND (AggregateState <> '"_##class(SYS.DataCheck.RangeState).LogicalToDisplay(1)_"')" 
+		s q=q_" ORDER BY Database, GlobalName"
+		s rs=##class(%SQL.Statement).%ExecDirect(.sql,q,sys.Name,listset)
+		if (rs.%SQLCODE)<0 { Throw ##class(%Exception.StatusException).ThrowIfInterrupt($$Error^%apiOBJ(5521,rs.%SQLCODE,rs.%Message)) }
+		i details {
+			s detailcount=0
+			f  {
+				s atend='rs.%Next(.sc) i ('sc) { Throw ##class(%Exception.StatusException).ThrowIfInterrupt(sc) } q:atend
+				s detailcount=detailcount+1
+				d ##class(SYS.DataCheck.RangeList).%OpenId(rs.ID).Output()
+			}
+			w !,detailcount," Globals Reported" 
+		} else {
+			d rs.%Display()
+		}
+		i ##class(SYS.DataCheck.RangeList).GetListSetStartTime(sys.Name,listset)="" {
+			w !,"*** WARNING: The results were purged while this report was running."
+			w !,"             This report is unreliable and should be regenerated."
+			i $i'=$p {
+				u 0
+				w !!,"*** WARNING: The results were purged while this report was running."
+				w !,"             This report is unreliable and should be run again."
+			}	
+			s restart=1
+		}
+	} catch err {
+		c device
+		throw err
+	}
+	c device
+}
+ViewLog(sys) {
+	s ans=100,rc=##class(%Library.Prompt).GetNumber("Number of most recent log entries to display",.ans,1,,,8)
+	q:(rc'=1) 0
+	s rs=##class(%SQL.Statement).%ExecDirect(.sql,"SELECT LogDate,LogTime,Pid,JobType,LogType,Message FROM SYS_DataCheck.LogEntry WHERE SystemName = ? AND Number > ? ORDER BY Number",sys.Name,$g(^SYS.DataCheck(sys.Name,"EventCount"))-ans)
+	if (rs.%SQLCODE)<0 { Throw ##class(%Exception.StatusException).ThrowIfInterrupt($$Error^%apiOBJ(5521,rs.%SQLCODE,rs.%Message)) }
+	w !! d rs.%Display()	
+}
+ViewQueries(sys) {
+	s yn=0,rc=##class(%Library.Prompt).GetYesNo("Display active queries only?",.yn,,8) 
+	q:rc'=1
+	i yn {
+		s q="SELECT Database,InitialRef,TargetRef,Num FROM SYS_DataCheck.Query WHERE (SystemName = ?) AND (Active = 1) ORDER BY ID"
+	} else {
+		s q="SELECT Database,InitialRef,TargetRef,Num,Active FROM SYS_DataCheck.Query WHERE (SystemName = ?) ORDER BY ID"
+	}
+	s rs=##class(%SQL.Statement).%ExecDirect(.sql,q,sys.Name)
+	if (rs.%SQLCODE)<0 { Throw ##class(%Exception.StatusException).ThrowIfInterrupt($$Error^%apiOBJ(5521,rs.%SQLCODE,rs.%Message)) }
+	w !! d rs.%Display()
+}
+ViewDBXMap(sys) {
+	w !,"Database Mappings"
+	w !,"  Source Database (other system) -> Destination Database (this system)"
+	s sourcedb=""
+	f i=1:1 {
+		s destdb=sys.Configuration.DBXMap.GetNext(.sourcedb) q:sourcedb=""
+		s str="  "_sourcedb_" -> "_destdb
+		w !,str
+	}
+}
+ViewWorkflow(sys) {
+	w !,"Current Phase: ",sys.PhaseNumber," - ",sys.Phase.%GetInfoString(1)
+	w !,"Workflow Phases:"
+	s wf=sys.Workflow,key=""
+	f  {
+		s phase=wf.Phases.GetNext(.key) q:key=""
+		w !,"  ",key," - ",phase.%GetInfoString(0)
+	}
+	w !,"  (restart)"
+	s remaining=sys.WorkflowTimeoutRemaining()
+	w !,"Workflow Timeout: ",wf.Timeout,$s(remaining<0:"",'remaining:" (expired)",1:" ("_remaining_" seconds remaining)")
+	w:wf.NewPhaseNumber !,"New Phase Requested: ",wf.NewPhaseNumber
+	w:wf.AbortCurrentPhase !,"Abort Current Phase Requested"
+	w !
+}
+ViewGSRL(sys) {
+	s device="",rc=##class(%Library.Device).Get("Device:",.device,,8+4,,4)
+	q:rc'=1
+	try {
+		u device
+		w !,"DataCheck Destination System: ",sys.Name
+		w !,"Global Selection Subscript Ranges"
+		w !!
+		s q="SELECT ID FROM SYS_DataCheck.RangeList WHERE (SystemName = ?) AND (ListSet = ?) ORDER BY Database, GlobalName"
+		s rs=##class(%SQL.Statement).%ExecDirect(.sql,q,sys.Name,"%GS")
+		if (rs.%SQLCODE)<0 { Throw ##class(%Exception.StatusException).ThrowIfInterrupt($$Error^%apiOBJ(5521,rs.%SQLCODE,rs.%Message)) }
+		f  {
+			s atend='rs.%Next(.sc) i ('sc) { Throw ##class(%Exception.StatusException).ThrowIfInterrupt(sc) } q:atend
+			d ##class(SYS.DataCheck.RangeList).%OpenId(rs.ID).Output()
+		}
+		c device
+	} catch err {
+		c device
+		throw err
+	}
+}
+ViewGlobalSelectionMasks(sys) {
+	s rs=##class(%Library.ResultSet).%New("SYS.DataCheck.Destination:DatabasesToCheck")
+	Set sc=rs.%Execute(sys.Name) Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+	w !,"The default include/exclude mask is: "
+	w !,"    ",sys.RunParameters.DefaultGlobalSelectionMask,!
+	w !,"The following databases are using non-default global selection criteria",!
+	f  {
+		s atend='rs.%Next(.sc) i ('sc) { Throw ##class(%Exception.StatusException).ThrowIfInterrupt(sc) } q:atend
+		i ('rs.%Get("HasMaskDefined")) && ('rs.%Get("HasSubscriptRanges")) {
+			continue
+		} 
+		w !,"  "_rs.%Get("Database")
+		i 'rs.%Get("HasMaskDefined") {
+			w !,"    Default mask, but has global subscript ranges to include/exclude"
+			w !,"    that apply regardless of whether they are included in this mask."
+		} elseif rs.%Get("HasSubscriptRanges") {
+			w !,"    Has global subscript ranges to include/exclude that apply"
+			w !,"    regardless of whether those globals are included in this mask."
+		}
+		i rs.%Get("Directory")="" {
+			i sys.MirrorName="" {
+				w !,"   !! Database has global selection criteria defined but does not have a"
+				w !,"      DataCheck mapping configured.  This database will be skipped."
+			} else {
+				w !,"   !! Database has global selection criteria defined but is not found in"
+				w !,"      the mirror; will be skipped if not found during a check."
+			}
+		}
+		w !,"    ",rs.%Get("Mask")
+	}
+}
+Source() {
+	s list(1)="List Source Systems"
+	s list(2)="View Log"
+	f  {
+		s v="",rc=##class(%Library.Prompt).GetMenu("Option?",.v,.list,,128+8) q:rc'=1
+		q:'v
+		s rs=##class(%SQL.Statement).%ExecDirect(.sql,"SELECT Name,DestinationHost,DestinationName,SYS_DataCheck.System_GetStateBySystem(Name) as State FROM SYS_DataCheck.Source")
+		if (rs.%SQLCODE)<0 { Throw ##class(%Exception.StatusException).ThrowIfInterrupt($$Error^%apiOBJ(5521,rs.%SQLCODE,rs.%Message)) }
+		i v=1 {
+			w !!
+			d rs.%Display()
+			continue
+		}
+		k array
+		s cnt=0
+		f  {
+			s atend='rs.%Next(.sc) i ('sc) { Throw ##class(%Exception.StatusException).ThrowIfInterrupt(sc) } q:atend
+			s array($i(cnt))=rs.Name
+			s array(cnt,0)=" ("_rs.DestinationHost_"/"_rs.DestinationName_"/"_rs.State_")"
+		}
+		i 'cnt {
+			w !!,"No source systems found"
+			continue
+		} elseif cnt=1 { ; auto-select 
+			s name=array(1)
+			w !!,"Source System: "_name
+		} else { ; prompt
+			s name="",rc=##class(%Library.Prompt).GetArray("Source System:",.name,.array,,,,512+8+128)
+		    i (rc'=1) || (name="") continue
+		}
+		s sys=##class(SYS.DataCheck.Source).%OpenId(name)
+		i v=2 d ViewLog(sys) continue
+	}
+}
+	; Prompts for a system name and returns an oref to it or null if none selected
+GetSystem() {
+	s cnt=0
+	s rs=##class(%SQL.Statement).%ExecDirect(.sql,"SELECT Name FROM SYS_DataCheck.Destination")
+	if (rs.%SQLCODE)<0 { Throw ##class(%Exception.StatusException).ThrowIfInterrupt($$Error^%apiOBJ(5521,rs.%SQLCODE,rs.%Message)) }
+	f  {
+		s atend='rs.%Next(.sc) i ('sc) { Throw ##class(%Exception.StatusException).ThrowIfInterrupt(sc) } q:atend
+		s array($i(cnt))=rs.%Get("Name") 
+	}
+	i 'cnt { 
+		w !!,"No destination configuration defined"
+		s name="" 
+	} elseif cnt=1 { ; auto-select the only system defined
+		s name=array(1) 
+		w !!,"Configuration Name: "_name
+	} else { ; prompt
+		s name="",rc=##class(%Library.Prompt).GetArray("Configuration Name:",.name,.array,,,,512+8+128)
+		s:(rc'=1) name=""
+	}
+	i $l(name) {
+		s sys=##class(SYS.DataCheck.Destination).%OpenId(name)
+		d Reload(sys)
+		q sys
+	}
+	q ""
+}
+	; Takes as argument an oref for a destination system
+	; Checks that the system is stopped and offers the user to stop it if not.
+	; Returns true if stopped (-1 if already stopped), false otherwise.
+	; Errors are thrown to the caller.
+GetStopped(sys,required=0) {
+	i sys.GetState()'="Stopped" {
+		w:required !,"This action cannot be performed while the configuration is running"
+		s yn=0,rc=##class(%Library.Prompt).GetYesNo("Stop DataCheck configuration '"_sys.Name_"'?",.yn,,8) 
+		q:('yn)||(rc'=1) 0 
+		w !,"Stopping DataCheck.  This may take several seconds..."
+		Set sc=sys.Stop() Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+		f i=1:1:30 { q:sys.GetState()="Stopped"  h 1 }
+		i sys.GetState()'="Stopped" {	w !,"The configuration has not responded to stop request" q 0 }
+		s ret=1
+		d Reload(sys)
+	} else { s ret=-1 }
+	q ret
+}
+	; Takes as argument an oref, and if modified asks the user to save it
+	; Returns -1 if not modified, 1 if modified and saved, or 0 if the user
+	; chose not to save.
+	; Errors are thrown to the caller
+GetSaved(obj) {
+	i obj.%IsModified() {
+		s yn=1,rc=##class(%Library.Prompt).GetYesNo("Save changes?",.yn,,8)
+		i ('yn)||(rc'=1) {
+			i obj.%Id()'="" { Set sc=obj.%Reload() Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc) }
+			q 0	
+		}
+		Set sc=obj.%Save() Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+		q 1
+	}
+	q -1
+}
+	; Prompts for a local database from the list of databases to check
+GetDatabase(sys) {
+	s rs=##class(%Library.ResultSet).%New("SYS.DataCheck.Destination:DatabasesToCheck")
+	Set sc=rs.%Execute(sys.Name) Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+	f i=1:1 {
+		s atend='rs.%Next(.sc) i ('sc) { Throw ##class(%Exception.StatusException).ThrowIfInterrupt(sc) } q:atend
+		s list(i)=rs.%Get("Database")
+	}
+	i '$d(list) {
+		w !,"No "_$s($l(sys.MirrorName):"Mirrored Databases",1:"Mapped Databases")
+		q ""
+	}
+	s db="",rc=##class(%Library.Prompt).GetArray("Database:",.db,.list,,,,512+8+128+64)
+	q:(rc'=1) ""
+	q db
+}
+	; Prompts for a global name and returns it normalized or null on error
+GetGlobalName() {
+	s name="",rc=##class(%Library.Prompt).GetString("Global Name:",.name,,,,8)
+	q:(name="")||(rc'=1) ""
+	s sc=##class(SYS.DataCheck.GlobalReference).IsValid(name,.norm)
+	i 'sc { 
+		w !,"Error: Invalid global name"
+		q ""
+	}
+	q ##class(SYS.DataCheck.GlobalReference).GlobalName(norm)
+}
+	; Prompts for a global reference for a given global name and returns it normalized or -1 on error.
+GetGlobalReference(globalname,text="Global Reference:") {
+	s help(1)="Enter a global reference with or without subscripts or null for end."
+	s help(2)="The leading ^ may be omitted.  For subscripted references the entire"
+	s help(3)="global name may be omitted and simply begin with open parentheses"
+	s globalname=##class(SYS.DataCheck.GlobalReference).GlobalName(globalname)
+	s gloref="",rc=##class(%Library.Prompt).GetString(text,.gloref,,,.help,8)
+	q:(rc'=1) -1
+	q:gloref="" ""
+	s:$e(gloref)="(" gloref=globalname_gloref
+	s sc=##class(SYS.DataCheck.GlobalReference).IsValid(gloref,.norm)
+	i 'sc { 
+		w !,"Error: Invalid global reference" 
+		q -1
+	}
+	i ##class(SYS.DataCheck.GlobalReference).GlobalName(norm)'=globalname {
+		w !,"Error: Global name does not match"
+		q -1	
+	}
+	q norm
+}
+GetGlobalSelectionMask(default="*",allowdelete=1) {
+	s maskhelp( 1)="A mask, or comma-separated list of masks, to select global names."
+	s maskhelp( 2)="Subscripts are not allowed.  * is all globals, '* no globals."
+	s maskhelp( 3)="The * wildcard as the last character means all globals starting"
+	s maskhelp( 4)="with the preceding characters.  The ' character before a mask"
+	s maskhelp( 5)="indicates globals to be excluded."
+	s maskhelp( 6)=""
+	s maskhelp( 7)="Examples:"
+	s maskhelp( 8)="  * - All globals"
+	s maskhelp( 9)="  '* - No globals"
+	s maskhelp( 8)="  ABC* - All global names starting with ABC"
+	s maskhelp( 9)="  A:D - All global names between A and D"
+	s maskhelp(10)="  A:D,Y* - All global names between A and D, and starting with Y"
+	s maskhelp(11)="  *,'C*,'D* - All globals except those starting with C or D"
+	s m=default
+tryagain
+	w !,"Enter a mask string, * to include all, '* to exclude all, ? for help"
+	w:allowdelete !,"                     ! to delete this mask and revert to default"
+	s rc=##class(%Library.Prompt).GetString("Mask:",.m,,,.maskhelp,8)
+	i (rc'=1) { q "" }
+	i allowdelete && (m="!") {
+		q m
+	}
+	i (m["(") || (m[")") || (m["!") {
+		w !,"Invalid Mask"
+		g tryagain
+	}
+	q m
+}
+GetPrimarySourceRequirement(default=0) {
+	s list(1)="Check primary only (pause until DataCheck source is primary)"
+	s list(2)="Do not check primary (pause when DataCheck source is primary)"
+	s list(3)="No restriction"
+	s v=$case(default,"":"",1:1,-1:2,0:3)
+	s rc=##class(%Library.Prompt).GetMenu("Option?",.v,.list,,128+8) 
+	q:rc'=1 ""
+	q $case(v,"":"",1:1,2:-1,3:0)
+}
+	; Reload the destination system and all referenced objects.
+	; Each reference object must be loaded explicitly in case there
+	; is another oref held by the caller of ^DATACHECK.
+Reload(sys) {
+	Set sc=sys.%Reload() Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+	Set sc=sys.Workflow.%Reload() Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+	Set sc=sys.RunParameters.%Reload() Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+	Set sc=sys.Configuration.%Reload() Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+	Set sc=sys.Stats.%Reload() Throw:('sc) ##class(%Exception.StatusException).ThrowIfInterrupt(sc)
+}
+	; Performs some incomplete screening to check whether this user seems
+	; to have access to the database containing the ^SYS.DataCheck* globals.
+	; Returns 0 for no access, 1 for read access and 2 for write access.
+	; Upon returning 0, the 'resourcename' parameter, if passed by reference,
+	; will be set to the database resource name that requires permission. 
+	; The return value does not guarantee anything about the user's access
+	; to all of ^SYS.DataCheck* global nodes that may be required to use this
+	; utility because global mappings may be arbitrarily complex.  This 
+	; screening is used only to display a message when access is limited
+	; rather than simply letting the utility fail with <PROTECT> errors
+ScreenForDatabasePrivilege(resourcename) PUBLIC {
+	s db=##class(%SYS.Namespace).GetGlobalDest(,"^SYS.DataCheck.SystemD")
+	i $p(db,"^")'="" q 2
+	s resourcename=##class(SYS.Database).%OpenId($p(db,"^",2)).ResourceName
+	q:$system.Security.Check(resourcename,"WRITE") 2
+	q:$system.Security.Check(resourcename,"READ") 1
+	q 0
+}

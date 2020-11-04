@@ -1,0 +1,54 @@
+ROUTINE Wcomm [Type=INT]
+Wcomm ; Communication program; CFL1063, 11/09/04
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+JOB(rtn,P0,P1) ; 
+	Set $zt="^%ET",CDAlive=1
+	Set cmd="JOB "_rtn
+	Set return=$$IjcOpen^%Wprima("VServer")
+	If +return=0 q
+	Set return=$$IjcOpen^%Wprima("Utility")
+	If +return=0 q
+	;
+	Xecute cmd
+	;
+Loop ;
+	Set EmptyBuffers=0,msg=""
+	Set return=$$IjcRead^%Wprima(.msg,"Utility")
+	If return=2 {
+		If CDAlive {
+			Set return=$$IjcMsg^%Wprima(msg,"VServer")
+			If return="CANCEL" {
+				If $$IjcWrite^%Wprima("CA","Utility")
+			}
+		}
+	} ElseIf return=1 { If $i(EmptyBuffers) } Else { Goto Exit }
+	If $e(msg,1,2)="JS" Goto Exit
+	If 'CDAlive Hang:EmptyBuffers=2 1 Goto Loop
+	Set msg="",return=$$IjcRead^%Wprima(.msg,"VServer")
+	If return=2 {
+		If msg'="DS" Set x=$$IjcWrite^%Wprima(msg,"Utility")
+		Else  Set CDAlive=0
+	} ElseIf return=1 { If $i(EmptyBuffers)
+	} Else { /* Read error from CD Server */
+		Set CDAlive=0
+	}
+	Hang:EmptyBuffers=2 1 Goto Loop
+	;
+Exit ;
+	If $$IjcClose^%Wprima("VServer"),$$IjcClose^%Wprima("Utility")
+	Quit

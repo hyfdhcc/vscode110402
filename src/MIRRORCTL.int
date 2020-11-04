@@ -1,0 +1,4552 @@
+ROUTINE MIRRORCTL [Type=INT]
+MIRRORCTL ;Client side of agent process for mirroring  ;Change #: $Change: 4521965 $
+ ; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/sysconfig/mirrorctl.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syMirror.inc#1 $ ($Change: 4521965 $) */
+        /* Initializing is the state a member has at startup until it
+           gets to wait^MIRRORMGR for the 1st time. At that point it has 
+           either become the backup or primary or we set the role to null
+           to indicate that it is up and running as opposed to still getting
+           started */
+				    /* Arbiter failover rules are in effect */
+				    /* Agent contact is required */
+					/* IsOtherNodeDown^ZMIRROR */
+				/* The client supports the arbiter */
+			 	/* This system is connected to the arbiter */
+		  		/* The other failover member is connected to the arbiter */
+		  		/* Either the QOSTimeout changed or the arbiter address changed.
+		  		   we should look up the current values and use them */
+				/* Arbiter job shoud close the connection and exit. The
+				   retry routine can restart the arbiter if conditions
+				   warrent. Generally used with clearing ArbiterSupported
+				   when the backup is removed or demoted. Cleared when
+				   the arbiter exits (eg. its a one time flag). */
+ ;
+ ; Entry points in this module are for internal use only and are
+ ; subject to change in future versions.
+ ; 
+TEST(mirname, agentaddrlist, targguid, basedir, timeout = 5) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s rc=$$tcpopen(mirname,agentaddrlist,targguid,basedir,timeout,0,2)
+	if +rc {
+		if +rc=1 quit $LB(0,"TIMEOUT")
+		if +rc=3 quit $LB(0,"LOCALSSLERR",$P(rc,",",2,999))
+		if +rc=4 quit $LB(0,"SSLERR",$P(rc,",",2,999))
+		quit $LB(0,"ERR",$P(rc,",",2,999))
+	}
+	s io=$P(rc,",",2)
+	s version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("TESTAGENT"))
+	s rc=$$tcpread(io)	
+	close io
+	use saveio 
+	s status=$LG(rc)
+	if status'="OK" {
+	    q $LB(0,"ERR",$LG(rc,2))
+	}
+	s result=$LG(rc,2)
+	;returns $LB(OK,<result>,...)
+	if $LG(result)="OK" quit $LB(1,"SUCCESS")
+	quit $LB(0,$LG(result),$LG(result,2))
+err ;
+	s $zt=""
+	use saveio 
+	c io
+	quit $LB("ERR",0,$ZE)		
+}
+InstanceLookup(addr,instance,timeout=10) PUBLIC {
+	s $zt="err"
+	s addr=$P(addr,",",1)  ;only supports a single address
+	s port=$P(addr,"|",2)
+	s ip=$P(addr,"|")
+	s saveio=$I
+	s io="|TCP|1"_port
+	s timeout=+timeout
+	if 'timeout s timeout=10
+	o io:(/Hostname=ip:/Port=port:/STREAM=1):timeout
+	s ok=$T
+	if 'ok {
+		quit $LB("ERR","Timed out opening connection to "_ip_":"_port)
+	}
+	; Send the string "ISC1QUERYINS " to indicate we're going to send
+	; an instance name we want translated. The message format is 
+	;  <1 byte version - must be 1>
+	;  <1 byte size of length field = we use 2 - this is 'n'>
+	;  <n byte count of # of fields in message - we use 1>
+	;  <n byte # of bytes in field>
+	;  < bytes for field>
+	u io 
+	w "ISC1QUERYINS"
+	w $C(1) ; version code
+	w $C(2) ; size of prefix fields (# of pieces, piece size)
+	w $zwchar(1)  ; # of pieces we're sending
+	w $zwchar($L(instance))
+	w instance
+	w *-3  ;flush output
+	s done=0
+	read id#2:timeout
+	if '$t {
+		s errtext="Failed to read version id"
+		goto fail
+	}
+	s version=$A(id)
+	s bytesize=$a(id,2)
+	read str#bytesize:timeout
+	if '$t {
+		s errtext="Failed to "_bytesize_" byte argcount"
+		goto fail
+	}
+	s argcnt=$case(bytesize,1:$A(str),2:$zwascii(str),4:$zlascii(str))
+	for i=1:1:argcnt {
+	   read str#bytesize:timeout
+	   if '$t {
+		   s errtext="Failed to read size of arg #"_i
+		   goto fail
+	   }
+	   s arglen=$case(bytesize,1:$A(str),2:$zwascii(str),4:$zlascii(str))
+	   read arg(i)#arglen:timeout
+	   if '$t {
+		   s errtext="Failed to read "_arglen_" bytes for arg #"_i
+		   goto fail
+	   }
+	}
+	use saveio
+	close io
+	if argcnt<2 {
+		quit $LB("ERR","Insufficient args returned - expected 2, got "_argcnt)
+	}
+	quit $LB("OK",arg(1),arg(2))		   
+err ;
+	s $zt=""
+	s errtext="Unexpected error: "_$ZE
+fail ;	
+	use saveio
+	close io 
+	quit $LB("ERR",errtext)
+}
+GetStatus(mirname,index) PUBLIC {
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" {
+		quit $LB("ERR",0,"Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	}
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$LG(info,2)
+	s basedir=$LG(info,6)
+	s status=$$GetStatusByAddr(mirname,addrlist,targguid,basedir)
+	quit status
+}
+GetStatusByAddr(mirname,addrlist,targguid,basedir) PUBLIC {
+	; Purpose: Determine the status of Cache' on another mirror member
+	;          Used when a node is starting up and it needs to determine whether
+	;          it is the only mirror member running as if so, it wants to become
+	;          the primary if it can. Also used on running mirror members to determine
+	;          the state of the mirror (eg. is the primary up and running, etc...).
+	;
+	; Returns: Success: $LB(<state>,[<state dependent args...>...])
+	;            where  state = "PRIMARY",<jrncnt>,<troubleflag>,<failovermode>,<systemGUID>
+    ;                                      the node is the active primary server and
+	;                                      jrnfilecnt is current mirror journal
+	;                                      file count. troubleflag is gmirrortrouble flag which could
+	;                                      be 1 if the primary is waiting in trouble state (if 2 then it
+	;                                      would report hung) and failovermode is arbiter v. agent mode.
+	;                                      systemguid is $SYSTEM.ECP.SystemGUID() which we use to detect
+	;                                      loopbacks in the network tables to avoid thinking there are two
+	;                                      primaries because the other address loops back to us.
+	;                           "UP",<jrnfilecnt>
+	;                                      cache is up, the system is not an active backup nor is
+	;                                      it the primary. It could be a backup which is
+	;                                      catching up, it could be hung. jrnfilecnt is from 
+	;                                      the last file in the mirror journal log
+	;                           "DOWN",<jrnfilecnt>
+	;                                      Cache' is not running. jrnfilecnt is from the last 
+	;                                      file in the mirror journal log
+	;                           "HUNG",<jrncnt>,<reason>
+	;                                      Node is the primary but something is wrong
+	;                                      jrnfilecnt is the current mir journal file count,
+	;                                      <reason> is why the node is considered hung
+	;                           "TIMEOUT",0
+	;                                      Timed out trying to open a connection to
+	;                                      the othe rnode. jrnfilecnt is 0
+	;                           "ERR",0,<reason>
+	;                                      some error occured trying to talk to
+	;                                      or while talking to the server. We don't know what
+	;                                      its status is. jrnfilecnt is 0 (this matches the format
+	;                                      from HUNG)
+	s $zt="err"
+	s saveio=$I
+	s io=""
+	s nextlogmsg=60
+	s loopcnt=0
+retry ;
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc {
+		; GetStatus() returns "TIMEOUT" if we timeout trying to 
+		; establish a connection to the remote node. All other
+		; errors return $LB("ERR",<reason>")
+		if +rc=1 quit $LB("TIMEOUT",0)
+		if +rc=3 quit $LB("LOCALSSLERR",0,$P(rc,",",2,999))
+		if +rc=4 quit $LB("SSLERR",0,$P(rc,",",2,999))
+		quit $LB("ERR",0,$P(rc,",",2,999))
+	}
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("STATUS",""))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+	 	use saveio
+	    q $LB("ERR",0,$LG(rc,2))
+	}
+	do tcpclose(io)
+	s io=""
+	s result=$LG(rc,2)
+	if $lg(result)="TRANSIT" {
+		s transittime=$lg(result,3)
+		if transittime>300 {
+			quit $LB("HUNG",$lg(result,2),"Transition timeout expired")
+		}
+		s loopcnt=loopcnt+1
+		if (loopcnt>nextlogmsg) {
+			d $zu(9,"","GetStatus() waiting for transition state to clear or timeout to expire (elapsed time = "_(nextlogmsg/60)_" minutes, current transition time = "_transittime_" seconds)",0,0  /* Informational message */)
+			; after 5 minutes, generate a message every 5 minutes
+			if nextlogmsg<300 {
+				s nextlogmsg=nextlogmsg+60
+			} else {
+				s nextlogmsg=nextlogmsg+300
+			}
+		}
+		h 1  ;we expect the other node to become the primary
+		goto retry
+	}
+	use saveio 
+	quit result ; $LL(result) is 2 or 3 depending on msg type
+err ;
+	s $zt=""
+	use saveio 
+	if io'="" c io
+	quit $LB("ERR",0,$ZE)		
+}
+SetApproval(mirname,index,memberinfo) PUBLIC {
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" {
+		quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	}
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$LG(info,2)
+	s basedir=$LG(info,6)
+	s status=$$SetApprovalByAddr(mirname,addrlist,targguid,basedir,memberinfo)
+	quit status
+}
+SetApprovalByAddr(mirname,addrlist,targguid,basedir,memberinfo) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s io=""
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,0,2)
+	if +rc {
+		if +rc=1 quit $LB("TIMEOUT")
+		quit $LB("ERR",$P(rc,",",2,999))
+	}
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("SETAPPROVAL",$LB(mirname,memberinfo)))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+	 	use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	s io=""
+	s result=$LG(rc,2)
+	use saveio 
+	quit result
+err ;
+	s $zt=""
+	use saveio 
+	if io'="" c io
+	quit $LB("ERR",$ZE)		
+}
+RejectApproval(mirname,index,memberinfo) PUBLIC {
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" {
+		quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	}
+    s mtype=+$LG(info,8)
+    if +$LG(info,8)=0 {
+		s addrlist=$$BuildAgentAddrlist(info)
+		s basedir=$LG(info,6)
+    } else {
+	    s addrlist=$LG(info,3)
+	    s basedir=""
+    }
+    s targguid=$LG(info,2)
+	s status=$$RejectApprovalByAddr(mirname,addrlist,targguid,basedir,memberinfo)
+	quit status
+}
+RejectApprovalByAddr(mirname,addrlist,targguid,basedir,memberinfo) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s SSconn=(basedir="")
+	if SSconn {
+	    s rc=$$EstablishConnection^MIRRORCOMM(mirname,0,$P(addrlist,","),"s",.io,.options,5,0)
+		if (rc '= 1) {
+			quit $LB("TIMEOUT")
+	    }
+	} else {
+		; Passing sslauth as 0 will bypass the GUID check
+		s io=""
+		s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,0,2)
+		if +rc {
+			if +rc=1 quit $LB("TIMEOUT")
+			quit $LB("ERR",$P(rc,",",2,999))
+		}
+		s io=$P(rc,",",2),version=+$P(rc,",",3)
+	}
+	use io
+	do tcpsend(io,$LB("REJAPPROVAL",$LB(mirname,memberinfo),targguid))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	s status=$LG(rc)
+	if status'="OK" {
+		if SSconn { close io } else { d tcpclose(io) } 
+	 	use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	if SSconn { close io } else { d tcpclose(io) }
+	s io=""
+	s result=$LG(rc,2)
+	use saveio 
+	quit result
+err ;
+	s $zt=""
+	use saveio 
+	if $d(io) if SSconn { close io } else { d tcpclose(io) }
+	quit $LB("ERR",$ZE)		
+}
+GetJournalInfo(mirname,id,code,arg="") PUBLIC {
+	; Purpose: Return information from the mirror journal log or from
+	;          journal files themselves from this mirror member.
+	;          Function codes: 1 - get min/max/maxvalid jrnfile counts of files that exist. 
+	;                              arg is ignored  
+	;                          2 - return up to 16KB of information from 
+	;								$SYSTEM.Mirror.GetJournalFileByMjrncnt() 
+	; 	                            starting at the jrncnt specified by 'arg'.
+	;                          3 - return $LB(loginfo,hdrinfo) for journal file 
+	;                               specified by arg where loginfo comes from
+	;  								$SYSTEM.Mirror.GetJournalFileInfo() and header
+	;                               info comes from $$$JRNHDRALL. arg is the journal
+	;                               file count we want information about. 0 gets
+	;                               us info on the 1st file listed in the log. The
+	;                               header info can be "0" if the file is in the log
+	;                               but not on disk.
+	;                          4 & 5 - return jrnfilecnt of minimum required journal file
+	;                               for this node. This is the earliest tp rollback point
+	;                               of a mirrored db or the the journal file we have which
+	;                               isn't validated - which ever is less. Also returns the 
+	;                               value of^MIRROR(<mirname>,"LastConnected") which is the
+	;                               last time this node was a mirror member as the primary or a backup
+	;                               Function 4 returns $LB("DBINFO",<
+	;                          6 - +$G(^MIRROR(<mirname>,"LastJrnfileValidated"),0) [JO2434]
+	;                          7 - return GetMaxDBJrnInfo (jrnfilecnt/jrnfilepos of maximum "up to 
+	;							    date as of" point. Used when setting the valid end of a journal 
+	;                               to detect a journal file which is shorter than it should be [JO2478]
+	;  
+	; Returns; $LB("OK",$LB(value)) where <value> is a function dependent result
+	;          $LB("NOTFOUND") - function 3 didn't find journal file count in log
+	;          $LB("ERR",<reason>)
+	;
+	; See GetJRNINFO for structure of values returned from the various subfunctions
+	;
+	s $zt="err"
+	s saveio=$I
+	s io=""
+  	s info=$G(^SYS("MIRRORSET",mirname,"Member",id))
+    if info="" {
+	    d $zu(9,"","GetJournalInfo failed to locate information about "_mirname_" member id #"_id,1 /* broadcast and log message*/,1  /* Warning */)
+	    quit $LB("ERR","Failed to find Member info for node #"_id_" in "_mirname)
+    }
+    if code=4 || (code=5) s arg=$LG(^SYS("MIRRORSET",mirname,"Member",0))
+    s mtype=+$LG(info,8)
+    if mtype'=0 g relay
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$LG(info,2)
+    s basedir=$lg(info,6)
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("GETJRNINFO",$LB(mirname,code,arg)))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	use saveio 
+	s result=$LG(rc,2)
+	quit result ; $LL(result) is 2 or 3 depending on msg type
+relay ;
+    s name=$lg(info,1)
+	s targguid=$LG(info,2)
+    s status=$$EstablishConnection^MIRRORCOMM(mirname,0,id,"s",.io,.options)
+	if (status '= 1) {
+		d $zu(9,"","GetJournalInfo failed to open connection to "_mirname_":"_name,1 /* broadcast and log message*/,1  /* Warning */)
+		s rc=$LB("ERR","Failed to open connection to "_name)
+		quit rc
+    }
+    s msg=$LB("GETJRNINFO",$LB(mirname,code,arg),targguid)
+    do tcpsend(io,msg)
+    s resp=$$tcpread(io)
+	c io
+	use saveio 
+	if $LG(resp)'="OK" quit $LB("ERR",$LG(resp,2))
+	q $LG(resp,2)
+err ;
+	s $zt=""
+	c:io'="" io s io=""
+	use saveio
+	quit $LB("ERR",$ZE)		
+}
+GetMissingJournalFiles(mirname,index,first,startbyte,last,array,ValidEndRequired=0) PUBLIC {
+	; Purpose: Called when there aren't any other mirror members running
+	;          and we need to become the primary but we don't have all the
+	;          journal data we need yet. We know the mirror journal sequence
+	;          # of the last file we have and the GetStatus() message will tell
+	;          us the highest journal file a given member has, even when it is
+	;          is down. Based on these we can figure out how many journal files
+	;          we need to get up to date. Here we request journal files by # since
+	;          we don't know their names. If we have part of a journal file we
+	;          can tell the server how much we have and it will send us the rest
+	;          rather than the entire file. 
+	;
+	;          ValidEndRequired must be set to 1 if this is an async member connecting
+	;	       to a failover member and we're not connecting to the primary. For
+	;          nodes which connect to relay members it can be set to zero but it is
+	;          very important that an async member doesn't connect to the backup, or 
+	;          to a failover member which is doen and specify this as zero or we may 
+	;          receive journal data which is not 'committed' by the mirror yet (JO2624)
+	;
+	; 	       Any time we retrive a file beyond the end of the current log,
+	;	       $SYSTEM.Mirror.GetJournalFileFromAgent() adds it to the end of the
+	;          log.
+	;
+	;		   Also used when we're starting up and we find we're missing part of
+	;          a file we should have.
+	;
+	;		   array is passed by reference. If its passed, the value of the scalar
+	;          should be 1 to indicate we want the files retrieved loaded into the
+	;          array: array(<mir seq #>) = <filename>,<mir seq #>,<guid>,<timestamp>
+	; 		   This is used when we're retrieving journal files that preceed the end
+	; 		   of the log because $SYSTEM.Mirror.GetJournalFileFromAgent() only adds
+	;          files to the log when they can be appended; when they come after the last
+	;          file in the log. We'll rewrite the entire log with the new files added
+	;          in at the start.
+	;
+	; Returns: Success: $LB("OK")
+	;          Failure: $LB("ERR",reason)
+	s $zt="err"
+	if $$IsRelayClient^MIRRORCOMM(mirname) {
+		s jrnfile=$SYSTEM.Mirror.GetJournalFileByMjrncnt(first,mirname)
+		s jrnfile=$s('+jrnfile:"",1:$P(jrnfile,",",2))
+		if jrnfile'="" {
+			s fd=$zu(78,5,jrnfile,0)
+			if fd'<0 {
+				if startbyte=0 {
+			    	s startbyte=65536*2
+			    	s origpos=0
+				} else {
+					do $zu(78,6,fd)
+					s startbyte=$zu(78,102,startbyte)
+					if startbyte=0 {
+						s startbyte=65536*2
+						s origpos=0
+					} else {
+						s origpos=$ZU(78,101,startbyte)
+						s startbyte = (startbyte \ 65536) * 65536
+					}
+					do $zu(78,7,fd)
+				}
+			} else {
+				s startbyte=0
+				s origpos=0
+			}
+		} else {
+			s startbyte=0
+			s origpos=0
+		}
+		i origpos=0 s origpos=65536*2
+		quit $$GetFilteredJournalFiles^MIRRORCOMM(mirname,1,jrnfile,startbyte,origpos,first,last,.array)
+	}
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$LG(info,2)
+	s basedir=$LG(info,6)
+	s saveio=$I
+	if '$D(array) s array=0
+	for filecnt=first:1:last {
+		Lock +^%ISC.FetchMirrorFile(filecnt):2
+		i '$T {
+			s rc=$LB("ERR","File #"_filecnt_" is currently retrieved by another job")
+			quit
+		}
+		s FileLocked=1
+		d $zu(9,"","Retrieving journal file #"_filecnt_" for mirror "_mirname_" from "_addrlist,0,0  /* Informational message */)
+		s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+		if +rc {
+			s rc=$LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+			Lock -^%ISC.FetchMirrorFile(filecnt)
+			k FileLocked
+			quit
+		}
+		s io=$P(rc,",",2)
+		use io
+		s cmpmode=##class(SYS.MirrorConfiguration).GetCompressionMode(mirname,##class(Config.MirrorMember).isAsyncMember(),1)
+		s rc=$SYSTEM.Mirror.GetJournalFileFromAgent(filecnt, startbyte, mirname,cmpmode, 16, ValidEndRequired)
+		Lock -^%ISC.FetchMirrorFile(filecnt) k FileLocked
+		do tcpclose(io)
+		use 0
+		quit:$LG(rc)'="OK"
+		if +$G(array) {
+			/* Return the string for the log file in the array. */
+			s fname=$lg(rc,2)
+			s jrninfo=$zu(78,22,fname,99)
+			if +jrninfo'=1 {
+				s rc=$LB("ERR","Failed to get journal header info") Quit
+			}
+			s jcnt=$P(jrninfo,",",13+1)
+			if jcnt'=filecnt {
+				s rc=$LB("ERR","Journal count mis-match, "_jcnt_" in file vs. "_filecnt_" in reuqest") Quit
+			}
+			s jguid=$P(jrninfo,",",7+1)
+			s array(filecnt)=fname_","_jcnt_","_jguid_","_$zdate($h,3)_" "_$ztime($p($h,",",2),1)
+		}
+		s startbyte = 0  ;after 1st file, we request the entire file
+	}
+	use saveio 
+	quit rc  ;$LB("OK") or $LB("ERR",<reason>)
+err ;
+	s $zt=""
+	c:$d(io) io
+	Lock:$G(FileLocked) -^%ISC.FetchMirrorFile(filecnt)
+	use:$d(saveio) saveio
+	quit $LB("ERR",$ZE)		
+}
+GetJournalEnd(mirname,index,guid,filecnt) PUBLIC {
+	; Purpose: Called while validating journal files when a mirror member
+	;          is starting up and one or more of its journal files don't have
+	;          valid end points. Either the node was the primary the last time
+	;          it was running or it was a backup which shut down before the
+	;          primary did (eg. it never became the active primary).
+	;
+	; Returns: Success: $LB(1,<validflag>,<endoff>,<sysguid of creator>)
+	;                             <validflag> = 2 if this system is still
+	;                               writing to this file
+	;                   $LB(0) - Journal file never received/requested
+	;                              by this system (eg. hasn't gotten there yet)
+	;                   $LB(-1,<text>) = unexpected error
+	s $zt="err"
+	s saveio=$I
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$lg(info,2)
+	s basedir=$LG(info,6)
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc quit $LB(-1,$P(rc,",",2,999))
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("GETJRNEND",$LB(filecnt,guid)))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	;      <result> = NOTFOUND means the journal file is beyond the end of the
+	;                  journal log
+	;      <result> = OK means the backup has the journal file. Also returns 3 other
+	;                 pieces: <validflag>,<endoff>.
+	;                    <validend> indicates whether the end of the file is marked 
+	;				                valid. If it isn't valid then the highest "end" 
+	;					   	 	    in the mirror is ok to use. If it is valid then 
+	;							    this is the "end" in the mirror. <validend> is set
+	;                               to 2 if this system is still writing to this journal
+	;                               file.
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+		use saveio
+	    q $LB(-1,$LG(rc,2))
+	}
+	s result=$LG(rc,2)
+	s status=$lg(result) 
+	if status="NOTFOUND" {
+	   do tcpclose(io)
+	   use saveio
+	   quit $LB(0)  ;Not in range of log file
+	}
+	if status["SSLERR"||($LG(result,2)["SSL ID") {
+		s $li(result,1)="SSLERR"
+		quit result
+	}
+	if status="ERR" {
+		do tcpclose(io)
+		use saveio
+		quit $LB(-1,$LG(result,2))
+	}
+	if ($LG(result,2)=-1) {
+		do tcpclose(io)
+		s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+		if +rc quit $LB(-1,$P(rc,",",2,999))
+		s io=$P(rc,",",2),version=+$P(rc,",",3)
+		u io s offset=$SYSTEM.Mirror.GetJournalEndFromAgent(filecnt,$LG(result,3))
+		if +offset=0 {
+			do tcpclose(io)
+			use saveio
+			quit $LB(-1,$p(offset,",",2))
+		}
+		s $list(result,2)=0,$list(result,3)=+offset
+	}
+	do tcpclose(io)
+	use saveio
+	; $LB(1,<validflag>,<endoff>,<sysguid>)
+	quit $LB(1,$LG(result,2),$LG(result,3),$LG(result,4)) 
+err ;
+	s $zt=""
+	c io
+	use saveio
+	quit $LB(-1,$ZE)		
+}
+SendJournalEndInfo(mirname,index,guid,filecnt,endoff) PUBLIC {
+	; Purpose: Called while validating journal files when a mirror member
+	;          is starting up and GetJournalEnd() indicated that the other
+	;          mirror member didn't have a valid end for its copy of the journal
+	;          file either. Now that we've seen all the copies of this journal file
+	;          in the mirror we want to set the valid end across the mirror. This
+	;          message goes to the other mirror members so they can write the
+	;          valid end point to their copy of the file, assuming they have
+	;          at least that much of the file.
+	; Returns $LB(0,<text>) = failed
+	;         $LB(1) = succeeded
+	s $zt="err"
+    if +$G(^SYS("MIRRORSET")) {
+	    quit $LB(0,"SendJournalEndInfo should not be called by an async member")
+    }
+	s saveio=$I
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$lg(info,2)
+	s basedir=$LG(info,6)
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc quit $LB(0,$P(rc,",",2,999))
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("SETJRNEND",$LB(filecnt,guid,endoff)))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+		use saveio
+	    q $LB(0,$LG(rc,2))
+	}
+	do tcpclose(io)
+	use saveio 
+	quit $LB(1)
+err ;
+	s $zt=""
+	c io
+	use saveio
+	quit $LB(0,$ZE)		
+}
+ForceNodeDown(mirname,index,Restart=0) PUBLIC {
+	; Purpose: Called when we're taking over the role of the primary mirror
+	;          server and we want to ensure the prior primary is shut down. Also
+	;          used if we detect that the current primary is hung to force a
+	;          mirror failover or, if the user simply decides they want to force
+	;          a node down for some reason (although maybe we should create a shutdown
+	; 		   method for that).
+	;
+	;		   The mirjrncnt/jrnoff returned are the values from the primary
+	;          after the force declared a trouble state. These represent the maximum
+	;          amount of journal data which could be in the mirrored databases on the other
+	;          node (although in reality the jrnoff value probably includes data not yet
+	;          written to the databases).
+	; 
+	; Returns: Success: $LB("OK",mirjrncnt,jrnoff)
+	;          Failure: $LB("ERR",text)
+	;
+	s $zt="err"
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$lg(info,2)
+	s basedir=$LG(info,6)
+	s rc=$$ForceNodeDownByAddr(mirname,addrlist,targguid,basedir,Restart)
+	quit rc
+err ;
+	s $zt=""
+	quit $LB("ERR",$ZE)		
+}
+ForceNodeDownByAddr(mirname,addrlist,targguid,basedir,Restart=0) PUBLIC {
+	s saveio=$I,io=""
+	s $zt="err"
+	s Restart=0
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	If +$G(^MIRROR(mirname,"NoRestartAfterForceDown")) s Restart=0
+	do tcpsend(io,$LB("FORCE",$LB(Restart)))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	use saveio 
+	s result=$LG(rc,2)
+	quit result ; result is either $LB("OK",mirfilecnt,jrnoff) or $LB("ERR",text)
+err ;
+	s $zt=""
+	c io
+	use saveio
+	quit $LB("ERR",$ZE)		
+}
+ResetTrouble(mirname,index) PUBLIC {
+	; Purpose: Called by backup member when it could not take over as primary while
+	;          primary is in 'permanent trouble' state.
+	;          This request will be sent to hung primary to reset its gmirrortroubleflag
+	;          from 2 to 1.
+	; 
+	; Returns: Success: $LB("OK")
+	;          Failure: $LB("ERR",text)
+	;
+	s $zt="err"
+	s saveio=$I
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$lg(info,2)
+	s basedir=$LG(info,6)
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("RESETTROUBLE"))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	use saveio 
+	s result=$LG(rc,2)
+	quit result ; result is either $LB("OK") or $LB("ERR",text)
+err ;
+	s $zt=""
+	c io
+	use saveio
+	quit $LB("ERR",$ZE)		
+}
+SetAgentContactMode(mirname,index,jrnfilecnt) PUBLIC {
+	;
+	s $zt="err"
+	s saveio=$I
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$lg(info,2)
+	s basedir=$LG(info,6)
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("SETAGENTCONTACTMODE",$LB(jrnfilecnt)))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	use saveio 
+	s result=$LG(rc,2)
+	quit result ; $LL(result) is 2 or 3 depending on msg type
+err ;
+	s $zt=""
+	c:$G(io)'="" io s io=""
+	use saveio
+	quit $LB("ERR",$ZE)		
+}
+GetJournalBlock(mirname,index,filecnt,blockoff,length) PUBLIC {
+	; Purpose: Called by backup/async member to get raw content of specific journal
+	;          block with 'length' bytes in the content.
+	; 
+	; Returns: Success: $LB("OK",content of the journal block)
+	;          Failure: $LB("ERR",text)
+	;
+	s $zt="err"
+	s saveio=$I
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$lg(info,2)
+	s basedir=$LG(info,6)
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc quit $LB(-1,$P(rc,",",2,999))
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("GETJRNBLK",$LB(mirname,filecnt,blockoff,length,$SYSTEM.Mirror.IsAsyncMember())))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	;      <result> = ENC means the journal file is encrypted need to decrypt it.
+	;      <result> = OK means the content of the block is received and it is in the next $list.
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	s result=$LG(rc,2)
+	s status=$lg(result) 
+	if status["SSLERR"||($LG(result,2)["SSL ID") {
+		s $li(result,1)="SSLERR"
+		quit result
+	}
+	if status="ERR" {
+		do tcpclose(io)
+		use saveio
+		quit $LB("ERR",$LG(result,2))
+	}
+	if status="ENC" {
+		do tcpclose(io)
+		use saveio
+		s enckey=$LG(result,2),data=$LG(result,3)
+		s data=$zu(78,95,enckey,data,blockoff)
+		if data'="" Quit $LB("OK",$E(data,1,length))
+		quit $LB("ERR","Failed to decrypt journal block from remote")
+	}
+	do tcpclose(io)
+	use saveio
+	quit $LB("OK",$LG(result,2)) 
+err ;
+	s $zt=""
+	c io
+	use saveio
+	quit $LB("ERR",$ZE)		
+}
+ClearLastFileValidFlag(mirname,index) PUBLIC {
+	; Purpose: Called from BecomePrimary just before we create a new
+	;          mirror journal file (PrimaryInit) to clear the LastFileValid
+	;          flag in the memory of the other mirror member, in case it is
+	;          set.
+	;
+	; Returns: Success: $LB("OK")
+	;          Failure: $LB("ERR",text)
+	;          old version which doesn't support message: $LB("UNKNCMD")
+	;
+	s $zt="err"
+	s saveio=$I
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$lg(info,2)
+	s basedir=$LG(info,6)
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc=1 quit $LB("OK")  ;Timeout here is ok
+	if +rc quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("CLRLASTFILEVALID"))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	use saveio 
+	s result=$LG(rc,2)
+	if $LG(result)["SSLERR"||($LG(result,2)["SSL ID") {
+		s $li(result,1)="SSLERR"
+		quit result
+	}
+	if $LG(result)="ERR" {
+		s reason=$LG(result,2)
+		if $E(reason,1,8)="UNKNCMD:" {
+			; We must be talking to an old version which doesn't
+			; understand this message.
+			quit $LB("UNKNCMD")
+		}
+	}
+	quit result ; result will be either $LB("OK") or $LB("ERR",text)
+err ;
+	s $zt=""
+	if $G(io)'="" {
+		c io
+	}
+	use saveio
+	quit $LB("ERR",$ZE)		
+}
+ClearActiveBackup(mirname,index) PUBLIC {
+	; Purpose: Called when a mirror starts up after it verfies that it is
+	;          healthy enough to evaluate whether it should try to become
+	;          the primary (eg. just about when we're ready to fall into restart)
+	;          to clear the active backup flag in the memory of the other
+	;          mirror member should it be set. Once this is cleared the other
+	;          member needs to talk with this node before it can become the
+	;          primary unless it is already in BecomePrimary at the time (in
+	;          which case it continues and may become the primary anyway). The
+	;          active backup flag was a note that the other node could become
+	;          the primary without talking with this node but now that this node
+	;          is up and healthy, that isn't necessary any more and, if this node
+	;          becomes the primary, would be a bad idea.
+	; 
+	; Returns: Success: $LB("OK")
+	;          Failure: $LB("ERR",text)
+	;          old version which doesn't support message: $LB("UNKNCMD")
+	;
+	s $zt="err"
+	s saveio=$I
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$lg(info,2)
+	s basedir=$LG(info,6)
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc=1 {
+		;The ForceBecomePrimaryFlag might force us to become the primary
+		; without contacting the other node to clear the activebackup flag
+		; however in the absence of that, we'll retry until we get in touch
+		; with the node
+		quit $LB("TIMEOUT")
+	}
+	if +rc quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("CLRACTIVEBACKUP"))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	use saveio 
+	s result=$LG(rc,2)
+	if $LG(result)["SSLERR"||($LG(result,2)["SSL ID") {
+		s $li(result,1)="SSLERR"
+		quit result
+	}
+	if $LG(result)="ERR" {
+		s reason=$LG(result,2)
+		if $E(reason,1,8)="UNKNCMD:" {
+			; We must be talking to an old version which doesn't
+			; understand this message.
+			quit $LB("UNKNCMD")
+		}
+	}
+	quit result ; result will be either $LB("OK") or $LB("ERR",text)
+err ;
+	s $zt=""
+	if $G(io)'="" {
+		c io
+	}
+	use saveio
+	quit $LB("ERR",$ZE)		
+}
+SetMirrorNoFailover(targname,mirname="",MemberToBeSet="") PUBLIC {
+	; Purpose: Called as part of "cstop nofailover" which can be executed on
+	;          the primary mirror member to shut it down but block the mirror
+	;          from failing over. This works via the DefinedPrimary [Mirror]
+	;          server. DefinedPrimary is set on each mirror member to the node
+	;		   name of the node which must be the primary. This is cleared when
+	;		   that node starts up next time or manually via ^MIRROR (or the portal
+	; 		   page) via ClearNoFailover().
+	; MemberToBeSet is a list of member name to be set with DefinedPrimary name, it
+	;          is separate by ",". If it is a null string then it will set all
+	;          the members.
+	; 
+	; Returns: Success: $LB("OK")
+	;          Failure: $LB("ERR",text)
+	;
+	s io=""
+	s saveio=$I
+	s $zt="err"
+	s ValidatedMemberOnly=$s(MemberToBeSet'="":1,1:0)
+	if MemberToBeSet="" {
+		if $SYSTEM.Mirror.GetInfo()'[",DEFINED," {
+			; we're not configured as a mirror member, ignore this request
+			quit $LB("OK")
+		}
+		if targname="",$SYSTEM.Mirror.GetInfo()'[",PRIMARY," {
+			quit $LB("ERR","Only the active primary can specify nofailover")
+		}
+	}
+	if mirname="" {
+		s mirname=##class(Config.Mirrors).GetMirrorName()
+		if mirname="" {
+			quit $LB("ERR","Failed to determine mirror name from Config.Mirrors")
+		}
+	} else {
+		s mm=##class(Config.Mirrors).Open(mirname)
+		if '$isobject(mm) {
+			quit $LB("ERR","Mirror set name "_mirname_" is not configured")
+		}
+		s mm=""
+	}
+	s cls=##class(Config.MirrorMember).Open(,,,.rc)
+	if ('rc) {
+		quit $LB("ERR","Failed to open [MirrorMember] section")
+	}
+	s membername=cls.SystemName
+	s cls=""
+ 	Set rs=##class(%Library.ResultSet).%New("Config.MapMirrors:List")
+ 	s rc=rs.Execute(mirname)
+ 	if ('rc) {
+ 	 	quit $LB("ERR","Failed to read list of mirror set members for "_mirname_": "_rc)
+ 	}
+ 	k memberlist
+ 	s memberlist=0  ;in case there aren't any other members
+	while (rs.Next()) {
+	   Set name=rs.Data("Name")
+	   if rs.Data("MemberType")'=0 continue
+	   if MemberToBeSet'=""&&((","_MemberToBeSet_",")'[(","_name_",")) continue
+	   if name'=membername {
+	      s addrlist=rs.Data("AgentAddress")_"|"_rs.Data("AgentPort")
+	      if rs.Data("MirrorAddress")'=rs.Data("AgentAddress") {
+	      	 s addrlist=addrlist_","_rs.Data("MirrorAddress")_"|"_rs.Data("AgentPort")
+	      }
+	      if (rs.Data("ECPAddress")'=rs.Data("AgentAddress")) &&
+	      			(rs.Data("ECPAddress")'=rs.Data("MirrorAddress")) {
+	      	 s addrlist=addrlist_","_rs.Data("ECPAddress")_"|"_rs.Data("AgentPort")
+	      }
+	      s base=rs.Data("InstanceDirectory")
+	      s targguid=rs.Data("GUID")
+	      s memberlist=$I(memberlist)
+	      s memberlist(memberlist)=$LB(name,addrlist,base,targguid)
+	   }
+	}
+	do rs.Close()
+	s rs=""
+	if $G(targname)="" {
+		; defaults to us if not specified.
+		s targname=membername
+	}
+    if $zb(+$SYSTEM.Mirror.DebugFlags(),1,1) do $zu(9,"","Setting defined primary for "_mirname_" mirror to """_targname_"""")
+	for i=1:1:memberlist {
+	   s name=memberlist(i)
+	   s addrlist=$LG(name,2)
+	   s basedir=$LG(name,3)
+	   s targguid=$lg(name,4)
+	   s name=$LG(name)
+	   s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	   if +rc {
+		   s rc=$P(rc,",",2,999)
+		   goto abort  ;rc = error text, i = # node we failed at
+	   }
+	   s io=$P(rc,",",2),version=+$P(rc,",",3)
+	   use io
+	   do tcpsend(io,$LB("SETNOFAILOVER",$LB(targname,mirname,ValidatedMemberOnly)))
+	   s rc=$$tcpread(io)	
+  	   do tcpclose(io)
+	   s io=""
+	   ;returns $LB(OK,<result>,...)
+	   ;    <status> = ERR - something unexpected happened, 2nd $LIST element is <text>
+	   ;    <status> = OK,<result> = success, <result> has more details
+	   if $LG(rc)="OK" {
+		   s rc=$LG(rc,2)
+	   } else {
+		   s rc="0,"_$LG(rc)_": "_$LG(rc,2)
+	   }
+	   if '+rc {
+		   s rc=$P(rc,",",2,$L(rc,","))  ; rc = error text, i = node # we failed at
+		   goto abort
+	   }
+	}
+	if MemberToBeSet=""  {
+		; Great, we got the nofailover flag set on all the
+		; other mirror members. Set it on ourselves and we're good to go.
+		s cls=##class(Config.Mirrors).Open(mirname,,,.rc)
+		if ('rc) {
+			s rc="Failed to open [Mirrors] section for "_mirname_" to set DefinedPrimary"
+			s i=memberlist+1 ; +1 because i is the node we failed to send a message to
+			goto abort
+		}
+		s cls.DefinedPrimary=targname
+		s rc=cls.%Save()
+		if ('rc) {
+			s rc="Failed to save [Mirrors] section to set DefinedPrimary, error = /"_$SYSTEM.Status.GetErrorText(rc)_"/"
+			s i=memberlist+1 ; +1 because i is the node we failed to send a message to
+			goto abort
+		}
+		s cls=""
+	}
+	use saveio
+	quit $LB("OK")  ;succeeded
+err ;
+	s $zt=""
+	if io'="" c io s io=""
+	use saveio
+	quit $LB("ERR",$ZE)		
+abort ;    
+	s origerr=rc
+    d $zu(9,"","Failed to set DefinedPrimary flag in mirror"_$C(10,13,9)_rc,1 /* broadcast and log message*/,1  /* Warning */)
+	if io'="" c io s io=""
+	s end=i-1  ; i is the node we failed to set so end at the one before it
+	for i=1:1:end {
+	   s name=memberlist(i)
+	   s addr=$LG(name,2)
+	   s basedir=$LG(name,3)
+	   s targguid=$LG(name,4)
+	   s name=$LG(name)
+	   s rc=$$tcpopen(mirname,addr,targguid,basedir,5)
+	   if +rc {
+		   s rc=$P(rc,",",2,999)
+		   d $zu(9,"","Connection to "_name_" to clear defined primary failed. "_rc,1 /* broadcast and log message*/,1  /* Warning */)
+	   } else {
+	      s io=$P(rc,",",2),version=+$P(rc,",",3)
+	      use io
+	      do tcpsend(io,$LB("CLEARNOFAILOVER",$lb(membername,mirname,ValidatedMemberOnly)))
+	      s rc=$$tcpread(io)	
+	      do tcpclose(io)
+	      s io=""
+	      ;returns $LB(OK,<result>,...)
+	      ;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	      ;    <status> = OK,<result> = success, <result> has more details
+	      if $LG(rc)="OK" {
+		     s rc=$LG(rc)
+		  } else {
+		     s rc="0,"_$LG(rc)_": "_$LG(rc,2)
+	      }
+		  if '+rc {
+		     s rc=$P(rc,",",2,$L(rc,","))  ; rc = error text, i = node # we failed at
+		     d $zu(9,"","Error clearing defined primary on "_name_". Text = "_rc,1 /* broadcast and log message*/,1  /* Warning */)
+	      }
+	   }
+	}
+	use saveio
+    if $zb(+$SYSTEM.Mirror.DebugFlags(),1,1) do $zu(9,"","DefinedPrimary flag reset to clear")
+    quit $LB("ERR","Failed to set nofailover state: "_origerr)
+}
+ClearMirrorNoFailover(reason="",MemberToBeCleared="") PUBLIC {
+	; Purpose: Called when DefinedPrimary is set and we want to clear it.
+	;          This can be because we're the system defined as the primary
+	;          and we're starting up or because the user has made an explicit
+	;          request to do this.
+	;
+	; Reason = "Primary" when called MIRRORMGR because we're becoming the primary
+	;          and DefinedPrimary is set or because we're the primary and we set
+	;          the no failover flag but now we changed our mind. 
+	; 
+	; Returns: Success: $LB("OK")
+	;          Failure: $LB("ERR",text)
+	;
+	s io=""
+	s saveio=$I
+	s $zt="err"
+	s cls=##class(Config.MirrorMember).Open(,,.rc)
+	if ('rc) {
+		quit $LB("ERR","Failed to open [MirrorMember] section")
+	}
+	s membername=cls.SystemName
+	s mirname=##class(Config.Mirrors).GetMirrorName()
+	if mirname="" {
+		quit $LB("ERR","Failed to determine mirror name from [Mirrors] configuration")
+	}
+	s cls=##class(Config.Mirrors).Open(mirname,,,.rc)
+	if ('rc) {
+		quit $LB("ERR","Failed to open [Mirrors] section for "_mirname)
+	}
+	s curval=cls.DefinedPrimary
+	s reason=$zcvt(reason,"L")  ;lowercase for string comparisons
+	if reason="primary" {
+		if curval="" quit $LB("OK")
+		if (curval '= membername) {
+		   d $zu(9,"","ClearMirrorNoFailover(""STU"") aborting, current defined primary """_curval_""" is not local node ("""_membername_""")",1 /* broadcast and log message*/,1  /* Warning */)
+		   quit $LB("ERR","Local node is not the current defined primary")
+		}
+	}
+ 	Set rs=##class(%Library.ResultSet).%New("Config.MapMirrors:List")
+ 	s rc=rs.Execute(mirname)
+ 	if ('rc) {
+ 	 	quit $LB("ERR","Failed to read list of mirror set members for "_mirname_": "_rc)
+ 	}
+	k errlist
+	s errlist=0  ;its useful to have the count available
+ 	k memberlist
+ 	s memberlist=0  ;avoid errors when there are no other members
+	while (rs.Next()) {
+	   Set name=rs.Data("Name")
+	   if rs.Data("MemberType")'=0 continue
+	   if (name'=membername)&&(MemberToBeCleared=""||((","_MemberToBeCleared_",")[(","_name_","))) {
+	      s addrlist=rs.Data("AgentAddress")_"|"_rs.Data("AgentPort")
+	      if rs.Data("MirrorAddress")'=rs.Data("AgentAddress") {
+	      	 s addrlist=addrlist_","_rs.Data("MirrorAddress")_"|"_rs.Data("AgentPort")
+	      }
+	      if (rs.Data("ECPAddress")'=rs.Data("AgentAddress")) &&
+	      			(rs.Data("ECPAddress")'=rs.Data("MirrorAddress")) {
+	      	 s addrlist=addrlist_","_rs.Data("ECPAddress")_"|"_rs.Data("AgentPort")
+	      }
+	      s base=rs.Data("InstanceDirectory")
+	      s targguid=rs.Data("GUID")
+	      s memberlist=$I(memberlist)
+	      s memberlist(memberlist)=$LB(name,addrlist,base,targguid)
+	   }
+	}
+	do rs.Close()
+	s rs=""
+    if $zb(+$SYSTEM.Mirror.DebugFlags(),1,1) do $zu(9,"","Clearing defined mirror primary of """_curval_"""")
+    if reason="primary" {
+       s newmembername=curval
+    } else {
+	   s newmembername=""
+    }
+	for i=1:1:memberlist {
+	   s name=memberlist(i)
+	   s addrlist=$LG(name,2)
+	   s basedir=$LG(name,3)
+	   s targguid=$lg(name,4)
+	   s name=$LG(name)
+	   s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	   if +rc {
+		   s rc=$P(rc,",",2,999)
+		   s errlist=$I(errlist)
+		   s errlist(errlist)="Failed to connect to "_name_". Error = "_rc
+	   }
+	   s io=$P(rc,",",2),version=+$P(rc,",",3)
+	   use io
+	   do tcpsend(io,$LB("CLEARNOFAILOVER",$lb(newmembername,mirname,MemberToBeCleared'="")))
+	   s rc=$$tcpread(io)	
+	   do tcpclose(io)
+	   s io=""
+	   ;returns $LB(OK,<result>,...)
+	   ;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	   ;    <status> = OK,<result> = success, <result> has more details
+	   if $LG(rc)="OK" {
+		   s rc=$LG(rc,2)
+	   } else {
+		   s rc="0,"_$LG(rc)_": "_$LG(rc,2)
+	   }
+	   if '+rc {
+		   s rc=$P(rc,",",2,$L(rc,","))  ; rc = error text, i = node # we failed at
+		   s errlist=$I(errlist)
+		   s errlist(errlist)="Failed to clear defined primary on  "_name_". Error = "_rc
+	   }
+	}
+	use saveio
+	if curval'=""&&('errlist||(MemberToBeCleared'="")) {
+		s cls.DefinedPrimary=""
+		s rc=cls.%Save()
+		if ('rc) {
+			quit $LB("ERR","Failed to save cleared DefinedPrimary flag, rc = "_rc)
+		}
+		if reason'="primary" {
+		; When we clear the DefinedPrimary flag for some reason other
+		; than the primary is starting then s an event to MIRRORMGR 
+		; so it re-evaluates whether we should become the primary.
+		; ClearNoFailover() does the same thing on the other nodes when
+		; it receives this message.
+	    d post^MIRRORCOMM(mirname,0,0,"CLRDEFPRIMARY:")
+	}
+	}
+	if errlist {
+		s summary=errlist_" errors encountered clearing defined primary flag"
+		f i=1:1:errlist s summary=summary_$C(10,13)_errlist(i)
+	    quit $LB("ERR",summary)		
+	}
+	quit $LB("OK")  ;succeeded
+err ;
+	s $zt=""
+	if io'="" c io s io=""
+	use saveio
+	quit $LB("ERR",$ZE)		
+}
+GetDBList(mirname,id,info="",Flag=0) PUBLIC {
+	; Purpose: Get the list of mirror database names and the corresponding
+	;          local sfn's (for the local db) mounted on a node
+	;
+	; Returns: Success: $LB(<rc>,multiple copies of [<sfn>^<mirrordbname>])
+	;                where  rc = "DOWN" - reached the node but it is down
+	;                            "OK" - the node is up, the rest of the list are a set of
+	;                                      sfn^dbname pairs
+	;                            "TIMEOUT" - timed out trying to reach the node
+	;                            "ERR",0,<reason> - some error occured trying to talk to
+	;                                       or while talking to the server. We don't know what
+	;                                       its status is. jrnfilecnt is 0
+	s $zt="err"  
+	s saveio=$I
+	if $G(info)="" {
+	    s info=$G(^SYS("MIRRORSET",mirname,"Member",id))
+	    if info="" {
+		    d $zu(9,"","GetDBList failed to locate information about "_mirname_" member id #"_id,1 /* broadcast and log message*/,1  /* Warning */)
+		    quit $LB("ERR","Failed to find Member info for node #"_id_" in "_mirname)
+	    }
+	    s SSconn=(+$LG(info,8)'=0)
+	} else {
+	    s SSconn=(id'<101)
+	    if SSconn s id=$lg(info,3) s:id="" SSconn=0
+	}
+	s targguid=$lg(info,2)
+    if SSconn {
+	    s status=$$EstablishConnection^MIRRORCOMM(mirname,0,id,"s",.io,.options)
+	    if (status = 0) S SSConn=0,addrlist=$LG(info,5) goto tryagent
+	    if (status = -2) {
+		    quit $LB("TIMEOUT",0)
+	    }
+		if (status '= 1) {
+			s rc=$LB("ERR",0,"Error code "_status_" establishing a connection to "_$lg(info,1))
+			quit rc
+	    }
+    } else {
+		s addrlist=$$BuildAgentAddrlist(info)
+tryagent s basedir=$lg(info,6)
+		s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+		if +rc {
+			; Return "TIMEOUT" if we timeout trying to 
+			; establish a connection to the remote node. All other
+			; errors return $LB("ERR",<reason>")
+			if +rc=1 quit $LB("TIMEOUT",0)
+			quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),0,$P(rc,",",2,999))
+		}
+		s io=$P(rc,",",2)
+    }
+	use io
+	do tcpsend(io,$LB("GETDBLIST",$LB(mirname,Flag),targguid))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	s status=$LG(rc)
+	if status'="OK" {
+		if SSconn { close io } else { d tcpclose(io) }
+		use saveio
+	    q $LB("ERR",0,$LG(rc,2))
+	}
+	if SSconn { close io } else { d tcpclose(io) }
+	use saveio 
+	s result=$LG(rc,2)
+	quit result ; $LL(result) is 1 or more depending on msg type
+err ;
+	s $zt=""
+	if $d(io) if SSconn { close io } else { d tcpclose(io) }
+	use saveio
+	quit $LB("ERR",0,$ZE)		
+}
+GetNodeInfo(mirname,id,info="") PUBLIC {
+	; Purpose: Get the state of the mirror member 
+	;
+	; Returns: $LB(state,$LB(status),[various parameters depending on node type])
+	; Status is the status string returned by $SYSTEM.Mirror.GetInfo(1)
+	; The various parameters are similar to what's returned from 
+	; $SYSTEM.Mirror.GetInfo(2)
+	; For the primary the values are:
+	;        mirror journal filecount of current file
+	;        current ending offset of current file
+	;        <unused> (0)
+	;        <unused> (0)
+	;        mirror journal file # of transaction rollback search point
+	;        journal index of transaction rollback search point
+	;        name of current journal file
+	; For a backup node the values are:
+	;     	mirror journal file # the system is currently receiving
+	;       end of journal file written to disk
+	;	    mirror journal file # of journal file being restored to dbs
+	;       position of last journal checkpoint in file being restore to dbs
+	;       mirror journal file # of transaction rollback search point
+	;       journal index of transaction rollback search point
+	s $zt="err"
+	s saveio=$I
+	if $G(info)="" {
+	    s info=$G(^SYS("MIRRORSET",mirname,"Member",id))
+	    if info="" {
+		    d $zu(9,"","GetNodeInfo failed to locate information about "_mirname_" member id #"_id,1 /* broadcast and log message*/,1  /* Warning */)
+		    quit $LB("ERR","Failed to find Member info for node #"_id_" in "_mirname)
+	    }
+	    s SSconn=(+$LG(info,8)'=0)
+	} else {
+	    s SSconn=(id'<101)
+	    if SSconn s id=$lg(info,3) s:id="" SSconn=0
+	}
+	s targguid=$lg(info,2)
+    if SSconn {
+	    s status=$$EstablishConnection^MIRRORCOMM(mirname,0,id,"s",.io,.options,3)
+	    if (status = 0) S SSConn=0,addrlist=$LG(info,5) goto tryagent
+	    if (status = -2) {
+		    quit $LB("TIMEOUT",0)
+	    }
+		if (status '= 1) {
+			s rc=$LB("ERR",0,"Error code "_status_" establishing a connection to "_$lg(info,1))
+			quit rc
+	    }
+    } else {
+		s addrlist=$$BuildAgentAddrlist(info)
+tryagent s basedir=$lg(info,6)
+		s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+		if +rc {
+			; Return "TIMEOUT" if we timeout trying to 
+			; establish a connection to the remote node. All other
+			; errors return $LB("ERR",<reason>")
+			if +rc=1 quit $LB("TIMEOUT",0)
+			quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),0,$P(rc,",",2,999))
+		}
+		s io=$P(rc,",",2)
+    }
+	use io
+	do tcpsend(io,$LB("GETNODEINFO",$LB(mirname),targguid))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	s status=$LG(rc)
+	if status'="OK" {
+		if SSconn { close io } else { d tcpclose(io) }
+		use saveio
+	    q $LB("ERR",0,$LG(rc,2))
+	}
+	if SSconn { close io } else { d tcpclose(io) }
+	use saveio 
+	s result=$LG(rc,2)
+	quit result ; $LL(result) is 1 or more depending on msg type
+err ;
+	s $zt=""
+	if $d(io) if SSconn { close io } else { d tcpclose(io) }
+	use saveio
+	quit $LB("ERR",0,$ZE)		
+}
+CheckDBNameInUse(mirname,index,dbname) PUBLIC {
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$lg(info,2)
+	s basedir=$LG(info,6)
+	s rc=$$CheckDBNameInUseByAddr(mirname,addrlist,targguid,basedir,dbname)
+	quit rc
+}
+CheckDBNameInUseByAddr(mirname,addrlist,targguid,basedir,dbname) PUBLIC {
+	; Purpose: Check whether the passed mirror database name is in use
+	;          by a mirror member
+	; Returns: $LB("NOTFOUND") - dbname not found
+	;          $LB("FOUND",<directory>,<Mirror.DBGetInfo(sfn)>,<$zu(49,dirpath>)
+	;                               - dbname is in use by the specified db
+	;          $LB("TIMEOUT") - failed to contact this node
+	;          $LB("ERR",<reason>)
+	;
+	s $zt="err"
+	s saveio=$I
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if (+rc) {
+	   if +rc=1 quit $LB("TIMEOUT",0)
+	   quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+	}
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("LOOKUPDBINFO",$LB(mirname,dbname,1)))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	use saveio 
+	s result=$LG(rc,2)  ;$LB("NOTFOUND") or $LB("FOUND",<directory name>",...)
+	quit result ; 
+err ;
+	s $zt=""
+	c io
+	use saveio
+	quit $LB("ERR",$ZE)		
+}
+SynchDBInfo(mirname,id,dbname,dbguid) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+    s info=$G(^SYS("MIRRORSET",mirname,"Member",id))
+    if info="" {
+	    d $zu(9,"","SynchDBInfo failed to locate information about "_mirname_" member id #"_id,1 /* broadcast and log message*/,1  /* Warning */)
+	    quit $LB("ERR","Failed to find Member info for node #"_id_" in "_mirname)
+    }
+    s SSconn=(+$LG(info,8)'=0)
+	s targguid=$lg(info,2)
+    if SSconn {
+	    s status=$$EstablishConnection^MIRRORCOMM(mirname,0,id,"s",.io,.options)
+	    if (status = 0) S SSConn=0,addrlist=$LG(info,5) goto tryagent
+	    if (status = -2) {
+		    quit $LB("TIMEOUT",0)
+	    }
+		if (status '= 1) {
+			s rc=$LB("ERR",0,"Error code "_status_" establishing a connection to "_$lg(info,1))
+			quit rc
+	    }
+    } else {
+		s addrlist=$$BuildAgentAddrlist(info)
+tryagent s basedir=$lg(info,6)
+		s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+		if +rc {
+			; Return "TIMEOUT" if we timeout trying to 
+			; establish a connection to the remote node. All other
+			; errors return $LB("ERR",<reason>")
+			if +rc=1 quit $LB("TIMEOUT",0)
+			quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),0,$P(rc,",",2,999))
+		}
+		s io=$P(rc,",",2)
+    }
+	use io
+	s id=-1  ;ignored on receiving end
+	do tcpsend(io,$LB("SYNCHDBINFO",$LB(mirname,dbname,dbguid,id),targguid))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		if SSconn { close io } else { d tcpclose(io) }
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	if SSconn { close io } else { d tcpclose(io) }
+	use saveio 
+	s result=$LG(rc,2)
+	quit result ; 
+err ;
+	s $zt=""
+	if $d(io) if SSconn { close io } else { d tcpclose(io) }
+	use saveio
+	quit $LB("ERR",$ZE)		
+}
+GetDBInfo(mirname,addrlist,targguid,basedir,dbname,function) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if (+rc) {
+	   if +rc=1 quit $LB("TIMEOUT",0)
+	   quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),0,$P(rc,",",2,999))
+	}
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("GETDBINFO",$LB(mirname,dbname,function)))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	use saveio 
+	s result=$LG(rc,2)
+	quit result ; 
+err ;
+	s $zt=""
+	c io
+	use saveio
+	quit $LB("ERR",$ZE)		
+}
+GetMultipleDBInfo(mirname,id,dblist) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+    s info=$G(^SYS("MIRRORSET",mirname,"Member",id))
+    if info="" {
+	    d $zu(9,"","SynchDBInfo failed to locate information about "_mirname_" member id #"_id,1 /* broadcast and log message*/,1  /* Warning */)
+	    quit $LB("ERR","Failed to find Member info for node #"_id_" in "_mirname)
+    }
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$lg(info,2)
+	s basedir=$lg(info,6)
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if (+rc) {
+	   if +rc=1 quit $LB("TIMEOUT")
+	   quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+	}
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("GETMULTIDBINFO",$LB(mirname,dblist)))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	use saveio 
+	s result=$LG(rc,2)
+	quit result ; 
+err ;
+	s $zt=""
+	c io
+	use saveio
+	quit $LB("ERR",$ZE)		
+}
+NewFailOverMember(mirname,id,msg) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+    s info=$G(^SYS("MIRRORSET",mirname,"Member",id))
+    if info="" {
+	    d $zu(9,"","NewFailOverMember failed to locate information about "_mirname_" member id #"_id,1 /* broadcast and log message*/,1  /* Warning */)
+	    quit $LB("ERR","Failed to find Member info for node #"_id_" in "_mirname)
+    }
+    s SSconn=(+$LG(info,8)'=0)
+	s targguid=$lg(info,2)
+    if SSconn {
+	    s status=$$EstablishConnection^MIRRORCOMM(mirname,0,id,"s",.io,.options)
+	    if (status = 0) S SSConn=0,addrlist=$LG(info,5) goto tryagent
+	    if (status = -2) {
+		    quit $LB("TIMEOUT",0)
+	    }
+		if (status '= 1) {
+			s rc=$LB("ERR","Error code "_status_" establishing a connection to "_$lg(info,1))
+			quit rc
+	    }
+    } else {
+		s addrlist=$$BuildAgentAddrlist(info)
+tryagent s basedir=$lg(info,6)
+		s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+		if +rc {
+			; Return "TIMEOUT" if we timeout trying to 
+			; establish a connection to the remote node. All other
+			; errors return $LB("ERR",<reason>")
+			if +rc=1 quit $LB("TIMEOUT",0)
+			quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+		}
+		s io=$P(rc,",",2)
+    }
+	use io
+	s id=-1  ;ignored on receiving end
+	do tcpsend(io,$LB("ADDFOMEMBER",$LB(mirname,msg,id),targguid))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		if SSconn { close io } else { d tcpclose(io) } 
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	if SSconn { close io } else { d tcpclose(io) }
+	use saveio 
+	s result=$LG(rc,2)
+	quit result ; 
+err ;
+	s $zt=""
+	i $d(io) if SSconn { close io } else { d tcpclose(io) }
+	use saveio
+	quit $LB("ERR",$ZE)		
+}
+GetDBStatus(mirname,id,sfn,info="") PUBLIC {
+	; Purpose: Get the state of a mirrored database from a mirror member 
+	; The sfn is the local sfn of the database on the remote node
+	;
+	; Returns: $LB(state,$LB(status),[various parameters depending on node type])
+	s $zt="err"
+	s saveio=$I
+	if $G(info)="" {
+	    s info=$G(^SYS("MIRRORSET",mirname,"Member",id))
+	    if info="" {
+		    d $zu(9,"","GetDBStatus failed to locate information about "_mirname_" member id #"_id,1 /* broadcast and log message*/,1  /* Warning */)
+		    quit $LB("ERR","Failed to find Member info for node #"_id_" in "_mirname)
+	    }
+	    s SSconn=(+$LG(info,8)'=0)
+	} else {
+	    s SSconn=(id'<101)
+	    if SSconn s id=$lg(info,3) s:id="" SSconn=0
+	}
+	s targguid=$lg(info,2)
+    if SSconn {
+	    s status=$$EstablishConnection^MIRRORCOMM(mirname,0,id,"s",.io,.options)
+	    if (status = 0) S SSConn=0,addrlist=$LG(info,5) goto tryagent
+		if (status '= 1) {
+			s rc=$LB("DOWN")
+			quit rc
+	    }
+    } else {
+		s addrlist=$$BuildAgentAddrlist(info)
+tryagent s basedir=$lg(info,6)
+		s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+		if +rc {
+			; Return "TIMEOUT" if we timeout trying to 
+			; establish a connection to the remote node. All other
+			; errors return $LB("ERR",<reason>")
+			if +rc=1 quit $LB("TIMEOUT",0)
+			quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),0,$P(rc,",",2,999))
+		}
+		s io=$P(rc,",",2)
+    }
+	use io
+	do tcpsend(io,$LB("GETDBSTATUS",$LB(sfn),targguid))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	s status=$LG(rc)
+	if status'="OK" {
+		if SSconn { close io } else { d tcpclose(io) }
+		use saveio
+	    q $LB("ERR",0,$LG(rc,2))
+	}
+	if SSconn { close io } else { d tcpclose(io) }
+	use saveio 
+	s result=$LG(rc,2)
+	quit result ; $LL(result) is 1 or more depending on msg type
+err ;
+	s $zt=""
+	if $d(io) if SSconn { close io } else { d tcpclose(io) }
+	use saveio
+	quit $LB("ERR",0,$ZE)		
+}
+ActivateSSLConfig(mirnameIN) PUBLIC {
+	; This is called from AuthorizeSSL (which is called by the Agent)
+	; when SSL is enabled for the connection to load the Server side 
+	; SSL configuration for mirror connections into memory. 
+	; 
+	; Returns success/failure
+    i '$SYSTEM.Security.Check("%Admin_Secure","USE") q 0  ;failed
+    if +$G(^SYS("MIRRORSET")) {
+	    s mirname=mirnameIN
+	    goto skipname
+    }
+	s mirname=##class(Config.Mirrors).GetMirrorName()
+	if mirname="" {
+		quit 0
+	}
+	s cls=##class(Config.Mirrors).Open(mirname,,,.rc)
+	if ('rc) {
+		quit 0
+	}
+skipname
+	s config="%MirrorServer"  ;
+    Set cls=##class(Security.SSLConfigs).%OpenId(config,,.status)
+	i '(''status) {
+		quit 0  ;failed to open the config
+	}
+	i cls.Enabled=0 {
+		s cls=""
+		quit 0  ;config not active
+	}
+	s status=cls.Activate()
+	s cls=""
+	i '(''status) {
+		quit 0  ;failed to activate
+	}
+	quit 1 ;success
+}
+GetSSLDNField(type="client") PUBLIC {
+	; opens the %Mirror<type> configuration and finds
+	; the value of the DN field in the Subject line. This is the
+	; name other nodes see us as when we connect via SSL.
+	;
+	; Type is "server" or "client" for %MirrorServer or %MirrorClient
+	;
+	; Returns:  $LB(1,<name>)
+	;           $LB(0,<error text>)
+	;
+	s $zt="err"
+	; convert type so we capitalize the 1st letter
+	s type=$zcvt(type,"l")
+	s $E(type,1)=$zcvt($E(type),"U")
+	if (type'="Client") && (type '= "Server") {
+		quit $LB(0,"Invalid value for node type """_type_"""")
+	}
+	;
+	s sslconfig="%Mirror"_type
+    s x=##class(Security.SSLConfigs).%OpenId(sslconfig,,.rc)
+    if '(''rc) {
+	    k err 
+		Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+		quit $LB(0,err(1))
+    }
+	s file=x.CertificateFile
+  	s x=""
+    o file:"R":2
+    if '$T {
+	    quit $LB(0,"Failed to open certificate file: "_file)
+    }
+    s begin=0  ;JO2953
+	try {
+		use file 
+		for lines=1:1 {
+			read lines(lines) 
+			q:$ZEOF
+			if lines(lines)["BEGIN" {
+				quit:begin  ;Found the end of the 1st certificate, we're done ;JO2953
+				s begin=lines
+			}
+		}
+	} catch {
+		if $ZE'["<ENDOFFILE>" goto err
+	}
+    close file
+    if begin=0 {
+	    quit $LB(0,"Failed to find certificate block in file: "_file)
+	}
+    s lines=lines-1
+	s block=""
+  	for i=begin:1:lines s block=block_lines(i)_$C(10)
+  	s val=$SYSTEM.Encryption.X509GetField(block,"Subject")
+  	if val="" {
+	  	quit $LB(0,"Failed to find subject field in certficate file: "_file)
+  	}
+ 	if $l(val)>255 {
+	 	quit $LB(0,"Subject line in file "_file_" is too long: "_val)
+ 	}
+  	quit $LB(1,val)
+err ;
+	s $zt=""
+	quit $LB(0,"Unexpected error: "_$ze)
+}
+RetrieveMirrorConfig(mirname,index) PUBLIC {
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$lg(info,2)
+	s basedir=$LG(info,6)
+	s rc=$$RetrieveMirrorConfigByAddr(mirname,addrlist,targguid,basedir)
+	quit rc
+}
+RetrieveMirrorConfigByAddr(mirname,addrlist,targguid,basedir) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,0,2)
+	if +rc {
+		; GetStatus() returns "TIMEOUT" if we timeout trying to 
+		; establish a connection to the remote node. All other
+		; errors return $LB("ERR",<reason>")
+		if +rc=1 quit $LB("ERR","TIMEOUT")
+		quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+	}
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("GETCONFIGURATION",$LB(mirname)))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	use saveio 
+	s rc=$LG(rc,2)
+	quit rc  ;$LB(OK,primindex,nodes)  or $LB(xxx,error text)
+err s $zt=""
+	quit $LB("ERR","Unexpected error: "_$ZE)
+}
+ListToNode(list,name) Private {
+	i $e(name,$l(name))=")" {
+		s $e(name,$l(name))=","
+	} else {
+		s name=name_"("
+	}
+	s len=$LL(list)
+	f i=1:1:len {
+		s node=$LG(list,i),sl=$LG(node),tn=name
+		f j=2:1:sl+1 s tn=tn_""""_$LG(node,j)_""","
+		s $e(tn,$l(tn))=")"
+		s @tn=$LG(node,sl+2)
+	}
+}
+ListToLocal(list,%array) Public {
+	; Same as ListToNode but builds results in a local array passed
+	; by reference
+	s len=$LL(list)
+	f i=1:1:len {
+		s node=$LG(list,i),sl=$LG(node),tn="%array("
+		f j=2:1:sl+1 s tn=tn_""""_$LG(node,j)_""","
+		s $e(tn,$l(tn))=")"
+		s @tn=$LG(node,sl+2)
+	}
+}
+IsMirrorServiceEnabled() PUBLIC {
+	; Invoked by the Agent code when it accepts a connection to
+	; determine whether it should proceed or not. If the mirror service
+	; is not enabled then the Agent won't process mirror connection requests
+	; 
+	; Returns 1/0 (for Yes/No)
+	s x=##class(Security.Services).%OpenId($ZCVT("%Service_Mirror","L"),.rc)
+ 	if ('rc) {
+	 	quit 0  ;failure
+ 	}
+	s enabled=$S(x.Enabled:1,1:0)
+	s x=""
+	quit enabled
+}
+RemoveMemberFromConfig(mirname,id,nametoremove) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+    s info=$G(^SYS("MIRRORSET",mirname,"Member",id))
+    if info="" {
+	    d $zu(9,"","RemoveMemberFromConfig failed to locate information about "_mirname_" member id #"_id,1 /* broadcast and log message*/,1  /* Warning */)
+	    quit $LB("ERR","Failed to find Member info for node #"_id_" in "_mirname)
+    }
+    s SSconn=(+$LG(info,8)'=0)
+	s targguid=$lg(info,2)
+    if SSconn {
+	    s status=$$EstablishConnection^MIRRORCOMM(mirname,0,id,"s",.io,.options)
+	    if (status = 0) S SSConn=0,addrlist=$LG(info,5) goto tryagent
+	    if (status '= 1) {
+		    quit "0,TIMEOUT"
+	    }
+    } else {
+		s addrlist=$$BuildAgentAddrlist(info)
+tryagent s basedir=$lg(info,6)
+		s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+		if +rc {
+			; Return "TIMEOUT" if we timeout trying to 
+			; establish a connection to the remote node. All other
+			; errors return $LB("ERR",<reason>")
+			if +rc=1 quit "0,TIMEOUT"
+			quit "0,"_$P(rc,",",2,999)
+		}
+		s io=$P(rc,",",2)
+    }
+	use io
+	do tcpsend(io,$LB("DELMEMBER",$LB(nametoremove,mirname),targguid))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		if SSconn { close io } else { d tcpclose(io) }
+	    use saveio
+	    q "0,"_$LG(rc,2)
+	}
+	if SSconn { close io } else { d tcpclose(io) }
+	use saveio
+	s rc=$LG(rc,2)
+	s status=$LG(rc)
+	if status="NOTFOUND" q -1  ;we weren't listed
+	i status'="OK" {
+		q "0,"_$LG(rc,2)
+	}
+	quit 1
+err ;
+	s $zt=""
+	use saveio
+	if $d(io) if SSconn { close io } else { d tcpclose(io) }
+	quit "0,"_$ZE		
+}
+GetMemberConfigData(mirname,addrlist,targguid,basedir,memberlist="",GetDefinedPrimary=0) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s SSconn=(basedir="")
+	if SSconn {
+	    s rc=$$EstablishConnection^MIRRORCOMM(mirname,0,$P(addrlist,","),"s",.io,.options,5,$s(GetDefinedPrimary||(memberlist'=""&&(memberlist'="**")):1,1:0))
+		if (rc '= 1) {
+			quit $LB(0,"TIMEOUT")
+	    }
+	} else {
+		; Passing sslauth as 0 will bypass the GUID check
+		s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,$s(GetDefinedPrimary||(memberlist'=""&&(memberlist'="**")):1,1:0),2)
+		if +rc {
+			if +rc=3 quit $LB(0,"LOCALSSLERR")
+			if +rc=4 quit $LB(0,"SSLERR")
+			quit $LB(0,"Connection failed: "_$P(rc,",",2,999))
+		}
+		s io=$P(rc,",",2),version=+$P(rc,",",3)
+	}
+	s:memberlist="**" memberlist="*"
+	use io
+	do tcpsend(io,$LB("GETMEMBERS",$LB(mirname,memberlist,GetDefinedPrimary),targguid))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		if SSconn { close io } else { d tcpclose(io) }
+		use saveio
+	    q $LB(0,"Network read error: "_$LG(rc,2))
+	}
+	if SSconn { close io } else { d tcpclose(io) }
+	use saveio
+	s rc=$LG(rc,2)  ;rc is now $LB("ERR",<text>), $LB("OK",<data>) or $LB("OK-NOTVALID",<data>)
+	s val=$LG(rc,2)
+	s val2=$LG(rc,3)  ; this is the MirrorMember section info.
+	s val3=$LG(rc,4)
+	s val4=$LG(rc,5)
+	s val5=+$LG(rc,6)   ; This is the UNICODE value on the remote member.
+	s val6=+$LG(rc,7)   ; This is the EMSManaged value on the remote member.
+	s rc=$LG(rc)
+	if rc="OK-NOTVALID" {
+		quit $LB(-1,val,val2,val3,val4,val5,val6)
+	}
+	if rc="OK" {
+		quit $LB(1,val,val2,val3,val4,val5,val6)
+	}
+	quit $LB(0,val)
+err ;
+	s $zt=""
+	use saveio
+	if $d(io) if SSconn { close io } else { d tcpclose(io) }
+	quit $LB(0,"Unexpected error: "_$ZE)
+}
+AddMemberToConfig(mirname,addrlist,targguid,basedir,nametoadd,paramarray,NewVer=0) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	k valuelist
+	s index=0
+	s p=$O(paramarray(""),1,v)
+	if p="" quit $LB(0,"No values specified in parameter array for new member: "_nametoadd)
+	do {
+		s index=index+1
+		s $list(valuelist,index)=$LB(p,v)
+	    s p=$O(paramarray(p),1,v)
+	} while (p'="")
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc {
+		quit "0,"_$P(rc,",",2,999)
+	}
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB($s(NewVer:"ADDMEMBEX",1:"ADDMEMBER"),$LB(nametoadd,valuelist,mirname)))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+	    use saveio
+	    q "0,"_$LG(rc,2)
+	}
+	do tcpclose(io)
+	use saveio
+	s rc=$LG(rc,2)  ;$LB("OK") or $LB("ERR",<reason>)
+	if $LG(rc)="OK" {
+		s rc=1
+	} else {
+		s rc="0,"_$LG(rc,2)
+	}
+	quit rc  ;
+err ;
+	s $zt=""
+	use saveio
+	c io
+	quit "0,"_$ZE
+}
+GetMirrorConfigData(mirname,addrlist,targguid,basedir) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s SSconn=(basedir="")
+	if SSconn {
+	    s rc=$$EstablishConnection^MIRRORCOMM(mirname,0,$P(addrlist,","),"s",.io,.options)
+		if (rc '= 1) {
+			quit $LB(0,"TIMEOUT")
+	    }
+	} else {
+		; Passing sslauth as 0 will bypass the GUID check
+		s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,0,2)
+		if +rc {
+			quit $LB(0,"Connection failed: "_$P(rc,",",2,999))
+		}
+		s io=$P(rc,",",2),version=+$P(rc,",",3)
+	}
+	use io
+	do tcpsend(io,$LB("GETCONFIG2",$LB(mirname),targguid))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		if SSconn { close io } else { d tcpclose(io) }
+	    use saveio
+	    q $LB(0,"Network read error: "_$LG(rc,2))
+	}
+	if SSconn { close io } else { d tcpclose(io) }
+	use saveio
+	s rc=$LG(rc,2)
+	s val=$LG(rc,2)
+	s EMSManaged=$LG(rc,3)
+	s rc=$LG(rc)
+	if rc="OK" quit $LB(1,val,EMSManaged)
+	quit $LB(0,val,EMSManaged)
+err ;
+	s $zt=""
+	use saveio
+	if $d(io) if SSconn { close io } else { d tcpclose(io) }
+	quit $LB(0,"Unexpected error: "_$ZE)
+}
+SetRecoveryParameters(mirname,index,qostimeout,rpunused,smunused,ttoutunused,arbiterAddrList,compressmode="") PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$lg(info,2)
+	s basedir=$LG(info,6)
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc {
+		quit "0,Connection failed: "_$P(rc,",",2,999)
+	}
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("SETRECOVPARAM",$LB(qostimeout,0,2,0,mirname,arbiterAddrList,compressmode)))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+	    use saveio
+	    q "0,Network read error: "_$LG(rc,2)
+	}
+	do tcpclose(io)
+	use saveio
+	s rc=$LG(rc,2)  ;$LB("OK") or $LB("ERR",<reason>)
+	if $LG(rc)="OK" {
+		s rc=1
+	} else {
+		s rc="0,"_$LG(rc,2)
+	}
+	quit rc  ;
+err ;
+	s $zt=""
+	use saveio
+	c io
+	quit "0,"_$ZE
+}
+GetECPConnectionData(mirname,index,NeedProgagateData) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$lg(info,2)
+	s basedir=$LG(info,6)
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc {
+		; GetStatus() returns "TIMEOUT" if we timeout trying to 
+		; establish a connection to the remote node. All other
+		; errors return $LB("ERR",<reason>")
+		if +rc=1 quit $LB("ERR","TIMEOUT")
+		quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+	}
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("GETECPCONDATA",$LB(mirname,NeedProgagateData)))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+	    use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	use saveio
+	s rc=$LG(rc,2)
+	quit $LB("OK",rc)  ;$LB(OK,nodes)
+err s $zt=""
+	c io
+	use saveio
+	quit $LB("ERR","Unexpected error: "_$ZE)
+}
+GetCacheMirrorVersion(mirname,index) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	s addrlist=$$BuildAgentAddrlist(info)
+	s targguid=$lg(info,2)
+	s basedir=$LG(info,6)
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc {
+		; GetStatus() returns "TIMEOUT" if we timeout trying to 
+		; establish a connection to the remote node. All other
+		; errors return $LB("ERR",<reason>")
+		if +rc=1 quit $LB("ERR","TIMEOUT")
+		quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+	}
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("GETCACHEMIRRORVER",$LB(mirname)))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+	    use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	use saveio
+	s rc=$LG(rc,2)
+	quit rc  ;$LB("OK",<value>) or $LB("ERR",<text")
+err s $zt=""
+	c io
+	use saveio
+	quit $LB("ERR","Unexpected error: "_$ZE)
+}
+ChangeVirtualAddress(mirname,addrlist,targguid,basedir,Type,IPAddr="",Iface="") PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc {
+		; GetStatus() returns "TIMEOUT" if we timeout trying to 
+		; establish a connection to the remote node. All other
+		; errors return $LB("ERR",<reason>")
+		if +rc=1 quit $LB("ERR","TIMEOUT")
+		quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+	}
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("CHANGEVIP",$LB(mirname,Type,IPAddr,Iface)))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	use saveio
+	s rc=$LG($LG(rc,2))
+	quit $LB("OK",rc)  ;$LB(OK,nodes)
+err s $zt=""
+	c io
+	use saveio
+	quit $LB("ERR","Unexpected error: "_$ZE)
+}
+GetAsyncMemberInfo(mirname,id,info="") PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	if $G(info)="" {
+	    s info=$G(^SYS("MIRRORSET",mirname,"Member",id))
+	    if info="" {
+		    d $zu(9,"","GetAsyncMemberInfo failed to locate information about "_mirname_" member id #"_id,1 /* broadcast and log message*/,1  /* Warning */)
+		    quit $LB("ERR","Failed to find Member info for node #"_id_" in "_mirname)
+	    }
+	    if (+$LG(info,8)=0) {
+		    d $zu(9,"","GetAsyncMemberInfo called to retrieve info about failover member ("_mirname_" member id #"_id_")",1 /* broadcast and log message*/,1  /* Warning */)
+		    s $ZE="<NOT AN ASYNC MEMBER>" 
+		    d BACK^%ETN
+		    quit $LB("ERR","Node #"_id_" in "_mirname_" is not an async member")
+	    }		    
+	    s SSconn=1
+	} else {
+	    if (id<101) {
+		    d $zu(9,"","GetAsyncMemberInfo called to retrieve info about failover member ("_mirname_" member id #"_id_")",1 /* broadcast and log message*/,1  /* Warning */)
+		    s $ZE="<NOT AN ASYNC MEMBER>" 
+		    d BACK^%ETN
+		    quit $LB("ERR","Node #"_id_" in "_mirname_" is not an async member")
+	    }		    
+	    s id=$lg(info,3)
+	    s SSconn=(id'="")
+	}
+    s targguid=$lg(info,2)
+    if SSconn {
+	    s status=$$EstablishConnection^MIRRORCOMM(mirname,0,id,"s",.io,.options)
+	    if (status = 0) S SSConn=0 goto tryagent
+	    if (status = -2) {
+		    quit $LB("TIMEOUT",0)
+	    }
+		if (status '= 1) {
+			s rc=$LB("ERR",0,"Error code "_status_" establishing a connection to "_$lg(info,1))
+			quit rc
+	    }
+    } else {
+tryagent s addr=$lg(info,5)
+	    s basedir=$lg(info,6)
+		s rc=$$tcpopen(mirname,addr,targguid,basedir,5)
+		if +rc {
+			; Return "TIMEOUT" if we timeout trying to 
+			; establish a connection to the remote node. All other
+			; errors return $LB("ERR",<reason>")
+			if +rc=1 quit $LB("TIMEOUT",0)
+			quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),0,$P(rc,",",2,999))
+		}
+		s io=$P(rc,",",2)
+    }
+	use io
+	do tcpsend(io,$LB("GETASYNCINFO",$LB(mirname),targguid))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	s status=$LG(rc)
+	if status'="OK" {
+		if SSconn { close io } else { d tcpclose(io) } 
+		use saveio
+	    q $LB("ERR",0,$LG(rc,2))
+	}
+	if SSconn { close io } else { d tcpclose(io) }  ;Always an SScon (superserver connection)
+	use saveio 
+	s result=$LG(rc,2)
+	quit result 
+err ;
+	s $zt=""
+	i $d(io) if SSconn { close io } else { d tcpclose(io) }
+	use saveio
+	quit $LB("ERR",0,$ZE)		
+}
+PromoteToFailover(mirname,addrlist,targguid,basedir,ourname,ourguid,ourtype,CheckConnection=0) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s io=""
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc {
+		; GetStatus() returns "TIMEOUT" if we timeout trying to 
+		; establish a connection to the remote node. All other
+		; errors return $LB("ERR",<reason>")
+		if +rc=1 quit $LB("TIMEOUT")
+		quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+	}
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("PROMOTE",$LB(mirname,ourname,ourguid,ourtype,CheckConnection)))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		d tcpclose(io)
+	 	use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	s io=""
+	use saveio 
+	quit $LG(rc,2)
+err ;
+	s $zt=""
+	use saveio 
+	if io'="" c io
+	quit $LB("ERR",$ZE)		
+}
+DemoteToAsync(mirname,addrlist,targguid,basedir,newfailover,asynctype,StartMirror=0) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s io=""
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc {
+		; GetStatus() returns "TIMEOUT" if we timeout trying to 
+		; establish a connection to the remote node. All other
+		; errors return $LB("ERR",<reason>")
+		if +rc=1 quit $LB("TIMEOUT")
+		quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+	}
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("DEMOTE",$LB(mirname,newfailover,asynctype,StartMirror)))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		d tcpclose(io)
+	 	use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	s io=""
+	use saveio 
+	quit $LG(rc,2)
+err ;
+	s $zt=""
+	use saveio 
+	if io'="" c io
+	quit $LB("ERR",$ZE)		
+}
+NotifyMirrorChange(mirname,id,PrimaryName) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+    s info=$G(^SYS("MIRRORSET",mirname,"Member",id))
+    if info="" {
+	    d $zu(9,"","NotifyMirrorChange failed to locate information about "_mirname_" member id #"_id,1 /* broadcast and log message*/,1  /* Warning */)
+	    quit $LB("ERR","Failed to find Member info for node #"_id_" in "_mirname)
+    }
+    s targguid=$lg(info,2)
+    s SSconn=(+$LG(info,8)'=0)
+    if SSconn {
+	    s status=$$EstablishConnection^MIRRORCOMM(mirname,0,id,"s",.io,.options,1)
+	    if (status = -2) {
+		    quit $LB("TIMEOUT",0)
+	    }
+		if (status '= 1) {
+			s rc=$LB("ERR","Error code "_status_" establishing a connection to "_$lg(info,1))
+			quit rc
+	    }
+    } else {
+		s addrlist=$$BuildAgentAddrlist(info)
+	    s basedir=$lg(info,6)
+		s rc=$$tcpopen(mirname,addrlist,targguid,basedir,1,,1)
+		if +rc {
+			; Return "TIMEOUT" if we timeout trying to 
+			; establish a connection to the remote node. All other
+			; errors return $LB("ERR",<reason>")
+			if +rc=1 quit $LB("TIMEOUT",0)
+			quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+		}
+		s io=$P(rc,",",2)
+    }
+	use io
+	do tcpsend(io,$LB("SYNCHCONFIG",$LB(mirname,PrimaryName),targguid))
+	s rc=$$tcpread(io)	
+	s status=$LG(rc)
+	if status'="OK" {
+		if SSconn { close io } else { d tcpclose(io) }
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	if SSconn { close io } else { d tcpclose(io) }
+	use saveio 
+	s result=$LG(rc,2)
+	quit result ; 
+err ;
+	s $zt=""
+	if $d(io) if SSconn { close io } else { d tcpclose(io) }
+	use saveio
+	quit $LB("ERR",$ZE)		
+}
+GetFailoverTimestamp(mirname,index) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s io=""
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	s addrlist=$$BuildAgentAddrlist(info)
+    s targguid=$lg(info,2)
+	s basedir=$LG(info,6)
+retry ;
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,3,,2)
+	if +rc {
+		; GetStatus() returns "TIMEOUT" if we timeout trying to 
+		; establish a connection to the remote node. All other
+		; errors return $LB("ERR",<reason>")
+		if +rc=1 quit $LB("TIMEOUT",0)
+		quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+	}
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("MIRRORTIME",$LB(mirname)))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>) or $LB(ERR,<reason>)
+	s status=$LG(rc)
+	if status'="OK" {
+		do tcpclose(io)
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	s io=""
+	use saveio 
+	s result=$LG(rc,2)
+	if $LG(result)["SSLERR"||($LG(result,2)["SSL ID") {
+		s $li(result,1)="SSLERR"
+		quit result
+	}
+	if $LG(result)="ERR" {
+		s reason=$LG(result,2)
+		if $E(reason,1,8)="UNKNCMD:" {
+			; We must be talking to an old version which doesn't
+			; understand this message.
+			quit $LB("UNKNCMD",0)
+		}
+	}
+	quit result
+err ;
+	s $zt=""
+	use saveio 
+	if io'="" c io
+	quit $LB("ERR",$ZE)		
+}
+ValidatePartner(mirname,addrlist,targguid,basedir,membername,memberguid) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc=1 {
+		;The ForceBecomePrimaryFlag might force us to become the primary
+		; without contacting the other node to clear the activebackup flag
+		; however in the absence of that, we'll retry until we get in touch
+		; with the node
+		quit $LB("TIMEOUT")
+	}
+	if +rc quit $LB($s(+rc=3:"LOCALSSLERR",1:"ERR"),$P(rc,",",2,999))
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("VALIDATEPARTNER",$LB(mirname,membername,memberguid,$G(^SYS("MIRRORTIME",mirname)))))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	s status=$LG(rc)
+	if status'="OK" {
+		c io 
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	use saveio 
+	s result=$LG(rc,2)
+	if $LG(result)["SSLERR"||($LG(result,2)["SSL ID") {
+		s $li(result,1)="UNKNCMD"
+		quit result
+	}
+	if $LG(result)="ERR" {
+		s reason=$LG(result,2)
+		if $E(reason,1,8)="UNKNCMD:" {
+			; We must be talking to an old version which doesn't
+			; understand this message.
+			quit $LB("UNKNCMD")
+		}
+	}
+	quit result ; result will be either $LB("OK") or $LB("ERR",text)
+err ;
+	s $zt=""
+	if $G(io)'="" {
+		c io
+	}
+	use saveio
+	quit $LB("ERR",$ZE)		
+}
+VerifySSLCertificate(mirname,info,Cert,ReportingMember,NeedCAFile) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s id=$LG(info,3)_"|"_$LG(info,8)_","_$LG(info,4)
+	s rc=$$EstablishConnection^MIRRORCOMM(mirname,0,id,"v",.io,"",2,0)
+	if (rc '= 1) quit $LB("TIMEOUT")
+	s membername=$LG(info)
+	s targguid=$LG(info,2)
+	use io
+	do tcpsend(io,$LB("VERIFYCERT",$LB(mirname,Cert,ReportingMember,membername,NeedCAFile),targguid))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>,...)
+	;    <status> = ERR - something unexpected happened, 2nd element is <text>
+	;    <status> = OK,<result> = success, <result> has more details
+	s status=$LG(rc)
+	if status'="OK" {
+		close io 
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	close io
+	use saveio 
+	s result=$LG(rc,2)
+	quit result 
+err ;
+	s $zt=""
+	i $d(io) close io
+	use saveio
+	quit $LB("ERR",$ZE)		
+}
+NotifyAsyncTypeChanged(mirname,index,membername,asynctype) PUBLIC {
+	s $zt="err"
+	s saveio=$I
+	s io=""
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",index))
+	if info="" quit $LB("ERR","Missing "_$name(^SYS("MIRRORSET",mirname,"Member",index)))
+	s addrlist=$$BuildAgentAddrlist(info)
+    s targguid=$lg(info,2)
+	s basedir=$LG(info,6)
+retry ;
+	s rc=$$tcpopen(mirname,addrlist,targguid,basedir,5,,2)
+	if +rc {
+		; GetStatus() returns "TIMEOUT" if we timeout trying to 
+		; establish a connection to the remote node. All other
+		; errors return $LB("ERR",<reason>")
+		if +rc=1 quit $LB("TIMEOUT",0)
+		quit $LB($s(+rc=3:"LOCALSSLERR",+rc=4:"SSLERR",1:"ERR"),$P(rc,",",2,999))
+	}
+	s io=$P(rc,",",2),version=+$P(rc,",",3)
+	use io
+	do tcpsend(io,$LB("ASYNCTYPE",$LB(mirname,membername,asynctype)))
+	s rc=$$tcpread(io)	
+	;returns $LB(OK,<result>) or $LB(ERR,<reason>)
+	s status=$LG(rc)
+	if status'="OK" {
+		do tcpclose(io)
+		use saveio
+	    q $LB("ERR",$LG(rc,2))
+	}
+	do tcpclose(io)
+	s io=""
+	use saveio 
+	s result=$LG(rc,2)
+	if $LG(result)["SSLERR"||($LG(result,2)["SSL ID") {
+		s $li(result,1)="SSLERR"
+		quit result
+	}
+	if $LG(result)="ERR" {
+		s reason=$LG(result,2)
+		if $E(reason,1,8)="UNKNCMD:" {
+			; We must be talking to an old version which doesn't
+			; understand this message.
+			quit $LB("UNKNCMD",0)
+		}
+	}
+	quit result
+err ;
+	s $zt=""
+	use saveio 
+	if io'="" c io
+	quit $LB("ERR",$ZE)		
+}
+DeleteMirrorMember(arg) PUBLIC {
+	s $zt="err"
+	s singleuser=$LG(arg)
+	s arg=$LG(arg,2)
+	s name=$LG(arg)
+	s mirname=$LG(arg,2)  ;is missing in older versions
+	if mirname="" {
+		s mirname=##class(Config.Mirrors).GetMirrorName()
+		if mirname="" {
+			quit $LB("NOTFOUND")  ;must not be a mirror member
+		}
+	}
+	s x=##class(Config.MapMirrors).Open(mirname,name)
+	if x="" {
+		; name doesn't exist - see if this is an async member
+		s mirname=$P($G(^SYS("MIRRORSET")),"^",2)
+		; return status if we don't find the node to remove
+		s rc=$LB("NOTFOUND") 
+		s id=100  ;Async members start at id #101
+		for  {
+			s info=""
+			s id=$O(^SYS("MIRRORSET",mirname,"Member",id),1,info)
+			q:id=""
+			if $LG(info,1)=name {
+				k ^SYS("MIRRORSET",mirname,"Member",id)
+		 	    s rc=$SYSTEM.Mirror.ServerRemove(name,$LG(info,2))
+			    if rc=-1 {
+			       d $zu(9,""," ServerRemove() failed for deleted async member"_name,1 /* broadcast and log message*/,1  /* Warning */)
+			    }
+				s rc=$LB("OK")
+				quit  ;exit for loop
+			}
+		}
+		quit rc
+	}
+	s x=""  ;close class
+	s x=##class(Config.MapMirrors).Delete(mirname,name)
+	s rc=+x
+	if 'rc {
+		k err 
+		Do DecomposeStatus^%apiOBJ(x,.err,"-d") 
+		quit $LB("ERR",$G(err(1)))  ;error text
+	}
+	quit $LB("OK")
+err ;
+	s $ZT=""
+	quit $LB("ERR","Unexpected error: "_$ZE)
+}
+AddMirrorMember(arg) PUBLIC {
+	;
+	s $zt="err"
+	;
+	s singleuser=$LG(arg)
+	s arg=$LG(arg,2)
+	s name=$LG(arg)
+	s values=$LG(arg,2)
+	s mirname=$LG(arg,3)  ;is missing in older versions
+	if mirname="" {
+		s mirname=##class(Config.Mirrors).GetMirrorName()
+		if mirname="" {
+			quit $LB("ERR","Mirror name not found")
+		}
+	}
+	k p
+	for i=1:1:$LL(values) {
+		s pair=$LG(values,i)
+		s key=$LG(pair,1)
+		s val=$LG(pair,2)
+		s p(key)=val
+	}		
+	if $SYSTEM.Mirror.IsPrimary(),+$G(p("MemberType"))=0,$G(^SYS("MIRRORSET",mirname,"Member"),0)'=0 {
+		Quit $LB("ERR","Backup member already existed in primary member")
+	}
+	s x=##class(Config.MapMirrors).Create(mirname,name,.p)
+	s rc=+x
+	if 'rc {
+		k err 
+		Do DecomposeStatus^%apiOBJ(x,.err,"-d") 
+		quit $LB("ERR",$G(err(1)))  ;error text
+	}
+	quit $LB("OK")
+err ;
+	s $ZT=""
+	quit $LB("ERR","Unexpected error: "_$ZE)
+}
+GetMirrorMembers(arg) PUBLIC {
+	;
+	s $zt="err"
+	s singleuser=$LG(arg)
+	s arg=$LG(arg,2)
+	s mirname=$LG(arg)  ;is missing in older versions
+	if mirname="" {
+		s mirname=##class(Config.Mirrors).GetMirrorName()
+		if mirname="" {
+			quit $LB("ERR","Mirror name not found")
+		}
+	}
+	s mlist=$lg(arg,2),GetDefinedPrimary=+$lg(arg,3)
+	if +singleuser {
+	   S Status=##Class(Config.CPF).Read(,1024)
+	   if ('Status) quit $LB("ERR","Failed to load the cpf file: "_$SYSTEM.Status.GetErrorText(Status))
+	}
+	if GetDefinedPrimary {
+		s cls=##class(Config.Mirrors).Open(mirname,,,.rc)
+		if ('rc) quit $LB("ERR","Failed to open Config.Mirrors("_mirname_") to get defined primary: "_$SYSTEM.Status.GetErrorText(rc))
+		s definedprimary = cls.DefinedPrimary
+		s cls=""
+	}
+	;
+	; Validflag indicates whether we're listed in the config of the
+	; active mirror members. Until then, our information can't be
+	; trusted because there could be nodes we don't know about (who
+	; are active members).
+	s mm=##class(Config.MirrorMember).Open(,,.rc)
+	if (''rc) {
+		s validflag=mm.ValidatedMember
+		s ourname=mm.SystemName
+	} else {
+		s validflag=0
+		s ourname=""
+	}
+	s mm=""
+ 	k errlist
+ 	s errlist=0
+	if mlist="*" {
+		k value s MirrorsData=""
+		s x=##class(Config.Mirrors).Get(mirname,.values)
+		s rc=+x
+		if 'rc {
+			s errlist=$i(errlist)
+			s errlist(errlist)=$LB(mirname,$SYSTEM.Status.GetErrorText(x))  ;error text
+		} else {
+			s index=0
+			s key=$O(values(""),1,val)
+			s MirrorsData=""
+			while key'="" {
+				s index=index+1
+				s $list(MirrorsData,index)=$LB(key,val)
+				s key=$O(values(key),1,val)
+			}
+		}
+	}
+ 	Set rs=##class(%Library.ResultSet).%New("Config.MapMirrors:List")
+ 	s rc=rs.Execute(mirname)
+ 	if 'rc quit $LB(0,"Failed locating defined mirror set members of "_mirname_": "_rc)
+ 	s mirdata=""
+ 	s mircnt=0
+ 	s ourdata=""
+	while (rs.Next()) {
+	   Set name=rs.Data("Name")
+	   set isourname=0
+	   if mlist'="*" {
+		   if $s(mlist="":rs.Data("MemberType")'=0,1:(","_mlist_",")'[(","_name_",")) {
+			   continue
+		   }
+	   } elseif rs.Data("MemberType")'=0&&(name=ourname) {
+		   s isourname=1
+	   }
+	   k values
+	   s x=##class(Config.MapMirrors).Get(mirname,name,.values)
+	   s rc=+x
+	   if 'rc {
+		  k err 
+		  Do DecomposeStatus^%apiOBJ(x,.err,"-d")
+		  s errlist=$i(errlist)
+		  s errlist(errlist)=$LB(name,$G(err(1)))  ;error text
+	   } else {
+	      s index=0
+	      s key=$O(values(""),1,val)
+	      s retval=""
+		  while key'="" {
+		     s index=index+1
+		     s $list(retval,index)=$LB(key,val)
+			 s key=$O(values(key),1,val)
+		  }
+		  if isourname s ourdata=$LB(name,retval)
+		  s $list(mirdata,$i(mircnt))=$LB(name,retval)
+		}
+	}
+	do rs.Close()
+	s rs=""
+	if errlist {
+		quit $LB("ERR",errlist(1))  ;return one of the errors
+	}
+	;
+	s UNICODE=''$zbitget($zversion(0),1),EMSManaged=##class(EMS.Instance).IsManaged("Config.Mirrors")
+	if validflag {
+	    quit $lb("OK",mirdata,ourdata,$G(definedprimary),$G(MirrorsData),UNICODE,EMSManaged)
+	} else {
+	    quit $lb("OK-NOTVALID",mirdata,ourdata,$G(definedprimary),$G(MirrorsData),UNICODE,EMSManaged)
+	}	
+err ;
+	s $ZT=""
+	quit $LB("ERR","Unexpected error: "_$ZE)
+}
+GetMirrorConfig2(arg) PUBLIC {
+	;
+	s $zt="err"
+	s singleuser=$LG(arg)
+	s arg=$LG(arg,2)
+	s mirname=$LG(arg)  ;is missing in older versions
+	s EMSManaged=##class(EMS.Instance).IsManaged("Config.Mirrors")
+	if mirname="" {
+		s mirname=##class(Config.Mirrors).GetMirrorName()
+		if mirname="" {
+			quit $LB("ERR","Mirror name not found",EMSManaged)
+		}
+	}
+	k values
+	s x=##class(Config.Mirrors).Get(mirname,.values)
+	s rc=+x
+	if 'rc {
+		k err 
+		Do DecomposeStatus^%apiOBJ(x,.err,"-d")
+		quit $LB("ERR",$G(err(1)),EMSManaged)  ;error text
+	}
+	s values("MirrorName")=mirname
+	s index=0
+	s key=$O(values(""),1,val)
+	s retval=""
+	while key'="" {
+		s index=index+1
+		s $list(retval,index)=$LB(key,val)
+		s key=$O(values(key),1,val)
+	}
+	s index=index+1,$list(retval,index)=$LB("UNICODE",''$zbitget($zversion(0),1))
+	quit $LB("OK",retval,EMSManaged)
+err ;
+	s $ZT=""
+	quit $LB("ERR","Unexpected error: "_$ZE,EMSManaged)
+}
+GetReportingIDs(arg) PUBLIC {
+	s $zt="err"
+	quit $lb("OK","")
+err ;
+	s $ZT=""
+	quit $LB("ERR","Unexpected error: "_$ZE)
+}
+SetNoFailover(arg) PUBLIC {
+	s singleuser=$LG(arg)
+	s arg=$LG(arg,2)
+	s name=$LG(arg)
+	if name="" quit "0,Missing mirror name in defined primary message"
+	s mirname=$LG(arg,2)  ;is missing in older versions
+	if mirname="" {
+		s mirname=##class(Config.Mirrors).GetMirrorName()
+		if mirname="" {
+			quit "0,Mirror name not found"
+		}
+	}
+	if +singleuser {
+	   ; load the .cpf file so we don't fail if its changed on disk but not in "memory"
+	   S Status=##Class(Config.CPF).Read(,1024)
+	   if ('Status) quit "0,Failed to load the cpf file"
+	}
+	if +$LG(arg,3) {
+		s cls=##class(Config.MirrorMember).Open()
+		if $isobject(cls) {
+			s cls.ValidatedMember=0
+			s rc=cls.%Save()
+			s cls=""
+			if ('rc) quit "0,Failed to clear Config.MirrorMember.ValidatedMember. Error:"_$SYSTEM.Status.GetErrorText(rc)
+		}
+		quit 1
+	}
+	s cls=##class(Config.Mirrors).Open(mirname,,,.rc)
+	if ('rc) quit "0,Failed to open Config.Mirrors("_mirname_") to set defined primary"
+	s cls.DefinedPrimary=name
+	s rc=cls.%Save()
+	s cls=""
+	if ('rc) quit "0,Failed to save Config.Mirrors("_mirname_") with DefinedPrimary change"
+	quit 1
+}
+ClearNoFailover(arg) PUBLIC {
+	s singleuser=$LG(arg)
+	s arg=$LG(arg,2)
+	s expectedname=$LG(arg)
+	s mirname=$LG(arg,2)  ;is missing in older versions
+	if mirname="" {
+		s mirname=##class(Config.Mirrors).GetMirrorName()
+		if mirname="" {
+			quit "0,Mirror name not found"
+		}
+	}
+	if +singleuser {
+	   ; load the .cpf file so we don't fail if its changed on disk but not in "memory"
+	   S Status=##Class(Config.CPF).Read(,1024)
+	   if ('Status) quit "0,Failed to load the cpf file"
+	}
+	if +$LG(arg,3) {
+		s cls=##class(Config.MirrorMember).Open()
+		if $isobject(cls) {
+			s cls.ValidatedMember=1
+			s rc=cls.%Save()
+			s cls=""
+			if ('rc) quit "0,Failed to clear Config.MirrorMember.ValidatedMember. Error:"_$SYSTEM.Status.GetErrorText(rc)
+		}
+		quit 1
+	}
+	s cls=##class(Config.Mirrors).Open(mirname,,,.rc)
+	if ('rc) quit "0,Failed to open Config.Mirrors("_mirname_") to set defined primary"
+	if cls.DefinedPrimary'="" {
+	   if (expectedname'="") && (cls.DefinedPrimary '= expectedname) {
+		  quit "0,DefinedPrimary value ("_cls.DefinedPrimary_") doesn't match expected value ("_expectedname_"). Not cleared"
+	   }
+	   s cls.DefinedPrimary=""
+	   s rc=cls.%Save()
+	   if ('rc) quit "0,Failed to save Config.Mirrors("_mirname_") with cleared DefinedPrimary"
+	}
+	s cls=""
+	if '+singleuser,expectedname="" {
+		; If we're attached to the running version and we weren't passed an
+		; expected name then post an event to MIRRORMGR so it re-evaluates whether
+		; we should become the primary. When expectedname isn't null that means
+		; that a node started up and found it was listed as the DefinedPrimary.
+		; There's no need to see if we should become the primary in that case
+		; because the other node will either become the primary or we'll get
+		; notified if it fails & shuts down.
+	    d post^MIRRORCOMM(mirname,0,0,"CLRDEFPRIMARY:")
+	}
+	quit 1
+}
+GetJournalFileRange(mirname) {
+	;Get the journal file count of the last file in the log
+	s rc=$SYSTEM.Mirror.GetLastJournalFilename(mirname)
+	if rc<1 {
+		if rc=0 quit $LB("NOTFOUND")
+		quit $LB("ERR","Error reading journal log to locate last file: "_rc)
+	}
+	s lastfilecnt=+rc
+	; Now find the journal file count of the 1st file in the log
+	s info=$SYSTEM.Mirror.GetJournalFileInfo(mirname,"")
+	if +info<1 {
+		; it shouldn't be 0 because we already found the log once already
+		quit $LB("ERR","Failed to read 1st file in journal log: "_info)
+	}
+	s fname=$P(info,",",2)
+	s filecnt=$p(info,",",3)
+	s jrnhdr=$zu(78,22,fname,99)
+	while ('+jrnhdr),(filecnt<=lastfilecnt) {
+		s filecnt=filecnt+1
+		s file=$SYSTEM.Mirror.GetJournalFileByMjrncnt(filecnt,mirname)
+		if +file {  ;should be non-zero because the prior file was in the log
+			s fname=$P(file,",",2)
+			s jrnhdr=$zu(78,22,fname,99)
+		}
+	}
+	if '+jrnhdr {
+		; there are files in the log but none found on disk
+		quit $LB("NOTFOUND")
+	}
+	s firstfilecnt=filecnt
+	s filecnt=lastfilecnt+1
+	s jrnhdr=""
+	do {
+		s filecnt=filecnt-1
+		s file=$SYSTEM.Mirror.GetJournalFileByMjrncnt(filecnt,mirname)
+		if +file {  ;should be in the log because lastfilecnt>filecnt>firstfilecnt
+			s fname=$P(file,",",2)
+			s jrnhdr=$zu(78,22,fname,99)
+		}
+	} while ('+jrnhdr) && (filecnt > firstfilecnt)
+	s lastfilecnt=filecnt
+	quit $LB("OK",$LB(firstfilecnt,lastfilecnt))
+}
+GetJRNINFO(args) PUBLIC {
+	; Invoked by the agent in response to a GETJRNINFO message which
+	; is set from GetJournalInfo().
+	; 
+	; See GetJournalInfo() for the arguments in 'args'
+	;
+	s $ZT="err"
+	s singleuser=$LG(args)
+	s args=$LG(args,2)
+	s mirname=$LG(args,1)
+	s func=$LG(args,2)
+	s val=$LG(args,3)  ;value varies with function code
+	if func=1 {  ;Get jrnfilecnt of oldest/most recent files which we have
+		Quit $$GetJournalFileRange(mirname)
+	}
+	if func=2 {
+		; return $SYSTEM.Mirror.GetJournalFileByMjrncnt() info on a set of files
+		; starting with the jrncnt passed and going until we reach the end
+		; or our return string is >16KB. 16KB is an arbitrary value that is
+		; small enough to be handled by all systems and large enough so that
+		; if there's lots of data, we're sending it back in reasonably sized
+		; chunks.
+		s start=val
+		s result=""
+		s cnt=0
+		s info=$SYSTEM.Mirror.GetJournalFileByMjrncnt(val,mirname)
+		while (+info>0) && ($L(result)<16000) {
+			s cnt=cnt+1
+			s $LIST(result,cnt)=$P(info,",",2,$L(info,","))
+			s val=val+1
+			s info=$SYSTEM.Mirror.GetJournalFileByMjrncnt(val,mirname)
+		}
+		quit $LB("OK",$LB(start,cnt,result))
+	}
+	if func=3 {
+		; Send back $LB(log journal info,jrnhdr info) for the specified
+		; filecount. If the filecount is 0, then send back info for
+		; the 1st file we know about.
+		if val=0 {
+			s info="1,"  ;null filename will get 1st file in log
+		} else {
+		   s info=$SYSTEM.Mirror.GetJournalFileByMjrncnt(val,mirname)
+		}
+		if +info>0 {
+			s fname=$P(info,",",2)
+			; both jrninfo & hdrinfo start with a return status but
+			; we pass that status back
+			s jrninfo=$SYSTEM.Mirror.GetJournalFileInfo(mirname,fname)
+			if fname="" {
+				s fname=$P(jrninfo,",",2)
+			}
+			s hdrinfo=$zu(78,22,fname,99)
+			s res=$lb(jrninfo,hdrinfo)
+			quit $LB("OK",res)
+		} else {
+			if info=0 {
+				quit $LB("NOTFOUND") ; file not found
+			} else {
+				quit $LB("ERR","Error "_info_" finding id #"_val_" in log file")
+			}
+		}
+	}
+	if (func=4) || (func=5) {  
+	   ;                                                                   ;JO2367+
+	   ;Send back min journal file # required by this node to recover
+	   ; its mirrored databases. The minimum required point is the transaction
+	   ; rollback point required by the database with the minimum checkpoint
+	   ; value. Since the transaction rollback point is in the journal file we
+	   ; may not be able to look it up. 
+	   ; Returns: func 4: $LB("DBINFO",<minfilecnt>,<minendoff>,<lastconnected>) 
+	   ;          func 5: $LB("OK",<minfilecnt>,<minendoff>,<lastconnected>) 
+	   ;  
+	   ;          <minfilecnt> and <minendoff> represent the earliest journal file
+	   ;                 position required for transaction of a db from this mirror.
+	   ;          <lastconnected> is "<role>^$ztimestamp" from the last time this
+	   ;              node connected as a backup or was the primary.
+	   ; 
+	   ; The intention is that func=4 becomes obsolete and removed but for now,
+	   ; we add func 5 with $LB("OK",...) and then in 2012.1 we can change the callers
+	   ; to use func 5 and then we can remove support for func=4 the release after
+	   ; that...
+	   ;                                                                   ;JO2367-
+	   s mindbinfo=$$GetMinDBJrnInfo^MIRRORMGR(mirname)
+	   if '$LG(mindbinfo) {
+		   quit $LB("ERR","Failed to read minimum db info, err="_$LG(mindbinfo,2))
+	   }
+	   if val'="" {
+		   s lastconnected=$G(^MIRROR(mirname,"lastconnected",val))
+	   } else {
+		   s lastconnected=""
+		   s x=$o(^MIRROR(mirname,"lastconnected",""),1,lastconnected)
+	   }
+	   s minjrncnt=$LG(mindbinfo,2)
+	   s minendoff=$LG(mindbinfo,3)
+	   if (func=4) quit $LB("DBINFO",minjrncnt,minendoff,lastconnected)  
+ 	   quit $LB("OK",minjrncnt,minendoff,lastconnected)  
+	}
+	if (func = 6) {
+ 	   s val=+$G(^MIRROR(mirname,"lastvalidjrnfile"))
+	   quit $LB("OK",$LB(val))
+	}
+	if (func = 7) {
+	   s dbmaxinfo=$$GetMaxDBJrnInfo^MIRRORMGR(mirname)
+	   if '$LG(dbmaxinfo) {
+		   s dbmaxinfo=$LB(0,0,0)  ;dbmaxjrnfilecnt=0, dbmaxjrnpos=0
+	   }
+	   ; dbmaxinfo=$Lb(rc,<jrnfilecnt>,<jrnendoff>)
+	   s dbmaxjrnfilecnt=$lg(dbmaxinfo,2)
+	   s dbmaxjrnpos=$LG(dbmaxinfo,3)
+	   quit $LB("OK",$LB(dbmaxjrnfilecnt,dbmaxjrnpos))
+	}
+	if (func = 8) {
+		s minjrnfile=$LG(val,2),Type=$LG(val)
+		s:Type=2 Type=Type_","_$LG(val,3)
+		s minjrnfile=##class(SYS.Mirror).PrimaryPurgeCriteria(mirname,minjrnfile,"",Type,.ReasonToKeep)
+		if 'minjrnfile Quit $LB("NOTFOUND",ReasonToKeep)
+		quit $LB("OK",$LB(minjrnfile,ReasonToKeep))
+	}
+	quit $LB("ERR","Unrecognized function code #"_func)
+err ;
+	s $zt=""
+	quit $LB("ERR","Unexpected error: "_$ZE)	
+}
+LookupDBInfo(arg) PUBLIC {
+	; Invoked by the agent in response to a LOOKUPDBINFO message which
+	; is sent from GetDBInfo(). 
+	;
+	s arg=$LG(arg,2)
+	s val=$LG(arg,2)  ;mirror database name ":mirror:<mirname>:dbname"
+	s uppercase=+$LG(arg,3)
+	s rc=$$CheckMirrorDBName^MIRRORCOMM(val,uppercase)
+	if $LG(rc)="FOUND" {
+		s rcx=$$GetJournalFileRange($LG(arg,1))
+		if $LG(rcx)="OK" {
+			s range=$LG(rcx,2)
+			s rc=rc_$LB($LG(range)_","_$LG(range,2))
+		} else {
+			s rc=rc_$LB(0)
+		}
+	}
+	Quit rc
+}
+SendDBInfo(arg) PUBLIC {
+	s $zt="err"
+	s singleuser=$LG(arg)
+	s arg=$LG(arg,2)
+	s mirname=$LG(arg,1)
+	s dbname=$LG(arg,2)
+	s dbguid=$LG(arg,3)
+	s id=$LG(arg,4)
+	s msg="SENDDBINFO:"_dbname_":"_dbguid
+	d post^MIRRORCOMM(mirname,0,id,msg)
+	q $LB("OK")
+err ;
+	quit $LB("ERR",$ze)	   
+}
+AgentGetDBInfo(arg) PUBLIC {
+	s $zt="err"
+	s singleuser=$LG(arg)
+	s arg=$LG(arg,2)
+	s mirname=$LG(arg,1)
+	s mirdbname=$LG(arg,2)  ;:mirror:<mirname>:<dbname>
+	s func=$LG(arg,3)
+	; Find the mirrored db by name
+	s mname=$ZCVT($P(mirdbname,":",3),"U")  ;mirror names are uppercase
+	s dbname=$P(mirdbname,":",4)
+	s rc=$$GetMirroredDBList^MIRRORCOMM(mname,.dblist,0)
+	if '$LG(rc) {
+		s errmsg=$LG(rc,2)
+		goto fail
+	}
+	s dir=$o(dblist(""),1,infostr)
+	while dir'="" {
+		s dirdbname=$P(infostr,"^",2)
+		s dirmname=$P(infostr,"^",8)
+		if dirmname=mname,dirdbname=dbname {
+			goto found
+		}
+		s dir=$o(dblist(dir),1,infostr)
+	}
+	quit $LB("ERR","NOTFOUND")
+found ;
+	s info=$ZU(49,dir)
+	quit $LB("OK",dir,info)
+err ;
+	s $zt=""
+	s errmsg=$ZE
+fail ;	
+	quit $LB("ERR",errmsg)	   
+}
+GETMULTIDBINFO(arg) PUBLIC {
+	s $zt="err"
+	s singleuser=$LG(arg)
+	s arg=$LG(arg,2)
+	s mirname=$LG(arg,1)
+	s dblist=$LG(arg,2)
+ 	s mirrorbit=+$ZU(40,8,28)
+ 	s result=""
+	for i=1:1:$listlength(dblist) {
+		s dir=$li(dblist,i)
+		s info=$ZU(49,dir)
+		if (+info<-1) {
+			s result=result_$LB("")
+			continue
+		}
+ 	    s dbattrib=+$p(info,",",17)  ;even when not mounted, $ZU(49) data is returned
+	    ;skip this db if its not marked as mirrored
+ 	    if $zb(+dbattrib,+mirrorbit,1)=0 {
+			s result=result_$LB("")
+			continue
+ 	    }
+ 	    s info=$SYSTEM.Mirror.DBGetInfoByName(0,dir)
+ 	    if info="DOWN" {
+			s result=result_$LB("")
+			continue
+ 	    }
+ 	    if (info="") || (mirname'="" && (mirname'=$P(info,"^",8))) {
+			s result=result_$LB("")
+			continue
+ 	    }
+        s result=result_$LB(info)
+	}
+	quit $LB("OK",result)
+err ;
+	quit $LB("ERR",$ze)	   
+}
+AddFOMember(arg) PUBLIC {
+	s $zt="err"
+	s singleuser=$LG(arg)
+	s arg=$LG(arg,2)
+	s mirname=$LG(arg,1)
+	s msg=$LG(arg,2)
+	s id=$LG(arg,3)
+	i '0 {
+		d ##Class(Config.CPF).FileToName(.CPFFile,.CPFName)
+		i $g(^|"^^"_$zu(12)|SYS("CONFIG",CPFName,"CPFTimeStamp"))'=##Class(%Library.File).GetFileDateModified(CPFFile,1) {
+			Quit $LB("ERR","Restart or reactivation required because the CPF file "_CPFFile_" has been modified, but not activated")
+		}
+	}
+	if $SYSTEM.Mirror.IsPrimary(),msg'[":" {
+		if $e(msg,*)=$c(0) {
+			s msg=$e(msg,1,*-1)
+			s newtype=0
+			s idx=$O(^SYS("MIRRORSET",mirname,"Member",101-1),1,info)
+			while idx'="" {
+				i msg=$LG(info) s found=1 q
+				s idx=$O(^SYS("MIRRORSET",mirname,"Member",idx),1,info)
+			}
+			if idx="" {
+				Quit $LB("ERR","The "_msg_" is not found, could not change its type to failover")
+			}
+		} else {
+			s newtype=2
+			if $LG($G(^SYS("MIRRORSET",mirname,"Member",1)))'=msg {
+				s idx=$O(^SYS("MIRRORSET",mirname,"Member",101-1),1,info)
+				while idx'="" {
+					i msg=$LG(info) q
+					s idx=$O(^SYS("MIRRORSET",mirname,"Member",idx),1,info)
+				}
+				if idx'="",$LG(info,8)=newtype Quit $LB("OK")
+				Quit $LB("ERR","The "_msg_" is not found, could not change its type to async")
+			}
+		}
+		s props("MemberType")=newtype
+		s rc=##class(Config.MapMirrors).Modify(mirname,msg,.props)
+		if ('rc) {
+			Quit $LB("ERR","Failed to change "_msg_"'s type to "_$s(newtype=2:"async",1:"failover"))
+		}
+		if newtype=2 {
+			d post^MIRRORCOMM(mirname,0,id,"DELMEMBER:"_msg)
+		} else {
+			d post^MIRRORCOMM(mirname,0,idx,"ADDMEMBER:")
+		}
+		quit $LB("OK")
+	}
+	s msg=$s(msg[":":"NEWFOMEMBER:",1:"DELFOMEMBER:")_msg
+	d post^MIRRORCOMM(mirname,0,id,msg)
+	q $LB("OK")
+err ;
+	quit $LB("ERR",$ze)	   
+}
+SetRECOVPARAM(arg) PUBLIC {
+	s $zt="err"
+	s singleuser=$LG(arg)
+	s arg=$LG(arg,2)
+	s mirname=$lg(arg,5)
+	if mirname="" {
+		s mirname=##class(Config.Mirrors).GetMirrorName()
+		if mirname="" {
+			quit $LB("ERR","Mirror name not found")
+		}
+	}
+	s p("QOSTimeout")=$LG(arg,1)
+	if $LL(arg)>=6 {  ;arbiteraddreslist is #6
+		s p("ArbiterNode")=$LG(arg,6)
+	}
+	if $LG(arg,7)'="" {
+		Set rc=##class(Config.Mirrors).GetClassProperties("",.ClassProperties)
+		If (''rc),ClassProperties["CompressionForFailoverMembers" {
+			s p("CompressionForFailoverMembers")=+$p($LG(arg,7),"^",1)
+			s p("CompressionForAsyncMembers")=+$p($LG(arg,7),"^",2)
+		}
+	}
+	s x=##class(Config.Mirrors).Modify(mirname,.p)
+	s rc=+x
+	if 'rc {
+		k err 
+		Do DecomposeStatus^%apiOBJ(x,.err,"-d") 
+		quit $LB("ERR",$G(err(1)))  ;error text
+	}
+	quit $LB("OK")
+err ;
+	s $ZT=""
+	quit $LB("ERR","Unexpected error: "_$ZE)
+}
+AuthorizeSSL(arg) PUBLIC {
+	s $zt="err"
+	s singleuser=$LG(arg)
+	s arg=$LG(arg,2)
+	s mirname=$p(arg,","),io=$p(arg,",",2),sslon=$p(arg,",",3)
+	s x=##class(Security.Services).%OpenId($ZCVT("%Service_Mirror","L"),,.rc)
+	if ('rc) {
+	 	k err
+    	Do DecomposeStatus^%apiOBJ(rc,.err,"-d")
+    	s msg="Failed to check status of MirroringingService: "_err(1)
+    	d $zu(9,"",msg)
+    	d tcpsend(io,$LB("ERR",msg))
+    	quit -1
+	}
+	if 'x.Enabled {
+    	s msg="Mirror Service is disabled"
+    	d $zu(9,"",msg)
+    	d tcpsend(io,$LB("ERR",msg))
+		quit -1
+	}
+	i sslon="" {
+		s sslon=+$G(^SYS("MIRRORSET",mirname,"UseSSL"),0)
+		if 'sslon {
+		   ; Note that we're looking at the last value loaded here but that's
+		   ; ok in this case. It would be a lot of overhead on every connection
+		   ; to open the Config class to get the current value.
+		   s info=$G(^SYS("MIRRORSET",mirname,"Member",0))
+		   s EncryptConnection=$zb(+$LG(info,11),2,1) ; Bit #2 means encrypt incoming connections
+		   if EncryptConnection {
+			   s sslon=1
+		   }
+		}
+	}
+	s requireAuthorization=0
+	if sslon || requireAuthorization {
+		if '$$ActivateSSLConfig(mirname) {
+			s msg="Failed to load SSL configuration"
+			d $zu(9,"",msg)
+			d tcpsend(io,$LB("ERR",msg))
+			q -1
+		}
+	}
+	s rc=$$SSLServer(mirname,io,sslon,requireAuthorization)
+	if +rc < 0 {
+		if +rc>-3 {
+			d $zu(9,"",$p(rc,",",2))
+		} else {
+			d tcpsend(io,$LB("ERR",$p(rc,",",2)))
+		}
+		q -1
+	}
+	quit +rc
+err ;
+	s $ZT="",rs="",msg="AuthorizeSSL error $ZE="_$ze
+	d $zu(9,"",msg)
+	d tcpsend(io,$LB("ERR",msg))
+	quit -1
+}
+GetMirrorConfig(mirname) PUBLIC {
+	s $zt="err"
+	s res=""
+	m ^||mirconfig=^SYS("MIRRORSET",mirname)
+	s ^||mirconfig("SSLReq")=##class(Security.System).%OpenId("SYSTEM").SSLSuperServer
+	s query=$q(^||mirconfig(""),1,value)
+	while query'="" {
+		s ql=$ql(query),sub=$LB(ql)
+		for i=1:1:ql s sub=sub_$LB($qs(query,i))
+		s sub=sub_$LB(value)
+		s res=res_$LB(sub)
+		s query=$q(@query,1,value)
+	}
+	quit res
+err quit ""
+}
+SendECPConnectionData(arg) PUBLIC {
+	s $zt="err"
+	s mirname=$LG($LG(arg,2))
+	s NeedECPData=$LG($LG(arg,2),2),res=""
+	if NeedECPData=""||(NeedECPData=1) {
+		s res=$LB($G(^%SYS("LASTSESSIONGUIDMIR"))),cnt=1
+		s sys=$O(^%SYS("SERVICE","ECPMIRs",""),1,data)
+		while sys'="" {
+			s res=res_$LB($LB(sys,data)),cnt=cnt+1
+			s sys=$O(^%SYS("SERVICE","ECPMIRs",sys),1,data)
+		}
+		quit:NeedECPData="" $LB(cnt)_res
+		s res=$LB(cnt)_res
+	}
+	s res2="",cnt=0
+	if +NeedECPData>0 {
+		s sys=$O(^MIRROR(mirname,"LastJrnfileSent",""),1,data)
+		while sys'="" {
+			s res2=res2_$LB($LB(sys,data)),cnt=cnt+1
+			s sys=$O(^MIRROR(mirname,"LastJrnfileSent",sys),1,data)
+		}
+		s res=res_$LB(cnt)_res2
+	} else {                        ;JO2386+
+		s res=res_$LB(0)            ;JO2386-
+	}
+	; The ECPSessionVersion global gets set when a node starts up.
+	; In a mirror we want to propagate it from the primary to the
+	; backup so that when the backup parses the data in the ^%SYS("SERVICE")
+	; tree, it uses the session version # from the primary which created
+	; that data.
+	s res=res_$LB(1)_$LB($G(^%SYS("SERVICE","ECPSessionVersion")))
+	s res2="",cnt=0
+	if +NeedECPData>0 {
+		s sys=$O(^MIRROR(mirname,"lastdisconnected",""),1,data)
+		while sys'="" {
+			if $p(data,"^")="PRIMARY" s res2=res2_$LB($LB(sys,data)),cnt=cnt+1
+			s sys=$O(^MIRROR(mirname,"lastdisconnected",sys),1,data)
+		}
+		s res=res_$LB(cnt)_res2
+	} else {
+		s res=res_$LB(0)
+	}
+	quit $s(res="":$LB(0),1:res)
+err quit $LB(0,$ZE)
+}
+ChangeVIP(arg) PUBLIC {
+	s $zt="err"
+	s info=$LG(arg,2)
+	s mirname=$LG(info)
+	s Type=$LG(info,2)
+	s IPAddr=$LG(info,3)
+	s Iface=$LG(info,4)
+	if Type {
+		s rc=$$AddVirtualAddress^MIRRORMGR(mirname,IPAddr,1)
+	} else {
+		s rc=$$DeleteVirtualAddress^MIRRORMGR(mirname,IPAddr,1,Iface)
+	}
+	Quit rc
+err quit $LB("0,"_$ZE)
+}
+AsyncMemberInfo(arg) PUBLIC {
+	s $zt="err"
+	s singleuser=$LG(arg)
+	s arg=$LG(arg,2)
+	s mirname=$LG(arg,1)
+	s obj=##class(Config.MirrorMember).Open(,,,.rc)
+	if ('rc) {
+		s Type = 0
+	} else {
+		s Type = obj.AsyncMemberType
+	}
+	s rc=##class(SYS.MirrorConfiguration).DoSSLConfigurationsExist(.dn)
+	if '(''rc) s dn=""
+	q $LB("OK",Type,$g(dn),"")
+err ;
+	quit $LB("ERR",$ze)	   
+}
+PROMOTE(arg) PUBLIC {
+	s $zt="err"
+	if $SYSTEM.Mirror.GetInfo()'["PRIMARY" quit $LB("ERR","Promote request could not be processed by non-primary member")
+	s singleuser=$LG(arg)
+	if singleuser quit $LB("ERR","Promote could not be run on a single user mode.")
+	s trouble=+$p($SYSTEM.Mirror.GetInfo(2),",",12)
+	if trouble quit $LB("ERR","Promote request could not be processed by primary member in trouble state ("_trouble_")")
+	s arg=$LG(arg,2)
+	s mirname=$LG(arg,1)
+	s sysname=$LG(arg,2)
+	s guid=$LG(arg,3)
+	s asynctype=$LG(arg,4)
+	s CheckConnection=+$LG(arg,5)
+	s obj=##class(Config.MapMirrors).Open(mirname,sysname,,,.status)
+	if ('status) {
+		Quit $LB("ERR","Promote could not find the matched name "_sysname_" in mirror set "_mirname_" error:"_$SYSTEM.Status.GetErrorText(status))
+	}
+	if obj.MemberType=0 {
+		Quit $LB("ERR","Promote failed. Member "_sysname_" is already a failover member")
+	}
+	if obj.GUID'=guid {
+		Quit $LB("ERR","Promote failed. Member "_sysname_" has different GUID "_obj.GUID_" vs "_guid)
+	}
+	s id=$o(^SYS("MIRRORSET",mirname,"Member",101-1),1,minfo)
+	while (id'="") {
+		quit:$lg(minfo)=sysname
+		s id=$o(^SYS("MIRRORSET",mirname,"Member",id),1,minfo)
+	}
+	if id="" {
+		Quit $LB("ERR","Promote could not find the matched name "_sysname_" in ^SYS(""MIRRORSET"")")
+	}
+	if $G(^SYS("MIRRORSET",mirname,"Member"))>0 {
+		s info=$G(^SYS("MIRRORSET",mirname,"Member",1))
+		s name=$LG(info)
+		if CheckConnection {
+			s clientcnt=$SYSTEM.Mirror.ClientQuery()
+			if +clientcnt {
+				s found=0
+				for id=1:1:clientcnt {
+					s infox=$SYSTEM.Mirror.ClientQuery(id)
+					if +infox,name=$P(infox,",",2) {
+						s found=1
+						quit
+					}
+				}
+				if found {
+					Quit $LB("ERR","Primary found "_name_" is connected while its agent is not accessible by promoting DR.")
+				}
+			}
+			s addrlist=$$BuildAgentAddrlist(info)
+			s basedir=$LG(info,6)
+			s targguid=$LG(info,2)
+			s status=$$TEST(mirname,addrlist,targguid,basedir,2)
+			if $LG(status) {
+				Quit $LB("ERR","Primary found agent of "_name_" is accessible while its agent is not accessible by promoting DR.")
+			}
+		}
+		s StartMirror=(+$LG(info,10))
+		k props s props("MemberType")=asynctype
+		s status=##class(Config.MapMirrors).Modify(mirname,name,.props)
+		if ('status) {
+			Quit $LB("ERR","Promote could not demote another failover member "_name_", error:"_$SYSTEM.Status.GetErrorText(status))
+		}
+		s $list(minfo,8)=0
+		s addrlist=$$BuildAgentAddrlist(info)
+		s basedir=$LG(info,6)
+		s targguid=$LG(info,2)
+		s status=$$DemoteToAsync(mirname,addrlist,targguid,basedir,minfo,asynctype,StartMirror)
+		if $LG(status)'="OK" {
+			d $zu(9,"","DemoteToAsync for "_name_" failed with "_$lg(status,2),1 /* broadcast and log message*/,1  /* Warning */)
+		}
+	}
+	s obj.MemberType=0
+	s status=obj.%Save()
+	if ('status) {
+		Quit $LB("ERR","Promote failed. Failover to save the new failover member "_sysname_". Error:"_$SYSTEM.Status.GetErrorText(status))
+	}
+	s msg="PROMOTE:"_sysname
+	d post^MIRRORCOMM(mirname,0,0,msg)
+	quit $LB("OK")
+err ;
+	quit $LB("ERR",$ze)	   
+}
+DEMOTE(arg) PUBLIC {
+	if $SYSTEM.Mirror.GetInfo()["PRIMARY" quit $LB("ERR","Demote request could not be processed by primary member")
+	s singleuser=$LG(arg)
+	if singleuser quit $LB("ERR","Demote could not be run on single user mode.")
+	s arg=$LG(arg,2)
+	s mirname=$LG(arg,1)
+	s cls=##class(Config.Mirrors).Open(mirname)
+	s cls.DefinedPrimary=""
+	s rc=cls.%Save()
+	s cls=""
+	s status=##class(SYS.MirrorConfiguration).DemoteToAsyncMember(mirname,$LG(arg,2),$LG(arg,3),0,+$LG(arg,4))
+	if ('status) {
+		Quit $LB("ERR","Failed to Demote to Async member. Error:"_$SYSTEM.Status.GetErrorText(status))
+	}
+	Quit $LB("OK")
+err ;
+	quit $LB("ERR",$ze)	   
+}
+SYNCHCONFIG(arg) PUBLIC {
+	s singleuser=$LG(arg)
+	if singleuser quit $LB("ERR","SYNCHCONFIG could not be run on a single user mode.")
+	s arg=$LG(arg,2)
+	s mirname=$LG(arg,1)
+	s primaryname=$LG(arg,2)
+	s msg="SYNCHCONFIG:"_primaryname
+	d post^MIRRORCOMM(mirname,0,0,msg)
+	quit $LB("OK")
+err ;
+	quit $LB("ERR",$ze)	   
+}
+MIRRORTIME(arg) PUBLIC {
+	s $zt="err"
+	s singleuser=$LG(arg)
+	if +singleuser {
+		S Status=##Class(Config.CPF).Read(,1024)
+		if ('Status) quit $LB("ERR","Failed to load the cpf file: "_$SYSTEM.Status.GetErrorText(Status))
+	}
+	s mm=##class(Config.MirrorMember).Open(,,.rc)
+	if '(''rc)||('mm.ValidatedMember) {
+		quit $LB("OK","")
+	}
+	s mm=""
+	s arg=$LG(arg,2)
+	s mirname=$LG(arg,1)
+	s rc=$G(^SYS("MIRRORTIME",mirname))
+	s definedprimary=""
+	s cls=##class(Config.Mirrors).Open(mirname,,,.rcx)
+	if '('rcx) {
+		s definedprimary = cls.DefinedPrimary
+		s cls=""
+	}
+	s FailoverNode=0
+	s MemberObj=##class(Config.MirrorMember).Open()
+	if $isobject(MemberObj) {
+		s ourname=MemberObj.SystemName
+		s MemberObj=""
+		if ourname'="" {
+			s OurMember=##class(Config.MapMirrors).Open(mirname,ourname,,,.rcx)
+			if '('rcx) {
+				s FailoverNode=(OurMember.MemberType=0)
+			}
+			s OurMember=""
+		}
+	}
+	quit $LB("OK",rc,definedprimary,FailoverNode)
+err ;
+	quit $LB("ERR",$ze)	   
+}
+GETJRNBLK(arg) PUBLIC {
+	s $zt="err"
+	s singleuser=$LG(arg)
+	s arg=$LG(arg,2)
+	s mirname=$LG(arg,1)
+	s filecnt=$LG(arg,2)
+	s offset=$LG(arg,3)
+	s len=$LG(arg,4)
+	s isasync=$LG(arg,5)
+	s rc=$SYSTEM.Mirror.GetJournalFileByMjrncnt(filecnt,mirname)
+	if +rc<=0 quit $LB("ERR","File #"_filecnt_" is not found in mirror log file.")
+	s jrnfile=$P(rc,",",2)
+	if singleuser {
+		s enckey=$p($zu(78,22,jrnfile,23),",",2)
+		if enckey'="" {
+			if isasync quit $LB("ERR","Journal file "_jrnfile_" is encrypted.")
+			s size=len+2048-1\2048*2048
+			Open jrnfile:("RUK\RAW\"):3 s dt=$t
+			if 'dt quit $LB("ERR","Failed to open encrypted journal file "_jrnfile_" in GETJRNBLK")
+			Use jrnfile:offset Read data#size
+			Close jrnfile
+			Quit $LB("ENC",enckey,data)
+		}
+	}
+    s fd=$zu(78,5,jrnfile,0)
+    if fd<0 {
+       quit $LB("ERR","Failed to open journal file "_jrnfile_" in GETJRNBLK.")
+    }
+	do $zu(78,6,fd)
+	s ourdata=$zu(78,65,offset,len)
+	do $zu(78,7,fd)
+	quit $LB("OK",ourdata)
+err ;
+	quit $LB("ERR",$ze)	   
+}
+SETAPPROVAL(arg) PUBLIC {
+	s $zt="err"
+	s singleuser=$LG(arg)
+	i singleuser quit $LB("ERR","Cache is not running")
+	s arg=$LG(arg,2)
+	s mirname=$LG(arg,1)
+	s memberinfo=$LG(arg,2)
+	i '$SYSTEM.Mirror.IsPrimary() quit $LB("ERR","Operation not allowed by non-primary member")
+	i ##class(EMS.Instance).IsManaged("Config.Mirrors") quit $LB("ERR","Mirror configuration is controlled by EMS")
+	s name=$LG(memberinfo,1),guid=$LG(memberinfo,2)
+	s key=name_":"_guid
+	s idx=$o(^SYS("MIRRORSET",mirname,"Member",0),1,info)
+	while idx'="" {
+		if name=$LG(info),guid=$LG(info,2) quit
+		s idx=$o(^SYS("MIRRORSET",mirname,"Member",idx),1,info)
+	}
+	if idx'="" {
+		s info=$LB(name,guid,$lg(memberinfo,7),$lg(memberinfo,8))
+		if $G(^MIRROR(mirname,"PendingDNUpdates",key))'=info {
+			if $G(^MIRROR(mirname,"PendingDNUpdates"),0)<8 {
+				s ^MIRROR(mirname,"PendingDNUpdates",key)=info
+				s x=$I(^MIRROR(mirname,"PendingDNUpdates"))
+			} else {
+				quit $LB("ERR","Pending queue overflown")
+			}
+		}
+	} else {
+		if $LG(memberinfo,8)=0,$G(^SYS("MIRRORSET",mirname,"Member"),0)'=0 {
+			Quit $LB("ERR","Backup member already existed in primary member")
+		}
+		if $G(^MIRROR(mirname,"PendingNewMember",key))'=memberinfo {
+			if $G(^MIRROR(mirname,"PendingNewMember"),0)<8 {
+				s ^MIRROR(mirname,"PendingNewMember",key)=memberinfo
+				s x=$I(^MIRROR(mirname,"PendingNewMember"))
+			} else {
+				quit $LB("ERR","Pending queue overflown")
+			}
+		}
+	}
+	Quit $LB("OK")
+err ;
+	quit $LB("ERR",$ze)	   
+}
+REJAPPROVAL(arg) PUBLIC {
+	s $zt="err"
+	s singleuser=$LG(arg)
+	i singleuser quit $LB("ERR","Cache is not running")
+	i ##class(EMS.Instance).IsManaged("Config.Mirrors") quit $LB("ERR","Mirror configuration is controlled by EMS")
+	s arg=$LG(arg,2)
+	s mirname=$LG(arg,1)
+	s memberinfo=$LG(arg,2)
+	s name=$LG(memberinfo,1),guid=$LG(memberinfo,2)
+	s key=name_":"_guid
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",0))
+	if info=""||(name'=$LG(info))||(guid'=$LG(info,2)) quit $LB("ERR","Member not exist")
+	d ##class(SYS.Mirror).StopMirror(mirname)
+	Quit $LB("OK")
+err ;
+	quit $LB("ERR",$ze)	   
+}
+VALIDATEPARTNER(arg) PUBLIC {
+	s $zt="err"
+	s singleuser=$LG(arg)
+	if +singleuser {
+		S Status=##Class(Config.CPF).Read(,1024)
+		if ('Status) quit $LB("ERR","Failed to load the cpf file: "_$SYSTEM.Status.GetErrorText(Status))
+	}
+	s mm=##class(Config.MirrorMember).Open(,,.rc)
+	if '(''rc) quit $LB("ERR","Failed to open MirrorMember class, error="_$SYSTEM.Status.GetErrorText(rc))
+	s ValidatedMember = mm.ValidatedMember
+	s ourname = mm.SystemName
+	s mm=""
+	s arg=$LG(arg,2)
+	s mirname=$LG(arg,1),name=$LG(arg,2),guid=$LG(arg,3)
+	s othertime=$p($LG(arg,4),"^",2)
+	s mm=##class(Config.MapMirrors).Open(mirname,name,,,.rc)
+	if ('rc) {
+		if ValidatedMember Quit $LB("ERR","'"_name_"' is not a failover partner of '"_ourname_"'.")
+		Quit $LB("OK",ValidatedMember,"")
+	}
+	if ValidatedMember {
+		if (guid'=mm.GUID) Quit $LB("ERR","'"_name_"' has mismtached GUID "_mm.GUID_" vs "_guid)
+		if (mm.MemberType'=0) Quit $LB("ERR","'"_name_"' is not Failover member type")
+	}
+	s ConfigData="",mytime=$p($G(^SYS("MIRRORTIME",mirname)),"^",2)
+	quit $LB("OK",ValidatedMember,mm.SSLComputerName,ConfigData,$SYSTEM.Mirror.IsPrimary()&&$G(^SYS("MIRRORSET",mirname,"UseSSL"),0))
+err ;
+	quit $LB("ERR",$ze)	   
+}
+ASYNCTYPE(arg) PUBLIC {
+	s singleuser=$LG(arg)
+	if singleuser quit $LB("ERR","ASYNCTYPE could not be run on a single user mode.")
+	if '$SYSTEM.Mirror.IsPrimary() quit $LB("ERR","System is not a primary member.")
+	s arg=$LG(arg,2)
+	s mirname=$LG(arg,1)
+	s membername=$LG(arg,2)
+	s newasynctype=$LG(arg,3)
+	s cls=##class(Config.MapMirrors).Open(mirname,membername,,,.rc)
+	if '(''rc) quit $LB("ERR","Failed to open Config.MapMirrors error="_$SYSTEM.Status.GetErrorText(rc))
+	s cls.AsyncMemberType = newasynctype
+	s rc=cls.%Save()
+	if '(''rc) quit $LB("ERR","Failed to save Config.MapMirrors error="_$SYSTEM.Status.GetErrorText(rc))
+	quit $LB("OK")
+err ;
+	quit $LB("ERR",$ze)	   
+}
+UpdateStoredDN(mirname,newDN,oldDN,nodetype) PUBLIC {
+	try {
+		s singleuser=$ZU(69,81)
+	} catch {
+		s singleuser=1  ;function doesn't exist, assume single user version
+	}
+	q:singleuser  ; single user instances skip updating the DN string
+	;
+	s id=""
+	s id=$O(^SYS("MIRRORSET",mirname,"Member",id),1,info)
+	while id'="" {
+		if $LG(info,7)=oldDN {
+			s name=$LG(info,1)
+			s cls=##class(Config.MapMirrors).Open(mirname,name,,,.rc)
+			if (''rc) {
+				s cls.SSLComputerName=newDN
+				s rc=cls.%Save()
+				s cls=""
+				if ('rc) {
+					k err
+					Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+					s rc="Failed to save "_mirname_":"_name_" to convert to new style DN value"
+					s rc=rc_" ("_$G(err(1))_")"
+					d $zu(9,"",rc,1 /* broadcast and log message*/,1  /* Warning */)
+				}
+			} else {
+				d $zu(9,"","Failed to open "_mirname_":"_name_" to convert to new style DN value",1 /* broadcast and log message*/,1  /* Warning */)
+			}
+		}
+		s id=$O(^SYS("MIRRORSET",mirname,"Member",id),1,info)
+	}
+}
+SetupDNString(DN) PUBLIC {
+  	s DN="/"_$TR(DN,",","/")
+	s res="",len=$length(DN,"/"),na=""
+	for i=2:1:len {
+		s ele=$p(DN,"/",i)
+		s na=$p(ele,"=") q:na=""
+		s array(na)=$p(ele,"=",2)
+	}
+	i na="" quit ""
+	s na=$o(array(""),1,val)
+	while (na'="") {
+		s res="/"_na_"="_val_res
+		s na=$o(array(na),1,val)
+	}
+	quit res
+}
+ValidateSSLName(mirname,io) PUBLIC {
+	use io 
+	s certData=$System.Security.Users.SSLGetPeerCertificate()
+	if certData="" quit 0
+	s DN=$System.Encryption.X509GetField(certData,"Subject")
+	if DN="" quit 0
+	if $D(^SYS("MIRRORSET",mirname,"sslDN",DN),nodetype) {
+		quit nodetype
+	} 
+	s oldDN=$$SetupDNString(DN)
+	if $D(^SYS("MIRRORSET",mirname,"sslDN",oldDN),nodetype) {
+		do UpdateStoredDN(mirname,DN,oldDN,nodetype)
+		quit nodetype
+	}
+	Set rs=##class(%Library.ResultSet).%New("Config.MapMirrors:List")
+	Do rs.Execute(mirname)
+	While (rs.Next()) {
+		Set sslDN=rs.Data("SSLComputerName")
+    	s:sslDN'="" x=$i(CNA(sslDN),$s(rs.Data("MemberType")=0:1,1:10))
+	}
+	if $d(CNA(DN),val) Quit val
+	quit 3_$c(0)_DN
+}
+SSLClient(mirname,io,ip,port,sslauth) PUBLIC {
+	s saveIO=$I
+	if 'sslauth {
+		s sslon = 0
+	} else {
+	    s sslon=+$G(^SYS("MIRRORSET",mirname,"UseSSL"),0)
+	}
+	s x=$$tcpread(io,30)
+	s resp=$LG(x,2)
+	if $LG(x)'="OK" {
+		quit "2,Host at "_ip_":"_port_" failed to send SSLON/SSLOFF /"_$LG(x)_": "_resp_"/"
+	}
+	if (resp="SSLOFF") {
+		if sslon {
+		   d $zu(9,"","SSLClient: Host at "_ip_":"_port_" does not have SSL enabled while it is enabled in local system",1 /* broadcast and log message*/,1  /* Warning */)
+		   quit "2,Host at "_ip_":"_port_" sent SSLOFF but we require SSLON"
+		}
+	} elseif (resp="SSLON") {
+		s configname="%MirrorClient"
+		if 'sslon {
+		   ; Even if we're not configured to use SSL, see if we can do it anyway
+    	   Set cls=##class(Security.SSLConfigs).%OpenId(configname,,.status)
+		   i '(''status) {
+			   d $zu(9,"","SSLClient: Host at "_ip_":"_port_" requested SSL but configuration "_configname_" doesn't exist",1 /* broadcast and log message*/,1  /* Warning */)
+			   quit "2,Host at "_ip_":"_port_" requested SSL but configuration "_configname_" doesn't exist"
+		   }
+		   i cls.Enabled=0 {
+			   d $zu(9,"","SSLClient: Host at "_ip_":"_port_" requested SSL but configuration "_configname_" is disabled",1 /* broadcast and log message*/,1  /* Warning */)
+			   quit "2,Host at "_ip_":"_port_" requested SSL but configuration "_configname_" is disabled"
+		   }
+		   k cls,status
+		}
+		use io:(::/SSL=configname)
+		use saveIO
+		s x=$$tcpread(io,30)
+	    s resp=$LG(x,2)
+		if $LG(x)'="OK" {
+		   d $zu(9,"","SSLClient: Host at "_ip_":"_port_" failed to send SSLAUTH /"_$LG(x)_": "_resp_"/",1 /* broadcast and log message*/,1  /* Warning */)
+		   quit "2,Host at "_ip_":"_port_" failed to send SSLAUTH /"_$LG(x)_": "_resp_"/"
+	    }
+	    if resp="SSLAUTHONLY" {
+	    } else {
+		    if resp'="SSLAUTH" {
+			   d $zu(9,"","SSLClient: Host at "_ip_":"_port_" sent /"_resp_"/ not SSLAUTH",1 /* broadcast and log message*/,1  /* Warning */)
+		   		quit "2,Host at "_ip_":"_port_" sent /"_resp_"/ not SSLAUTH"
+		    }
+	    }
+		; The agent has validated us, now make sure we have it
+		; listed as an authorized mirror set member
+	    if sslon {
+		    s rc=$$ValidateSSLName(mirname,io)
+			use saveIO
+			if +rc=0 {
+			   d $zu(9,"","SSLClient: Failed to read SSL DN for host at "_ip_":"_port,1 /* broadcast and log message*/,1  /* Warning */)
+			   quit "2,Failed to read SSL DN for host at "_ip_":"_port
+			}
+			if +rc=3 {
+			   d $zu(9,"","SSLClient: DN ("_$p(rc,$c(0),2)_") for host at "_ip_":"_port_" not found in authorization list",1 /* broadcast and log message*/,1  /* Warning */)
+				quit "3,DN ("_$p(rc,$c(0),2)_") for host at "_ip_":"_port_" not found in authorization list"
+			}
+	    }
+		do tcpsend(io,$LB("OK"))  
+		; great, we're good to go
+	} else {
+	    try {
+		    s lv=$LG(resp)
+	    } catch exceptionv {
+		    s lv=""
+	    }
+		if lv'="" {
+			quit "2,Host at "_ip_":"_port_" ISCAgent answered :"_lv_":"_$LG(resp,2)
+		}
+		quit "2,Host at "_ip_":"_port_" sent "_resp_" not SSLON or SSLOFF"
+	}
+	quit 0
+}
+SSLServer(mirname,io,sslon="",requireAuthorization=0) PUBLIC {
+	; Now the server tells us whether it requires this to be an 
+	; SSL connection or not. It sends "SSLON" or "SSLOFF".
+	s saveIO=$I
+	i sslon="" s sslon=+$G(^SYS("MIRRORSET",mirname,"UseSSL"),0)
+	if 'sslon && 'requireAuthorization {
+		d tcpsend(io,"SSLOFF")
+		quit 0
+	}
+	d tcpsend(io,"SSLON")
+	s configname="%MirrorServer"
+	use io:(::/SSL=configname)
+	if 'sslon {
+		d tcpsend(io,"SSLAUTHONLY")
+	} else {
+		d tcpsend(io,"SSLAUTH")
+	}
+	s x=$$tcpread(io,30)
+	if $LG(x)'="OK" {
+		quit "-1,SSL Auth failed, "_$LG(x,2)
+	}
+	s resp=$LG($LG(x,2))
+	if resp'="OK" {
+		quit "-2,Expected OK, got "_resp
+	}
+	; now make sure we have it listed as an authorized mirror set member
+	s rc=$$ValidateSSLName(mirname,io)
+	use saveIO
+	if +rc=0 {
+		quit "-3,Failed to read SSL name from remote client"
+	}
+	quit rc
+}
+tcpopen(mirname,addrlist,targguid,basedir,timeout,sslauth=1,timeout2=0,xdebug=0) {
+	; Establish an outgoing connection to the agent at the
+	; target address:port, exchange version information and 
+	; validate the mirror guid of the remote end matches ours.
+	; 
+	; TCP Open does not change the current device if it returns
+	; an error (1 or 2).
+	;
+	; addrlist is a comma separated list of addresses.
+	; targguid is the guid of the target system. This can be null.
+	; timeout2 when non-zero is the timout to use for alternative
+	;          addresses in the addr. 'addr' can be a comma seperated
+	;          list of addresses to try. when timeout2 is 0, only
+	;          the 1st address is tried. When timeout2 is non-zero,
+	;          all of the addresses are tried using timeout2 as the
+	;          timeout after the 1st failed attempt (JO2562).
+	;
+	; Returns:
+	;    0,io,<version> - success
+	;    1,<text> - timed out opening connection to remote system
+	;    2,<text> - other error communicating with remote system
+	;    3,<text> - SSL failure.
+	s $zt="err"
+	s connected=0
+	s reportnode=+$G(^SYS("MIRRORSET"))
+	if reportnode {
+		s guid=$G(^SYS("MIRRORSET",mirname,"GUID"))
+	} else {
+		s cls=##class(Config.Mirrors).Open(mirname,,,.rc)
+		if ('rc) {
+			if sslauth {
+				quit "2,Failed to open Config.Mirrors("_mirname_") in tcpopen"
+			}
+			s guid=""
+		} else {
+			s guid=cls.GUID
+		}
+	}
+	s cls=""
+	if guid=""&&sslauth quit "2,Local copy of Mirror GUID undefined"
+	;
+	s addr=$P(addrlist,",",1) ;pull off 1st address if its a list
+	s port=$P(addr,"|",2)
+	s ip=$P(addr,"|")
+	s saveio=$I
+	s jobtype=$ZU(61,10,$ZU(61))
+	if (jobtype'=44) {
+	   s io="|TCP|"_port
+  	   s saveversion=0
+	} else {
+	   s io=$G(^||MirrorComm(ip,port,basedir),"")
+	   s saveversion=1
+	   if io="" {
+		   s iodev=$I(^||MirrorComm)
+		   ; devices 1 & 2 are used by ^MIRRORCOMM for the data and
+		   ; ack jobs and while those jobs probably never call the agent
+		   ; code, there's no sense in conflicting with them. Here devices
+		   ; 1-10 are reserved for ^MIRRORMGR/^MIRROR/^MIRRORCOMM...
+		   if iodev<10 {
+			  s iodev=10
+			  s ^||MirrorComm = iodev
+		   }
+		   s io="|TCP|"_iodev
+		   s ^||MirrorComm(ip,port,basedir)=io
+		   s ^||MirrorComm(io)=$LB(ip,port)
+		   s connected=0
+	   } else {
+		  ; device is already open, see if we're still connected
+		  try {
+		     u io s za=$za
+		     s connected=$Zboolean(+za,+8192,1)
+		     if 'connected {
+			     close io
+		     }
+		  } catch except {
+			  ; most likely notopen
+			  s connected=0
+		  }
+		  if connected {
+		     try {
+			    ; we're looking for a <WRITE> error here to figure
+			    ; out whether the other side is still connected or not
+			    do tcpsend(io,$LB("PING"))
+				s x=$$tcpread(io,0)  ;should get back "OK"
+				if $LG(x)'="OK" {
+					c io
+					s connected=0
+				}
+		     } catch exceptionv {
+		        s connected=0
+		        close io
+		     }
+		  }
+		  if connected {
+		     s version=$G(^||MirrorComm(ip,port,basedir,"version"),"")
+		     quit "0,"_io_","_version  ;succeeded
+		  }
+	   }
+	}
+	s rcvbuf=+$G(^MIRROR(mirname,"TCPRCVBUFSIZE"),16777216)
+	o io:(/Hostname=ip:/Port=port:/STREAM=1:/TCPRCVBUF=rcvbuf):timeout
+	s ok=$T
+	if 'ok {
+		if (timeout2) {
+			s addrnum=2
+			for  {
+				s addr=$P(addrlist,",",addrnum)
+				quit:addr=""  ;we're done, no more addresses
+				s port=$P(addr,"|",2)
+				s ip=$P(addr,"|")
+				o io:(/Hostname=ip:/Port=port:/STREAM=1:/TCPRCVBUF=rcvbuf):timeout2
+				s ok=$T
+				q:ok  ;it worked, we're done!
+				s addrnum=addrnum+1  ;try next one
+			}
+		}
+	    ; here we return 1, for an error code to indicate we timed
+		; out trying to connect to the remote system as opposed to
+		; some other (more unexpected error).
+		if 'ok {
+			quit "1,Timed out opening connection to "_ip_":"_port
+		}
+	}
+	s connected=1
+	; Send the string "ISC1REMCTRL " to indicate we want a CacheRemoteControl()
+	; connection. This is followed by the manager's directory we want to 
+	; connect to and then finally, we'll send the connection sub-type, 
+	; M<1>C to indicate its a mirror connection
+	; 
+	u io w "ISC1REMCTRL " w *-3
+	u io read okstr#2:timeout u 0  ; wait for server to fork a connection handler
+	if '$t {
+	   c io 
+	   s connected=0
+	   ; restore original IO device
+	   try {
+	      use saveio
+	   } catch exceptionv {
+	   }
+	   quit "2,Timed out waiting for initial ""OK"" from "_ip_":"_port
+	}
+	if okstr'="OK" {
+	   c io 
+	   s connected=0
+	   ; restore original IO device
+	   try {
+	      use saveio
+	   } catch exceptionv {
+	   }
+	   quit "2,Server at "_ip_":"_port_" sent /"_okstr_"/ not /OK/"
+	}
+	;
+	; Send the directory specification of the mgr directory on the server
+	; we want to connect to with a $zwchar() length.
+	u io w $zwchar($l(basedir)),basedir w *-3 u 0
+	; Now the server will fire up the target version of Cache' and
+	; pass it our connection. When Cache' is ready for us to send data
+	; it will send us another "OK".
+	u io read okstr#2:timeout u 0  ; wait for Cache to start up
+	if '$t {
+	   c io 
+	   s connected=0
+	   ; restore original IO device
+	   try {
+	      use saveio
+	   } catch exceptionv {
+	   }
+	   quit "2,Timed out waiting for 2nd ""OK"" from "_ip_":"_port_" ("_basedir_")"
+	}
+	if okstr'="OK" {
+       c io 
+	   s connected=0
+	   ; restore original IO device
+	   try {
+	      use saveio
+	   } catch exceptionv {
+	   }
+       quit "2,Server at "_ip_":"_port_" ("_basedir_") sent /"_okstr_"/ not /OK/"
+	}
+	; 		
+	; Now send the 3 character connection type: 
+	;     M<1>C is a mirror connection
+	if (xdebug) {
+		do tcpsend(io,"M"_$C(1)_"D")
+	} else {
+		do tcpsend(io,"M"_$C(1)_"C")
+	}
+	; The other side should answer with M_$C(1)_C. 
+	s x=$$tcpread(io,30)
+	s resp=$LG(x,2)
+	if $LG(x)'="OK" {
+		close io
+	    s connected=0
+	    ; restore original IO device
+	    try {
+	      use saveio
+	    } catch exceptionv {
+	    }
+		quit "2,Host at "_ip_":"_port_" failed to send initial ACK /"_$LG(x)_": "_resp_"/"
+	}
+	if resp'=("M"_$C(1)_"C") {
+		close io
+	    s connected=0
+	    ; restore original IO device
+	    try {
+	      use saveio
+	    } catch exceptionv {
+	    }
+		quit "2,Host at "_ip_":"_port_" sent incorrect initial ACK /"_resp_"/"
+	}
+	if ('sslauth) {
+	   do tcpsend(io,$LB(mirname,-1))
+	} else {
+	   s usessl=+$G(^SYS("MIRRORSET",mirname,"UseSSL"),0)
+	   if 'usessl {
+		   s info=$G(^SYS("MIRRORSET",mirname,"Member",0))
+		   s EncryptConnection=$zb(+$LG(info,11),1,1) ; Bit #1 means encrypt outgoing connections
+		   if EncryptConnection {
+			   s usessl=1
+		   }
+	   }
+	   do tcpsend(io,$LB(mirname,usessl))
+	}
+	s resp=$$SSLClient(mirname,io,ip,port,sslauth)
+	i resp {
+		close io
+	    s connected=0
+		q resp
+	}
+	; Now we send our protocol version and the server send us back its 
+	; protocol version
+	s ourversion=$ZU(40,0,86) ;$$$REMOTE_MIRROR_CONNECTION_VERSION
+	do tcpsend(io,$LB("VERSION",ourversion,reportnode))
+	s x=$$tcpread(io,30)
+	if $LG(x)'="OK" {
+		close io
+	    s connected=0
+ 	    ; restore original IO device
+	    try {
+	       use saveio
+	    } catch exceptionv {
+	    }
+		quit "2,Host at "_ip_":"_port_" failed to send initial ACK /"_$LG(x)_": "_$LG(x,2)_"/"
+	}
+	s x=$LG(x,2) ; gets back $LB("VERSION",version)
+	if (+$LL(x)'=2) || ($LG(x)'="VERSION") {
+		c io
+	    s connected=0
+ 	    ; restore original IO device
+	    try {
+	       use saveio
+	    } catch exceptionv {
+	    }
+       quit "2,Host at "_ip_":"_port_" failed to send version"
+	}
+	s version=+$LG(x,2)
+	if saveversion {
+	   s ^||MirrorComm(ip,port,basedir,"version")=version
+	}
+	do tcpsend(io,$LB("GUID",guid,targguid))
+	s x=$$tcpread(io)
+	if $LG(x)'="OK" {
+	   close io
+	   s connected=0
+ 	   ; restore original IO device
+	   try {
+	      use saveio
+	   } catch exceptionv {
+	   }
+	   quit "2,Server refused GUID:"_$LG(x,1)_": "_$LG(x,2)
+	}
+	s x=$LG(x,2)
+	if $LG(x)'="OK" {
+	   close io
+	   s connected=0
+ 	   ; restore original IO device
+	   try {
+	      use saveio
+	   } catch exceptionv {
+	   }
+	   quit $s($LG(x,1)="SSLERR"||($LG(x,2)["SSL DN"):"4",1:"2")_",Server refused GUID:"_$LG(x,1)_": "_$LG(x,2)
+	}
+	quit "0,"_io_","_version  ;succeeded
+err ;
+	s $ZT=""
+	if $G(connected) s connected=0 close io
+	quit "2,Unexpected error: "_$ze
+}
+tcpread(io,timeout=60) public {
+	try {
+	   s:'$L(timeout) timeout=60  ;if its specified as "", set it to the default
+	   use io
+	   read clen#4:timeout
+	   if '$T {
+		   s ret=$LB("TIMEOUT","Read on "_io_" timed out. No data sent in "_timeout_" seconds")
+		   quit
+	   }
+	   s len=$zlascii(clen)
+	   read str#len:5  ;short timeout because the data should be available.
+	   if '$T {
+		   s ret=$LB("ERR","Timed out waiting to read "_len_" characters")
+	   } else {
+		   s ret=$LB("OK",str)
+	   }
+	} catch exceptv {
+		s ret=$LB("ERR",exceptv.DisplayString())	
+	}
+	quit ret
+}
+tcpsend(io,str) public {
+	try {
+	   use io
+	   s len=$l(str)
+	   s clen=$zlchar(len)
+	   write clen,str
+	   write *-3  ;force send
+	} catch excptv {
+	   ;
+	}
+}
+tcpclose(io) {
+	s jobtype=$ZU(61,10,$ZU(61))
+	//if (jobtype'=$$$MIRRORMASTER) {
+	    do tcpsend(io,$LB("QUIT"))
+	    try {
+		   close io
+	    } catch exceptv {
+		   ;
+		}
+	//}
+}
+ /*	RelayServerDmn()
+	Called from Server^MIRRORCOMM() when we receive a "M"_$C(1)_"S" message after
+	we've validated the connection (eg. SSL state)
+	We read a message from the client which should have the form:
+	    $ZLCHAR(LEN),$LB(<msg code>,$LB(...args...),<local system guid>)
+	where <local system guid> is our guid and we check this to ensure that
+	   the client has reached the intended server (JO2817)
+	tcpread/tcpwrite in MIRRORCTL are used to send/receive messages with this
+	     routine 
+ */
+RelayServerDmn(io,sslrc,mirname) PUBLIC {
+	use 0
+    if '$SYSTEM.Security.Check("%Admin_Manage","USE") {
+	   d $zu(9,"","Insufficient privilege to run RelayServerDmn",1 /* broadcast and log message*/,2  /* Severe error */)
+	   quit
+    }
+	try {
+		u io
+		s resp=$$tcpread(io)
+		s rc=$LG(resp)
+		s text=$LG(resp,2)
+		if $LG(resp)'="OK" {
+			d $zu(9,"","RelayServerDmn got an error on initial read: "_text,1 /* broadcast and log message*/,1  /* Warning */)
+			quit
+		}
+		s function=$LG(text,1)
+		s args=$LG(text,2)
+		s targguid=$LG(text,3)
+		if targguid'="" {
+			s expected=$G(^SYS("MIRRORSET",mirname,"SYSGUID"))
+			if $L(expected) && ($E(expected,1,$L(targguid))'=targguid) {
+				s ourname=$P(expected,"^",2)
+				d $zu(9,"","RelayServerDmn: Ignored "_function_" message which specified a target system guid of "_targguid_" when ours is "_expected,0,0  /* Informational message */)
+				s msg="Incorrect system guid ("_targguid_") specified. Local system guid for "_ourname_" in "_mirname_" is "_$P(expected,"^")
+				do tcpsend(io,$LB("ERR",msg))
+				quit
+			}
+		}
+		if ($zb(+$SYSTEM.Mirror.DebugFlags(),2,1)) do $zu(9,"","RelayServerDmn: Received function: "_function)
+		if function="GETCONFIGURATION" {
+			s msg=$$GetMirrorConfig($LG(args))
+			do tcpsend(io,$LB("OK",1,msg))
+			quit
+		}
+		if function="GETCONFIG2" {
+			s args=$LB(0,args)
+			s msg=$$GetMirrorConfig2(args)
+			do tcpsend(io,msg)
+			quit
+		}
+		if function="GETMEMBERS" {
+			s args=$LB(0,args)
+			s msg=$$GetMirrorMembers(args)
+			do tcpsend(io,msg)
+			quit
+		}
+		if function="REJAPPROVAL" {
+			s args=$LB(0,args)
+			s msg=$$REJAPPROVAL(args)
+			do tcpsend(io,msg)
+			quit
+		}
+		if function="VERIFYCERT" {
+			s msg=$$VerifyCert(args)
+			do tcpsend(io,msg)
+			quit
+		}
+		If +sslrc=3 do tcpsend(io,$LB("SSLERR","Request Rejected - SSL ID is not in list of authorized mirror members"))
+		if function="GETJRNFILE" {
+			do SendFilteredJrnfile^MIRRORCOMM(io,args)
+			quit
+		}
+		if function="GETJRNINFO" {
+			s args=$LB(0,args)  ;0 = singleuser flag
+			s msg=$$GetJRNINFO(args)
+			do tcpsend(io,msg)
+			quit
+		}
+		if function="GETDBSTATUS" {
+			s msg=$$RSDGetDBStatus(io,args)
+			do tcpsend(io,msg)
+			quit
+		}
+		if function="GETDBLIST" {
+			s msg=$$RSDGetDBList(io,args)
+			do tcpsend(io,msg)
+			quit
+		}
+		if function="SYNCHDBINFO" {
+			s args=$LB(0,args)  ;0 = singleuser flag
+		    s msg=$$SendDBInfo(args)
+		    do tcpsend(io,msg) ;rc is $LB(status)
+			quit
+		}
+		if function="GETNODEINFO" {
+			s msg=$$RSDGetNodeInfo($LB(0,args))
+			do tcpsend(io,msg)
+			quit
+		}
+		if function="GETASYNCINFO" {
+			s args=$LB(0,args)  ;0 = singleuser flag
+			s msg=$$AsyncMemberInfo(args)
+			do tcpsend(io,msg)
+			quit
+		}
+		if function="ADDFOMEMBER" {
+			s args=$LB(0,args)  ;0 = singleuser flag
+			s msg=$$AddFOMember(args)
+			do tcpsend(io,msg)
+			quit
+		}
+		if function="DELMEMBER" {
+			s args=$LB(0,args)
+			s msg=$$DeleteMirrorMember(args)
+			do tcpsend(io,msg)
+			quit
+		}
+		if function="SYNCHCONFIG" {
+			s args=$LB(0,args)
+			s msg=$$SYNCHCONFIG(args)
+			do tcpsend(io,msg)
+			quit
+		}
+		if $zb(+$SYSTEM.Mirror.DebugFlags(),1,1) do $zu(9,"","RelayServerDmn received unrecognized message: "_function)
+		do tcpsend(io,$LB("UNKNCMD",function))
+	} catch {
+		d $zu(9,"","RelayServerDmn caught unexpected error: "_$ze,1 /* broadcast and log message*/,1  /* Warning */)
+	}
+	quit  ;and we're done	
+}
+RSDGetDBStatus(io,args) {
+	/* 	Relay member version of GetDBStatus in remote.c.
+			$LG(args,1) = local sfn to retrieve info for
+			send back $LB(<reason>,<msg>) for failure or
+	          $LB("OK",$LB(<dbstatus list>),cursizeinblks,maxsizeinblks)
+ 	*/
+	s sfn=$lg(args,1)
+	s dbinfo=$ZU(49,+sfn)
+	if +dbinfo<0 {
+		quit $LB("ERR","Invalid sfn - "_sfn)
+	}
+	if '+$zb(+$p(dbinfo,",",17),$zu(40,8,28),1) {	
+		quit $LB("ERR","SFN #"_sfn_" is not mirrored")
+	}
+	s rc=$ZU(13,1,sfn)
+	quit rc
+}
+RSDGetDBList(io,args) {
+	/* 	Relay member version of GetDBList in remote.c.
+			$LG(args,1) = mirror name to retrieve info for
+			send back $LB(<reason>,<msg>) for failure or
+	          $LB("OK",[local sfn^mirror db name,]...pairs)
+ 	*/
+	s mirname=$lg(args,1)
+	s flag=+$LG(args,2)
+	s rc=$ZU(13,2,mirname,flag)
+	quit rc
+}
+RSDGetNodeInfo(args) PUBLIC {
+	/* 	Called by ISCAgent or Relay server for GETNODEINFO request.
+			$LG(args,1) = mirror name to retrieve info for
+			send back $LB(<reason>,<msg>) for failure or
+	          $LB("OK",[local sfn^mirror db name,]...pairs)
+ 	*/
+	s mirname=$LG($lg(args,2))
+	Quit $$GetNodeInfoDetail(mirname,$LG(args))
+}
+GetNodeInfoDetail(mirname,single=0) PUBLIC {
+	s rc=$ZU(13,3,mirname)
+	if $LG(rc)="OK" {
+		if $$IsRelayClient^MIRRORCOMM(mirname) s rc=$$AdjustNodeInfo(rc,mirname)
+		s info=$LG(rc,2)
+		if info'["PRIMARY",info'["BACKUP"||($LG(rc,13)="SYNCHRONIZING")||($LG(rc,13)="TRANSITION"&&($SYSTEM.Mirror.IsMember()=1)) {
+			s jrntime=##class(SYS.Mirror).GetJournalBlockTime(mirname)
+			if jrntime {
+				s jrntime=$zu(99,0)#$zh("100000000")-jrntime
+				if jrntime<0 s jrntime=0
+			} else {
+				s jrntime=-1 ; Can't find the latency.
+			}
+			s dbinfo=$$GetMaxDejrnStart^MIRRORMGR(mirname,$s(single:4,1:3))
+			if '$LG(dbinfo) {
+				s dbtime=-1 ; Can't find the latency.
+			} else {
+				s dbtime=##class(SYS.Mirror).GetJournalBlockTime(mirname,$lg(dbinfo,2),$lg(dbinfo,3))
+				if dbtime {
+					s dbtime=$zu(99,0)#$zh("100000000")-dbtime
+					if dbtime<0 s dbtime=0
+				} else {
+					s dbtime=-1 ; Can't find the latency.
+				}
+			}
+			if $LL(rc)'>8 {
+				s $list(rc,7)=jrntime
+				s $list(rc,8)=dbtime
+			} else {
+				s $list(rc,11)=jrntime
+				s $list(rc,12)=dbtime
+			}
+		}
+	}
+	quit rc
+}
+AdjustNodeInfo(info,mirname) PUBLIC {
+	s backupjrncnt=+$LG(info,3)  ;what we've received & written to disk
+	s backupjrnend=+$LG(info,4)
+	s chkpntjrncnt=+$LG(info,5) ;current end point dejournal job restored.
+	s chkpntjrnoff=+$LG(info,6)
+	s chkpntset=0
+	s jrnfname=$SYSTEM.Mirror.GetJournalFileByMjrncnt(backupjrncnt,mirname)
+	if +jrnfname=1 {
+		s jrnfname=$P(jrnfname,",",2)
+		s dev=$zu(78,5,jrnfname,0)
+		if dev'<0 {
+			do $zu(78,6,dev)
+			s coffx=$zu(78,94,backupjrnend)
+			if coffx s backupjrnend=backupjrnend_","_coffx
+			if backupjrncnt=chkpntjrncnt {
+				s coffx=$zu(78,94,chkpntjrnoff)
+				if coffx s chkpntjrnoff=chkpntjrnoff_","_coffx
+				s chkpntset=1
+			}
+			do $zu(78,7,dev)
+		}
+	}
+	if 'chkpntset&&(backupjrncnt'=chkpntjrncnt) {
+		s jrnfname=$SYSTEM.Mirror.GetJournalFileByMjrncnt(chkpntjrncnt,mirname)
+		if +jrnfname=1 {
+			s jrnfname=$P(jrnfname,",",2)
+			s dev=$zu(78,5,jrnfname,0)
+			if dev'<0 {
+				do $zu(78,6,dev)
+				s coffx=$zu(78,94,chkpntjrnoff)
+				if coffx s chkpntjrnoff=chkpntjrnoff_","_coffx
+				do $zu(78,7,dev)
+			}
+		}
+	}
+	s $LI(info,4)=backupjrnend
+	s $LI(info,6)=chkpntjrnoff
+	q info
+}
+ /* BuildAgentAddrlist(info string)
+    Takes a $list value from the ^SYS("MIRRORSET",<mirname>,"Member",<index>)
+    global and returns a string of addresses which could be passed to
+    tcpopen^MIRRORCTL() to try and contact the agent. The addresses all
+    include the agent port #. The 1st address in the list (or the only
+    address) is the agent address. If the mirror address/ecp addresses
+    are different, they are included (seperated by commas) as alternatives
+    which could be tried. The agent port is used with all of the addresses.
+    The point is that when there are multiple networks, the agent may
+    accept requests on all networks (fairly typical) however the agent
+    network might be broken but the mirror network could be up and running.
+    In this case we might even have a mirror connection established.
+ */
+BuildAgentAddrlist(info) PUBLIC {
+	s addrlist=$LG(info,5)
+	s agentaddr=$P(addrlist,"|")
+	s agentport=$P(addrlist,"|",2)
+	s miraddr=$P($LG(info,4),"|")
+	s ecpaddr=$P($LG(info,3),"|")
+	if miraddr'=agentaddr {
+		s addrlist=addrlist_","_miraddr_"|"_agentport
+	}
+	if (ecpaddr'=agentaddr) && (ecpaddr'=miraddr) {
+		s addrlist=addrlist_","_ecpaddr_"|"_agentport
+	}
+	quit addrlist
+}
+VerifyCert(Args) {
+	s membername=$LG(Args,4),NeedCAFile=$LG(Args,5)
+	s mm=##class(Config.MirrorMember).Open()
+	s ourname=mm.SystemName
+	if ourname=""||(ourname'=membername) {
+		quit $LB("OK",$$Error^%apiOBJ(736,membername),0,"","")
+	}
+	s ReportingMember=(mm.AsyncMemberGUID'="")&&mm.AsyncMemberType
+	s mm=""	
+	s ssl=##class(Security.SSLConfigs).%OpenId("%MirrorServer",,.rc)
+	if ('rc) {
+		if $zb(+$SYSTEM.Mirror.DebugFlags(),1,1) do $zu(9,"","MIRRORCTL: "_ourname_" failed to open MirrorSSL error = "_$SYSTEM.Status.GetErrorText(rc))
+		quit $LB("OK",$$Error^%apiOBJ(735,ourname),ReportingMember,"","")
+	}
+	s RemoteIsReporting=+$LG(Args,3),Cert=$LG(Args,2),rqmember=$LG(Cert,3),cer=$LG(Cert)
+	s Result=""
+	s rc=ssl.%OnValidateObject(1)
+	if ('rc) s Result=$$Error^%apiOBJ(739,ourname,$SYSTEM.Status.GetErrorText(rc))
+	if $zb(+$SYSTEM.Mirror.DebugFlags(),1,1) do $zu(9,"","MIRRORCTL: Local ("_ourname_") SSL validation result = "_$s(Result="":"OK",1:$SYSTEM.Status.GetErrorText(Result)))
+	if cer'="",'RemoteIsReporting||('ReportingMember) {
+		s rc = $SYSTEM.Encryption.X509VerifyCertChain(cer,ssl.CAFile)
+		if $zb(+$SYSTEM.Mirror.DebugFlags(),1,1) do $zu(9,"","MIRRORCTL: SSL verification from "_rqmember_" in "_ourname_", result="_rc)
+		if rc'="OK" {
+			s Result=$$Error^%apiOBJ(734,rqmember_":"_$LG(Cert,2),ourname_":"_ssl.CAFile,rc)
+		}
+	}
+	quit $LB("OK",Result,ReportingMember,$LB(ssl.GetCertificate(),ssl.CertificateFile),$s(NeedCAFile:$LB(ssl.GetCAFile(),ssl.CAFile),1:""))
+}

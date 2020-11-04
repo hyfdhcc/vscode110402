@@ -1,0 +1,2240 @@
+ROUTINE %SYS.PTools [Type=INT]
+	;%SYS.PToolsSQLStats	; 
+	QUIT
+sqlcode(code) ; Return SQLCODE Message...
+ QUIT:$g(code)="" "" QUIT $$FormatMessage^%occMessages(,"%SqlCode","SqlCode"_$zabs(code),,)
+SetSQLStats(flag)
+	s $zt="Error" i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"} ; verified 9/26/16 STC
+	n oldval
+	s oldval=$zu(35,4,1,flag)
+	s ^%SYS("sql","sys","SQLStats")=flag
+	QUIT oldval
+Error s $zt=""
+	ztrap $ze
+NewQuery(SQLText, SQLType, NameSpace, RoutineName, CursorName, CompileTime=0) [SQLCODE, NameSpace, RoutineName, CursorName, sql, SQLType, CompileTime, hash, schema] PUBLIC {	;
+	N %msg,%ROWCOUNT,%ROWID
+	n sql, hash, schema
+	s:CursorName="" CursorName="A"
+	set $zt="NewQueryError"
+	set zu139=$ZU(139,1)					// Suspend transaction
+	set auto=$SYSTEM.SQL.SetAutoCommit(0)	//make sure we are not in Auto Commit OFF
+	//If we are compiling the query then all the old stats are no longer valid, DELETE them.
+	do %0Ao
+	If SQLCODE<0 {
+		set mess=" Error deleting SQL Query data from %SYS_PTools.SQLQuery table"
+		do GlobalSaveErrorSecure("",mess,SQLCODE,$G(%msg),"")
+	}
+	s sql=1
+	f i=1:1:SQLText s sql(1)=$g(sql(1))_" "_$ZSTRIP(SQLText(i),"<W") Q:$L(sql(1))>16000
+    s UPPER= $zu(28,sql(1),5)
+    i $E(UPPER,1,8)=" DECLARE" { 
+    	s removelength=$L($P(UPPER,"CURSOR FOR ",1))+11
+    	s sql(1)=$E(sql(1),removelength,*)
+    }
+	i $L(sql(1))>15000 s sql(1)=$E(sql(1),1,15000)
+	s schema=$zu(28,$s($zu(28,$p($g(^%SYS("sql","sys","default schema",$zu(5)),$g(^%SYS("sql","sys","default schema"))),"/"),5)'="_CURRENT_USER":$g(^%SYS("sql","sys","default schema",$zu(5)),$g(^%SYS("sql","sys","default schema"))),1:$s($Username'="":$Username,1:$s($p($g(^%SYS("sql","sys","default schema",$zu(5)),$g(^%SYS("sql","sys","default schema"))),"/",2)="":"SQLUser",1:$p($g(^%SYS("sql","sys","default schema",$zu(5)),$g(^%SYS("sql","sys","default schema"))),"/",2)))),5)
+	s hash=$$Hash^%SYS.SQLSRV($lb(schema,"SQLStats"),.sql,"")
+	s:$G(%defschema)'="" schema=%defschema
+	s SQLType=$s(SQLType="INS":"INSERT",SQLType="UPD":"UPDATE",SQLType="DEL":"DELETE",SQLType="SEL":"SELECT",SQLType="DEC":"SELECT",1:SQLType)
+	do %0Co
+	If SQLCODE<0 {
+		set mess=" Error in NewQuery of %SYS.PTools,NewQuery inserting into %SYS_PTools.SQLQuery"
+		do GlobalSaveErrorSecure("",mess,SQLCODE,$G(%msg),"")
+	}
+	set zu139=$ZU(139,zu139)					// resume transaction (if needed)
+	set auto=$SYSTEM.SQL.SetAutoCommit(auto)	// reset Auto Commit
+	QUIT
+NewQueryError
+	set $zt=""
+	set mess=" Error inserting SQL Query data into %SYS_PTools.SQLQuery table"
+	do GlobalSaveErrorSecure($ze,mess,$g(SQLCODE),$G(%msg),"")
+	set zu139=$ZU(139,zu139)					// resume transaction (if needed)
+	set auto=$SYSTEM.SQL.SetAutoCommit(auto)	// reset Auto Commit
+	QUIT
+}
+Init(NS, Rou, Cur, Parms) [sql, NS, Rou, Cur, ts, Job, childparent, Parms, i] PUBLIC {
+	s Parms=$O(Parms(""),-1)
+	N %ROWID,sql
+	n ts, Job, childparent, i
+	set zu139=$ZU(139,1)					// Suspend transaction
+	set auto=$SYSTEM.SQL.SetAutoCommit(0)	//make sure we are not in Auto Commit OFF
+	s:Cur="" Cur="A"
+	i $zu(136,21,0)									; make sure we have 6 decimal places for the Time
+	k %SQLStats(NS,Rou,Cur)
+	s ts=$ZDATETIME($H,3,1)
+	s %SQLStats("StartTime",NS,Rou,Cur)=ts
+	do %0Eo
+	do %0Go
+	s childparent=%ROWID
+	f i=1:1:$g(Parms,0) do %0Io
+	s %FirstRow=1
+	d $SYSTEM.Process.EnableDiskReadTiming()
+	d ##class(%SYS.PTools.SQLStats).Start(NS,Rou,Cur,1)
+	set zu139=$ZU(139,zu139)					// resume transaction (if needed)
+	set auto=$SYSTEM.SQL.SetAutoCommit(auto)	// reset Auto Commit
+	QUIT
+}
+GlobalSave(NS, Rou, Cur, Mod, Rows) [SQLCODE, QueryText, NS, Rou, Cur, sql, hash, QueryPointer, Module, Counter, StartTime, GlobalRefs, LinesOfCode, TotalTime, FirstRow, Rows, ModCount, IPAddress, NodeName, ExeName, pid, CurrentLevel, SavedDetails, DiskWait] PUBLIC {
+	Try {
+		n %msg,%ROWCOUNT,%ROWID,SQLCODE
+		n QueryText, sql, hash, QueryPointer, Module, Counter, StartTime, GlobalRefs, LinesOfCode, TotalTime, FirstRow, ModCount, IPAddress, NodeName, ExeName, pid, CurrentLevel, SavedDetails, DiskWait
+		set zu139=$ZU(139,2)					// Suspend transaction
+		set auto=$SYSTEM.SQL.SetAutoCommit(0)	//make sure we are not in Auto Commit OFF
+		s ProcStats=$zu(115,12,-1)
+		s sql=1,sql(1)="",hash=""
+		do %0Ko
+		If SQLCODE=0 {
+			if Mod=1 {
+				s Counter=$I(Counter)
+				do %0No
+			}
+		}
+		ELSE {
+			s Counter=1
+			i $D(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",$S(Rou[".cls":$E(Rou,1,*-2),1:Rou))) {
+				s Rtn=$S(Rou[".cls":$E(Rou,1,*-2),1:Rou)
+				f i=1:1:^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",Rtn,0) s sql(1)=sql(1)_" "_$P(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",Rtn,1),"~RUNTIME~",1) Q:$L(sql(1))>15000
+				s sql(1)=$LG($$preparse^%qaqpreparser(.sql,1),1)
+				i $L(sql(1))>15000 s sql(1)=$E(sql(1),1,15000)
+				s %defschema=$zu(28,$s($zu(28,$p($g(^%SYS("sql","sys","default schema",$zu(5)),$g(^%SYS("sql","sys","default schema"))),"/"),5)'="_CURRENT_USER":$g(^%SYS("sql","sys","default schema",$zu(5)),$g(^%SYS("sql","sys","default schema"))),1:$s($Username'="":$Username,1:$s($p($g(^%SYS("sql","sys","default schema",$zu(5)),$g(^%SYS("sql","sys","default schema"))),"/",2)="":"SQLUser",1:$p($g(^%SYS("sql","sys","default schema",$zu(5)),$g(^%SYS("sql","sys","default schema"))),"/",2)))),5)
+				s hash=$$Hash^%SYS.SQLSRV($lb(%defschema,"SQLStats"),.sql,"")
+			}
+			do %0Po
+		}
+		If SQLCODE<0 {
+			s mess=" SQL error in GlobalSave of %SYS.PTools, %SYS_PTools.SQLQuery"
+			s id=NS_"||"_Rou_"||"_Cur
+			THROW
+		}
+		ELSE  {
+			s pid=$j
+			do %0Ro
+			s QueryPointer=Rou_"||"_Cur
+			s Module=$s(Mod=1:"MAIN",Mod>26:Mod,1:$c(64+Mod))
+			s StartTime=$g(%SQLStats("StartTime",NS,Rou,Cur),"")
+			s GlobalRefs=$g(%SQLStats(NS,Rou,Cur,Mod,"Tglo"),"")
+			s LinesOfCode=$g(%SQLStats(NS,Rou,Cur,Mod,"Tline"),"")
+			s TotalTime=$g(%SQLStats(NS,Rou,Cur,Mod,"Ttime"),"")
+			s ModCount=$g(%SQLStats(NS,Rou,Cur,Mod,"counter"),0)
+			s DiskWait=$g(%SQLStats(NS,Rou,Cur,Mod,"Tdwait"),0)
+			s FirstRow=$s(Mod=1:$g(%SQLStats(NS,Rou,Cur,"FirstRow")),1:"")
+			s:Mod'=1 Rows=""
+			do %0Yo
+			If SQLCODE<0 {
+				s mess=" SQL error in GlobalSave of %SYS.PTools, %SYS_PTools.SQLStats"
+				s id=NS_"||"_Rou_"||"_Cur_"||"_Counter
+				THROW
+			}
+			ELSE  {s %SQLStats("LastRow")=%ROWID}
+		}
+	}
+	Catch {
+		s:$g(mess)="" mess=" Error inserting SQL Stats into %SYS_PTools.SQLStats table"
+		d GlobalSaveErrorSecure($ze,mess,$g(SQLCODE),$g(%msg),$g(id))
+	}
+	do $ZU(139,zu139)					// resume transaction (if needed)
+	set auto=$SYSTEM.SQL.SetAutoCommit(auto)	// reset Auto Commit
+	s ProcStats=$zu(115,12,ProcStats)
+	QUIT
+}
+GlobalSaveErrorSecure(ze,mess,sqlcode,msg,id) Private{
+		i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"} ; verified 9/26/16 STC
+		s:ze'="" ^%sqlcq($NAMESPACE,"PTools","Error",$J,"$ze")=ze
+		s:mess'="" ^%sqlcq($NAMESPACE,"PTools","Error",$J)=mess
+		s:sqlcode'="" ^%sqlcq($NAMESPACE,"PTools","Error",$J,"SQLCODE")=sqlcode
+		s:msg'="" ^%sqlcq($NAMESPACE,"PTools","Error",$J,"%msg=")=msg
+		s:id'="" ^%sqlcq($NAMESPACE,"PTools","Error",$J,"ROWID")=id
+		QUIT
+}
+GetLastSQLStats()  Public {
+	Try {
+		s sc=1
+		if $G(%SQLStats("LastRow"))="" { 
+			s sc=0  
+			}
+		ELSE {
+			s ProcStats=$zu(115,12,-1)
+			s Parent=$P(%SQLStats("LastRow"),"||",1,3)
+			s Child=$P(%SQLStats("LastRow"),"||",4)
+			if '$isobject($Get(%sqlcontext)) { set %sqlcontext = ##class(%Library.ProcedureContext).%New() }
+			s sql="SELECT RowCount, ModuleName, ModuleCount, GlobalRefs, LinesOfCode, TotalTime, QueryText, DiskWait "
+				_"FROM %SYS_PTools.SQLStats S JOIN %SYS_PTools.SQLQuery Q ON S.SQLQueryPointer = Q.ID "
+				_"WHERE S.SQLQueryPointer = ? AND  S.ChildSub = ?"
+			s tStatus=$$GetLastSQLStatsSecure(.tStatement,sql)
+			if (''tStatus) { 
+				set tResult = tStatement.%Execute(Parent,Child) 
+				}
+			else { 
+				set %sqlcontext.Error = ##class(%SYSTEM.Error).%New(tStatus)
+				set sc=0 
+				THROW
+				}
+			if tResult.%SQLCODE '< 0 { 
+				do %sqlcontext.AddResultSet(tResult)
+				}
+			else { 
+				set %sqlcontext.Error = ##class(%SYSTEM.Error).%New(tStatus)
+				set sc=0 
+				THROW
+				}
+			s ProcStats=$zu(115,12,ProcStats)
+		}
+	}
+	Catch {
+		if $G(ProcStats)'="" s ProcStats=$zu(115,12,ProcStats)
+		s sc=0
+	}
+	QUIT sc
+}
+GetLastSQLStatsSecure(tStatement,sql) Private {
+	i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"} ; verified 9/26/16 STC
+	set tStatement = ##class(%SQL.Statement).%New()
+	set tStatus = tStatement.%Prepare(sql)
+	QUIT tStatus
+}
+		// Called from %SYS.PTools.SQLStats.Purge() and %ocsSQLRTDict5
+Purge(NameSpace="", RoutineName="") PUBLIC {
+	set tSC=1,flag=0
+	s:NameSpace="" NameSpace=$NAMESPACE
+	try {
+		if $ZU(28,NameSpace,5)'=$NAMESPACE {
+			new $namespace set $namespace=NameSpace
+		}
+		if $tlevel,'$ZU(139) { Do $ZU(139,1) set flag=1 }
+		l +^%sqlcq($NAMESPACE,"PTools","RunTime","SQLStatsD"):$zu(115,4)
+		if '$t { set tSC=$$Error^%apiOBJ(5803,$name(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"PTools","RunTime","SQLStatsD"))),%msg="Lock Timeout attempting to acquire lock on PTools metadata" THROW  }
+		d PurgeSecure(RoutineName)
+	}
+	catch {
+		set:tSC=1 tSC=$$Error^%apiOBJ(5002,$ze)
+	}
+	l -^%sqlcq($NAMESPACE,"PTools","RunTime","SQLStatsD")
+	if flag { Do $ZU(139,0) }
+	QUIT tSC
+}
+PurgeSecure(RoutineName) Private {
+	i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"} ; verified 9/26/16 STC
+	if RoutineName'="" {
+			k ^%sqlcq($NAMESPACE,"PTools","RunTime","SQLStatsS",RoutineName)
+			k ^%sqlcq($NAMESPACE,"PTools","RunTime","SQLStatsI",RoutineName)
+			k ^%sqlcq($NAMESPACE,"PTools","RunTime","SQLStatsC",RoutineName)
+			k ^%sqlcq($NAMESPACE,"PTools","RunTime","SQLStatsD",RoutineName)
+		}
+	ELSE  {	
+			k ^%sqlcq($NAMESPACE,"PTools","RunTime","SQLStatsS")
+			k ^%sqlcq($NAMESPACE,"PTools","RunTime","SQLStatsI")
+			k ^%sqlcq($NAMESPACE,"PTools","RunTime","SQLStatsC")
+			k ^%sqlcq($NAMESPACE,"PTools","RunTime","SQLStatsD")
+			k ^%sqlcq($NAMESPACE,"PTools","Error")
+	}
+}
+	; this code is called from PurgeRtn^%SYS.SQLSRV as part of Cached Query Purge
+	;	Called from DropTable^%ocsSQLRTDict4
+PurgeRtn(NameSpace,Rtn) PUBLIC {
+	set tSC=1
+	try {
+		set flag=0 if $tlevel,'$ZU(139) { Do $ZU(139,1) set flag=1 }
+		s RoutineName=Rtn_".1"
+		l +^%sqlcq(NameSpace,"PTools","RunTime","SQLStatsD",RoutineName):$zu(115,4)
+		if '$t { set tSC=$$Error^%apiOBJ(5803,$name(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"PTools","RunTime","SQLStatsD"))),%msg="Lock Timeout attempting to acquire lock on PTools metadata" THROW  }
+		d PurgeRtnSecure(NameSpace,RoutineName)
+	}
+	catch {
+		set tSC=$$Error^%apiOBJ(5002,$ze)
+	}
+	l -^%sqlcq(NameSpace,"PTools","RunTime","SQLStatsD",RoutineName)
+	if flag { Do $ZU(139,0) }
+	QUIT tSC
+}
+PurgeRtnSecure(NameSpace,RoutineName) Private {
+		i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"} ; verified 9/26/16 STC
+		k ^%sqlcq(NameSpace,"PTools","RunTime","SQLStatsS",RoutineName)
+		k ^%sqlcq(NameSpace,"PTools","RunTime","SQLStatsI",RoutineName)
+		k ^%sqlcq(NameSpace,"PTools","RunTime","SQLStatsC",RoutineName)
+		k ^%sqlcq(NameSpace,"PTools","RunTime","SQLStatsD",RoutineName)
+		k ^%sqlcq(NameSpace,"PTools","RunTime","SQLQueryS",RoutineName)
+		k ^%sqlcq(NameSpace,"PTools","RunTime","SQLQueryI",RoutineName)
+		k ^%sqlcq(NameSpace,"PTools","RunTime","SQLQueryC",RoutineName)
+		k ^%sqlcq(NameSpace,"PTools","RunTime","SQLQueryD",RoutineName)
+}
+PurgeBench() PUBLIC {
+	Try {
+		s tSC=1
+		set flag=0 if $tlevel,'$ZU(139) { Do $ZU(139,1) set flag=1 }
+		l +^%sqlcq($NAMESPACE,"PTools","Bench"):$zu(115,4)
+		if '$t { set tSC=$$Error^%apiOBJ(5803,$name(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"PTools","Bench"))),%msg="Lock Timeout attempting to acquire lock on PTools benchMark data" THROW  }
+		do PurgeBenchSecure
+	}
+	Catch {
+		set tSC=$$Error^%apiOBJ(5002,$ze)
+	}
+	l -^%sqlcq($NAMESPACE,"PTools","Bench")
+	if flag { Do $ZU(139,0) }
+	QUIT tSC
+}
+PurgeBenchSecure() Private {
+	i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"} ; verified 9/26/16 STC
+	k ^%sqlcq($NAMESPACE,"PTools","Bench")
+}
+ClearResults() Public
+{
+	Try {
+		set status=1
+		do ClearResultsSecure()
+	}
+	catch Exception {
+		set status= Exception.AsStatus()
+	}
+	QUIT status
+}
+ClearResultsSecure() Private {
+	i '($e($roles,1,$l("%All"))="%All") { n $roles set $roles=$roles_","_"%All" } ; verified 9/26/16 STC
+	k ^%sqlcq($NameSpace,"PTools","Utils","Results")
+}
+ClearStatements() Public
+{
+	Try {
+		set status=1
+		do ClearStatementsSecure()
+	}
+	catch Exception {
+		set status= Exception.AsStatus()
+	}
+	QUIT status
+}
+ClearStatementsSecure() Private {
+	i '($e($roles,1,$l("%All"))="%All") { n $roles set $roles=$roles_","_"%All" } ; verified 9/26/16 STC
+	k ^%sqlcq($NameSpace,"PTools","Utils","Queries")
+}
+GetSQLStatements(cachedQueries, classQueries, classMethods, routines, SystemTables, Display=0) [SQLCODE, rtn, sqlRef, ImportPackage, name, class, query] Public {
+	Try {
+		l +^%sqlcq($NAMESPACE,"PTools","Utils","Queries")
+		i Display = 0 {
+			s CurrentIO=$IO
+			s NullDevice=$S(($zversion(1)=2):"//./nul",($zversion(1)=3):"/dev/null/",($zversion(1)=1):"NL:",1:"//./nul")
+			open NullDevice
+			use NullDevice
+		}
+		n SQLCODE, rtn, sqlRef, ImportPackage, name, class, query
+		n %f, %msg, %msqlvar, %SYSTEMINCLUDE
+		do ClearStatements()
+		do ClearResults()
+		set qCount=0
+		if cachedQueries {
+			set rtn=""
+			for  {
+				set rtn=$o(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",rtn)) q:rtn=""
+				set ok=0
+				if $g(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",rtn,0))=1 {
+					s sql=$zu(28,$zstrip($g(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",rtn,1)),"<W"),5)
+					continue:$e(sql,1,2)="--"
+					if $case($e(sql,1,6),"SELECT":1,"INSERT":1,"UPDATE":1,"DELETE":1,:0) set ok=1
+				}
+				elseif $g(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",rtn,0))>1 {
+					for i=1:1:^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",rtn,0) {
+						s sql=$zu(28,$zstrip($g(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",rtn,i)),"<W"),5)
+						continue:$e(sql,1,2)="--"
+						if $case($e(sql,1,6),"SELECT":1,"INSERT":1,"UPDATE":1,"DELETE":1,:0) set ok=1,i=999999999 continue
+					}
+				}
+				continue:'ok	// Not a SELECT query
+				set qCount=qCount+1
+				s sqlRef=##class(%Stream.GlobalCharacter).%New()
+				for i=1:1:^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",rtn,0) {
+					set sql=$g(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",rtn,i))
+					for j="LOGICAL","RUNTIME","DISPLAY","ODBC" { set:sql[("~"_j_"~p1,") sql=$p(sql,"~"_j_"~p1,") }
+					d sqlRef.Write(sql)
+				}
+				do:ok InsertStatementSecure("Cached Query", rtn, sqlRef)
+			}
+		}
+		if classMethods {
+			new %classname,%codein,%codeout,%methodname set lastclass=""
+			
+			do %expcm0o
+			for  {
+				do %07o
+				q:SQLCODE
+				kill %codein,^||%sql.extract
+				s %codein($i(%codein(0)))="#classcontext "_class
+				s %codein($i(%codein(0)))="#classmethod "_name
+				s %codein($i(%codein(0)))="#Include %systemInclude"
+				if $d(^oddCOM(class,36)) {
+					s inc="" f  s inc=$o(^oddCOM(class,36,inc)) q:inc=""  s %codein($i(%codein(0)))="#include "_inc
+				}
+				else {
+					s includes=$s($d(^oddDEF(class,35))#2:^(35),1:"")
+					if includes'="" f i=1:1:$l(includes,",") s %codein($i(%codein(0)))="#include "_$p(includes,",",i)
+				}
+				for i=1:1:$s($d(^oddDEF(class,"m",name,30))#2:^(30),1:"") {
+					set %codein($i(%codein(0)))=$g(^oddDEF(class,"m",name,30,i))
+				}
+				//set %codein(0)=i
+				s %classname=class,%methodname=name
+				s wrtref=1,success=1
+				do LINES^%qarmac("%codein","%codeout",,,,1,"errout",,,,,,,,,,,.success)
+				CONTINUE:('success||'$d(^||%sql.extract))   // compile error or no SQL
+				s rtn=class_"."_name
+				s ImportPackage=$p(class,".",1,$l(class,".")-1)
+				for i=1:1:^||%sql.extract {	// For each statement
+					s sqlRef=##class(%Stream.GlobalCharacter).%New()
+					s ok=1
+					for j=1:1:^||%sql.extract(i) {	// For each line
+					set sql=$zu(28,$zstrip($zstrip(^||%sql.extract(i,j),"<W"),">W"),5)
+						if j=1 {
+							if $case($e(sql,1,6),"SELECT":0,"UPDATE":0,"DELETE":0,"DECLAR":0,:1) s j=9999999,ok=0 continue  
+							set qCount=qCount+1
+							if $e(sql,1,7)="DECLARE" {
+								if sql["SELECT" {
+									set sql="SELECT "_$p(sql,"SELECT",2,9999)	// remove 'DECLARE <XXX> CURSOR FOR '
+								}
+								ELSE  {
+									set sql=""
+								}
+							}
+						}
+						s sql=$TR(sql,$C(9,10,13),"   ")_" "
+						d sqlRef.Write(sql)
+					}
+				 do:ok InsertStatementSecure("Class Method", rtn, sqlRef, ImportPackage)		
+				}
+			}
+			do %expcm0c
+		}
+		if classQueries {
+			
+			do %expcq0o
+			for  {
+				do %0eo
+				q:SQLCODE
+				set qCount=qCount+1
+				s rtn=class_"."_name
+				s ImportPackage=$p(class,".",1,$l(class,".")-1)
+				s sql=$zstrip($zstrip(query,"<W"),">W")
+				s sql=$TR(sql,$c(9,10,13),"   ")
+				s sqlRef=##class(%Stream.GlobalCharacter).%New()
+				d sqlRef.Write(sql)
+				do:ok InsertStatementSecure("Class Query", rtn, sqlRef, ImportPackage)
+			}
+			do %expcq0c
+		}
+		if routines {
+			new %codein,%codeout set rtn="&"
+			for  {
+				set rtn=$o(^rMAC(rtn)) q:rtn=""
+				continue:'$d(^rINDEX(rtn,"MAC"),data)	// Not a MAC routine
+				//continue:$lg(data)=1			// Skip generated routines
+				continue:"%sqlcq"=$e(rtn,1,$l("%sqlcq"))	// Skip cached queries
+				kill %codein,^||%sql.extract
+				merge %codein=^rMAC(rtn,0)
+				do LINES^%qarmac("%codein","%codeout",,,,2,"errout")
+				continue:'$g(^||%sql.extract)	// no SQL
+				for i=1:1:^||%sql.extract {	// For each statement
+					;if $e(line,1,7)="#import" { set ImportPackage=$e(line,9,*) continue  }
+					s sqlRef=##class(%Stream.GlobalCharacter).%New()
+					s ok=1 
+					for j=1:1:^||%sql.extract(i) {	// For each line
+						s line=^||%sql.extract(i,j)
+						if $e(line,1,7)="#import" { set ImportPackage=$e(line,9,*) continue  }
+						set sql=$zu(28,$zstrip($zstrip(line,"<W"),">W"),5)
+						if j=1 {
+							if $case($e(sql,1,6),"SELECT":0,"UPDATE":0,"DELETE":0,"DECLAR":0,:1) s j=9999999,ok=0 continue  
+							set qCount=qCount+1
+							if $e(sql,1,7)="DECLARE" {
+								if sql["SELECT" set sql="SELECT "_$p(sql,"SELECT",2,9999) // remove 'DECLARE <XXX> CURSOR FOR '
+								else  s sql=""
+							}
+						}
+						s sql=$TR(sql,$c(9,10,13),"   ")_" "
+						d sqlRef.Write(sql)
+					}
+					do:ok InsertStatementSecure("Routine", rtn, sqlRef, ImportPackage)
+				}
+			}
+			i Display = 0 {
+			open CurrentIO
+			use CurrentIO
+		}
+		}
+	}
+	Catch ExStatement {
+		l -^%sqlcq($NAMESPACE,"PTools","Utils","Queries")
+		set status= ExStatement.AsStatus()
+        THROW ExStatement
+	}
+	l -^%sqlcq($NAMESPACE,"PTools","Utils","Queries")
+	QUIT 1
+}
+InsertStatementSecure(type, rtn, sqlRef, Package="") [type, rtn, sqlRef, Package] Private
+{
+	i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"}
+	do %0go
+}
+IndexUsage(PopTable, SystemTables, IgnoreEns, IgnoreIDKeys, Display) [ SQLCODE, Type, Name, Package, sqlRef, Count, Schema, Table, Index ] Public {
+	try {
+		set status=1
+		n %f,%plan,%protocol,%SYSTEMINCLUDE, SQLCODE, Type, Name, Package, sqlRef, Count, Schema, Table, Index
+		//find all the SQL Statements that are defined in this namespace
+		d:PopTable GetSQLStatements(1,1,1,1,Display)
+		//find all the indices that are defined in this namespace
+		do AllIndices(IgnoreEns, IgnoreIDKeys,SystemTables)
+		
+		do %cur10o
+		f  {
+			do %0lo 
+			Q:SQLCODE'=0  
+			k sql
+			do LoadStream(.sql,sqlRef)
+			s Package=$LISTFROMSTRING(Package)
+			do FindUsedIndices(.sql,.Usage,0,Package)
+		}
+		do %cur10c
+		s FullName=""
+		f  {
+			s FullName=$O(Usage(FullName),1,Count)
+			Q:FullName=""
+			s Schema=$P(FullName,".",1),Table=$P(FullName,".",2),Index=$P(FullName,".",3)
+			do SQLUtilResultsSecure("IUU",Schema,Table,Index,Count)
+		}
+	}
+	catch Exception {
+		set status= Exception.AsStatus()
+        write:Display Exception.DisplayString()
+	}
+	QUIT status
+}
+TableScans(PopTable, SystemTables, IgnoreEns, Display) [SQLCODE, Id, Type, Name, Package, sqlRef, Schema, Table, Extent, Module, MapType, BlockCount ] Public {
+	try {
+		set status=1
+		n %f, Id, Type, Name, Package, sqlRef, Schema, Table, Extent, Module, SQLCODE, MapType, BlockCount
+		
+		//find all the SQL Statements that are defined in this namespace
+		d:PopTable GetSQLStatements(1,1,1,1,Display)
+		do %cur20o
+		f  {
+			do %0qo 
+			Q:SQLCODE'=0  
+			i sqlRef'="" {
+				k sql
+				s:Package'="" Package=$LB(Package)
+				do LoadStream(.sql,sqlRef)
+				do FindTableScans(Id,.sql,.Usage,Package,"",0,Display,SystemTables)
+			}
+		}
+		do %cur20c
+		s Id=""
+		f  {
+			s Id=$O(Usage(Id))
+			QUIT:Id=""
+			s TableName=""
+			f  {
+				s TableName=$O(Usage(Id,TableName))
+				Q:TableName=""
+				s Schema=$P(TableName,".",1)
+				s Table=$P(TableName,".",2)
+				s Mod=""
+				f  {
+					s Mod=$O(Usage(Id,TableName,Mod),1,Data)
+					QUIT:Mod=""
+					s Module=$s(Mod=1:"MAIN",Mod>26:Mod,1:$c(64+Mod))
+					do SQLUtilResultsSecure("TS",Schema,Table,"","",Id,Extent,Module)
+				}
+			}
+		}
+	}
+	catch Exception {
+		set status= Exception.AsStatus()
+        write:Display Exception.DisplayString()
+	}
+	QUIT status
+}
+TempIndices(PopTable, SystemTables, IgnoreEns, Display) [SQLCODE, Id, Type, Name, Package, sqlRef, Schema, Table, Subscripts, Data, Extent, Fields, BlockCount] Public {
+	try {	
+		set status=1
+	    n SQLCODE, Id, Type, Name, Package, sqlRef, Schema, Table, Subscripts, Data, Extent, Fields, BlockCount
+		k Usage
+		n %f,%SYSTEMINCLUDE
+		
+		//find all the SQL Statements that are defined in this namespace
+		d:PopTable GetSQLStatements(1,1,1,1,Display)
+		do %cur30o
+		f  {
+			do %0vo 
+			Q:SQLCODE'=0  
+			i sqlRef'="" {
+				k sql
+				s:Package'="" Package=$LB(Package) 
+				do LoadStream(.sql,sqlRef)
+				do FindTempIndices(Id,.sql,.Usage,Package,"",0,Display,SystemTables)
+			}
+		}
+		do %cur30c
+		s Id=""
+		f  {
+			s Id=$O(Usage(Id))
+			Q:Id=""
+			s TableName=""
+			f  {
+				s TableName=$O(Usage(Id,TableName))
+				Q:TableName=""
+				s Subscripts=""
+				f  {
+					s Subscripts=$O(Usage(Id,TableName,Subscripts),1,Data)
+					Q:Subscripts=""
+					s Extent=$G(Usage(Id,TableName,Subscripts,"Extent"),100000)
+					s Schema=$P(TableName,".",1)
+					s Table=$P(TableName,".",2)
+					do SQLUtilResultsSecure("TI",Schema,Table,"","",Id,Extent,"",Subscripts,Data,"")
+				}	
+			}
+		}
+	}
+	catch Exception {
+		set status= Exception.AsStatus()
+        write:Display Exception.DisplayString()
+	}
+	QUIT status
+}
+JoinIndices(PopTable, SystemTables, IgnoreEns, Display) [SQLCODE, sqlId, Type, Name, Package, sqlRef, Schema, Table, Index, bestflag] Public {
+	try {
+		n %f
+		set status=1
+		n SQLCODE, sqlId, Type, Name, Package, sqlRef, Schema, Table, Index, bestflag
+		
+		//find all the SQL Statements that are defined in this namespace
+		d:PopTable GetSQLStatements(1,1,1,1,Display)
+		do %cur40o
+		f counter=1:1 {
+			do %0AAo 
+			Q:SQLCODE'=0  
+			i sqlRef'="" {
+				k sql
+				s:Package'="" Package=$LB(Package)
+				do LoadStream(.sql,sqlRef)
+				do FindJoinIndices(sqlId,.sql,.Usage,Package,counter,"",0,Display,SystemTables)
+			}
+		}
+		do %cur40c
+		/*
+		Structure of the Usage array
+		Subscript 1 - The unique identifier of the SQL we are looking at
+		Subscript 2 - 	"Index"
+						Subscript 3 - Table ID
+						Subscript 4 - Index ID 				- with data of $LB of index fields
+						Subscript 5 - Index Subscript 		- with data of Collated Field Name
+						"Join"
+						Subscript 3 - Stream number, different value for each joins
+						Subscript 4 - table ID 				- with data of $LB of index fields
+						Subscript 5 - Collated Field Name 	- with data of exact schema name, table name, and field name
+						"sql" - ID of the SQL in the %SYS_PTools.SQLUtilities table
+		*/
+		; loop over the "Join" subscripts to get the fields used in the JOIN
+		s Id=""
+		f  {
+			s Id=$O(Usage(Id))
+			QUIT:Id=""
+			S stream=""
+			f  {
+				s stream=$o(Usage(Id,"Join",stream))
+				Q:stream=""
+				s irn=""
+				f  {
+					s irn=$O(Usage(Id,"Join",stream,irn))
+					Q:irn=""
+					s field=""
+					f  {
+						s field=$O(Usage(Id,"Join",stream,irn,field))
+						Q:field=""
+						; Grab the JOIN info we need to compair against the indices
+						s join(irn)=Usage(Id,"Join",stream,irn,field)
+						s join(irn,1)=Usage(Id,"Join",stream,irn)
+					}
+					/* 
+					now we need to figure out if we have a good index for the JOIN
+					Different cases
+						There is an index with:
+							flag = 4  Exact match to join fields
+							flag = 3  Leading subscripts match but index has extra fields
+							flag = 2  Index contains join fields but not leading subscripts
+							flag = 1  The index contains some of the join fields
+							flag = 0  No index to support the join
+					*/
+					; we need to look at all the indices and save the best match
+					s bestflag=0
+					s index=""
+					f  {
+						s index=$O(Usage(Id,"Index",irn,index),1,indexlist)
+						q:index=""
+						; set flag = 0 means there is no supporting index
+						s flag=0
+						;if the 2 lists have the same length then we might have an exact match
+						i $LL(indexlist)=$LL(join(irn,1))
+						{
+							f i=1:1:$LL(indexlist) {
+								if $LF(join(irn,1),$LG(indexlist,i))=0 s flag=0 QUIT
+								s flag=4
+							}
+						}
+						; if the index leads with the same fields in the JOIN that is good flag = 3
+						; if the index contains the join fields but not the leading subscripts that is OK flag=2
+						i $LL(indexlist)>$LL(join(irn,1))
+						{
+							f i=1:1:$LL(join(irn,1)) {
+								s location=$LF(indexlist,$LG(join(irn,1),i))
+								i (location=0) || (location>$LL(join(irn,1))) s flag=0 QUIT	
+								s flag=3
+							}
+							if flag=0 {
+								f i=1:1:$LL(join(irn,1)) {
+									i $LF(indexlist,$LG(join(irn,1),i))=0 s flag=0 QUIT	
+									s flag=2
+								}
+							}
+						}
+						; last case, an index contains some of the join fields flag = 1
+						i flag=0 
+						{
+						f i=1:1:$LL(join(irn,1)) {
+								i $LF(indexlist,$LG(join(irn,1),i)) s flag=1 QUIT	
+							}
+						}
+						s:flag>bestflag bestflag=flag
+					}	; end of index loop
+					s Schema=$LG(join(irn),1)
+					s Table=$LG(join(irn),2)
+					s Index=join(irn,1)
+					s sqlId=Usage(Id,"sql")
+			 		d SQLUtilResultsSecure("JI",Schema,Table,Index,"",bestflag,sqlId)
+				} 	;end of irn loop
+		    }	; end of the stream loop
+		}	; end of the Id loop
+	}	; end of the try
+	catch Exception {
+		set status= Exception.AsStatus()
+        write:Display Exception.DisplayString()
+	}
+	QUIT status
+}
+AllIndices(IgnoreEns, IgnoreIDKeys, SystemTables) [Class,Index,Ref,Schema,SQLCODE,Table]
+{
+	Try {
+		n Class,Index,Ref,Schema,SQLCODE,Table
+		;find all the active Storage Defs for the classes.
+		set sql="SELECT ID1, Type, parent->SQLSchemaName SchemaName, parent->SQLTableName TableName"
+		set sql=sql_" FROM %Dictionary.CompiledStorage "
+		set sql=sql_" WHERE parent->StorageStrategy = Name "
+		if SystemTables=0 {set sql=sql_" and parent ] '%zzzzz' and parent not like 'DeepSee%' and parent not like 'Ens%' and parent not like 'HS%'"}
+		d AllIndicesSecure(.statement1,sql)
+		set rset=statement1.%Execute()
+		while rset.%Next() {
+			set Storage=rset.%Get("Type")
+			set Ref=rset.%Get("ID1")
+			set Schema=rset.%Get("SchemaName")
+			set Table=rset.%Get("TableName")
+			; for Cache SQL Storage we need to get the Maps
+			If Storage="%Library.CacheSQLStorage" {
+				s sql="SELECT Name FROM %Dictionary.CompiledStorageSQLMap " 
+				s sql=sql_"WHERE parent = ?"
+				if IgnoreIDKeys {set sql=sql_" and Type <> 'data'"}
+				d AllIndicesSecure(.statement2,sql)
+				s rs1=statement2.%Execute(Ref)
+				while rs1.%Next() {
+					s Index=rs1.%Get("Name")
+					d SQLUtilResultsSecure("IUI",Schema,Table,Index,0)
+				}		
+			}
+			; for Default Storage we need to get the Index Names
+			ELSEIF Storage="%Library.CacheStorage" {
+				s Class=$P(Ref,"||",1)
+				s sql="SELECT Name FROM %Dictionary.CompiledIndex " 
+				s sql=sql_"WHERE parent = ?"
+				if IgnoreIDKeys {set sql=sql_" and IDKey = 0"}
+				d AllIndicesSecure(.statement2,sql)
+				s rs1=statement2.%Execute(Class)
+				while rs1.%Next() {
+					s Index=rs1.%Get("Name")
+					d SQLUtilResultsSecure("IUI",Schema,Table,Index,0)
+				}
+			}
+		}
+		kill rset
+	}
+	Catch ExAllIndex {
+		kill rset
+		set status= ExAllIndex.AsStatus()
+        THROW ExAllIndex
+	}
+}
+AllIndicesSecure(statement,sql) Private {
+	i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"}
+	s statement=##class(%SQL.Statement).%New()
+	set sc=statement.%Prepare(sql)
+}
+SQLUtilResultsSecure(list,Schema,Table,Index,Usage="",sqlId="",Extent="",Module="",Subscripts="",Data="",bestflag="") [list,Schema,Table,Index,Usage,sqlId,Extent,Module,Data,bestflag] Private {
+	i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"}
+	If list="IUI" {
+		do %0ACo 
+		QUIT 
+	}
+	If list="IUU" {
+		do %0AEo
+		QUIT 
+	}
+	If list="TS" {
+		do %0AGo
+		QUIT 
+	}
+	If list="TI" {
+		do %0AIo 
+		QUIT 
+	}
+	IF list="JI" {
+		do %0AKo
+		QUIT
+	}
+}
+FindUsedIndices(sql, used, pVerbose, packages="", schemapath="", preparse=0,Display=0)
+{
+	Try {
+		n %sqlcodegen
+		d GetSQLArrays(.asl, .mt, .mts, .sql, packages, schemapath, preparse, Display)
+		s mod=""
+		f  {
+			s mod=$O(asl(mod))
+			QUIT:mod=""
+			s funk=""
+			f  {
+				s funk=$O(asl(mod,funk))
+				QUIT:funk=""
+				s item=""
+				f  {
+					s item=$O(asl(mod,funk,item))
+					QUIT:item=""
+					s info=$g(asl(mod,funk,item,"id"))  //the second piece is the imp value
+					QUIT:info=""
+					s imp=$P(info,$c(1),2)
+					if imp'="" {
+						s smdimp=$s($d(mt("smdimp",imp)):mt("smdimp",imp),1:imp)
+						if $lg(^||%sql.smd(12,+smdimp),3)="N" {
+							s curidx=$lg($g(^||%sql.smd(1,$lg(^||%sql.smd(12,+smdimp),37))),1)_"."_$lg($g(^||%sql.smd(1,$lg(^||%sql.smd(12,+smdimp),37))),2)_"."_$lg(^||%sql.smd(12,+smdimp),1)
+							s used(curidx)=$I(used(curidx))
+						}
+					}
+				}	
+			}
+		}	
+	}
+	Catch ExUsedIndex {
+		set status= ExUsedIndex.AsStatus()
+        THROW ExUsedIndex
+	}
+	QUIT
+}
+LoadStream(sql, Stream)
+{
+	Try {
+		s Ref=##class(%Stream.GlobalCharacter).%Open(Stream)
+		While Ref.AtEnd=0 {s sql($i(i))=Ref.Read()}
+		s sql=$O(sql(""),-1)
+	}
+	Catch ExStream {
+		set status= ExStream.AsStatus()
+        THROW ExStream
+	}
+}
+FindTableScans(Id, sql, TableScan, packages, schemapath = "", preparse = 0, Display = 0, SystemTables)
+	Try {
+		n actyp,asl,count,field,i,imp,info,it,item,mod,mt,mtc,mts,node,smdimp
+		n Data,IndexName,Source,Subscript,TableName
+		d GetSQLArrays(.asl, .mt, .mts, .sql, packages, schemapath, preparse,Display)
+		s mod="",top=1,ind=""
+		f  {
+			s mod=$O(asl(mod))
+			QUIT:mod=""
+			i $d(asl(mod,5)) k asl(mod,1),asl(mod,2) s item="" f  s item=$o(asl(mod,3,item)) q:item=""  q:$d(asl(mod,3,item,"endmodtag"))  k asl(mod,3,item)
+			CONTINUE:'$d(asl(mod,2,1))
+			n info,llup,lgiv,ns,nin 
+			s llup="",lgiv="",ns=0  ;  subscript details
+			s info=$g(asl(mod,2,1,"id"))
+			CONTINUE:$p(info,$c(1))="set" 
+			CONTINUE:$p(info,$c(1))="ntimes"
+			CONTINUE:$p(info,$c(1))="single"
+			k fields
+			; Get the name of the Fields, with collation, we are looping over and build the fields array
+			; next^%qaqplan builds llup with field names and any given or range values
+			f  s ns=$o(asl(mod,2,1,"next",ns),1,nin) q:ns=""  s fields($$val^%qaqplan($p(nin,$c(1))))="" d next^%qaqplan
+			CONTINUE:lgiv'=""
+			i llup'="" {
+				s fullscan=1
+				f i=1:1:$LL(llup) {
+					s:'$D(fields($LG(llup,i))) fullscan=0	; If it is more than just the field name there is some kind of restriction
+					s:$LG(llup,i)="a counter" fullscan=0 	; this is looping over a temp index
+				}
+				i fullscan {
+					; I think if we are here we are doing a full scan.
+					s imp=$P($g(asl(mod,2,1,"id")),$c(1),2)
+					i imp'="" {
+						s smdimp=$s($d(mt("smdimp",imp)):mt("smdimp",imp),1:imp)
+						s it=$lg(^||%sql.smd(12,+smdimp),7)
+						s MapType=$s($lg(^||%sql.smd(12,+smdimp),3)="Y":"master map ",it="BE":"extent bitmap ",it="B":"bitmap index ",1:"index map ")
+						s BlockCount=$lg(^||%sql.smd(12,+smdimp),18)
+						s TableName=$$table^%qaqplan($lg(^||%sql.smd(12,+smdimp),37))
+						s Schema=$P(TableName,".",1)
+						CONTINUE:(SystemTables=0)&($E(Schema,1)="%")
+						CONTINUE:(SystemTables=0)&($E(Schema,1,2)="HS")
+						CONTINUE:(SystemTables=0)&($E(Schema,1,3)="Ens")
+						CONTINUE:(SystemTables=0)&($E(Schema,1,7)="DeepSee")
+						s Table=$P(TableName,".",2)
+						s extentname=$lg($g(^rINDEXSQL("rv",$zu(28,Schema,5),$zu(28,Table,5))),2)
+						s tabinfo=$g(^oddEXTR(extentname,91))
+						s classname=$lg(tabinfo,3)
+						do %0AMo
+	             		s:SQLCODE'=0 Extent=100000
+						s TableScan(Id,TableName,mod)=$LB(Extent,MapType,BlockCount)
+					}
+				}
+			}
+		}
+	}
+	Catch ExTScans {
+		set status= ExTScans.AsStatus()
+        THROW ExTScans
+	}
+	QUIT
+FindTempIndices(Id, sql, TempIndex, packages, schemapath = "", preparse = 0, Display = 0, SystemTables)
+	Try {
+		n actyp,asl,field,i,imp,info,it,item,mod,mt,mtc,mts,node,smdimp
+		n Data,IndexName,Source,Subscript,TableName
+		n %sqlcodegen
+		d GetSQLArrays(.asl, .mt, .mts, .sql, packages, schemapath, preparse, Display)
+		s mod=""
+		f  { 
+			s mod=$O(asl(mod))
+			Q:mod=""
+			s (Subscript,Data)=""
+			s info=$g(asl(mod,2,1,"id"))
+			; Get the TableName and Index for this Module
+			i $p(info,$c(1),2) { 
+				s imp=$P(info,$c(1),2)
+				s smdimp=$s($d(mt("smdimp",imp)):mt("smdimp",imp),1:imp)
+				s it=$lg(^||%sql.smd(12,+smdimp),7)
+				s node=$s($lg(^||%sql.smd(12,+smdimp),3)="Y":"master map ",it="BE":"extent bitmap ",it="B":"bitmap index ",1:"index map ")
+				s TableName=$$table^%qaqplan($lg(^||%sql.smd(12,+smdimp),37))
+				s IndexName=$lg(^||%sql.smd(12,+smdimp),1)
+				s BlockCount=$lg(^||%sql.smd(12,+smdimp),18)
+				s Source=node_TableName_"."_IndexName
+				}
+			CONTINUE:$G(TableName)=""	
+			s item=""
+			f  {
+				s item=$o(asl(mod,4,item),1,info)
+				q:item=""
+				s actyp=$e(info)
+				if actyp="b" {
+					n lsub,ldat,bldi,bin 
+					s lsub="",ldat="",bldi=0
+					f  s bldi=$o(asl(mod,4,item,bldi),1,bin) q:bldi=""  d blde^%qaqplan
+					i $p(info,$c(1),8)="bit" s ldat=$LB($s(ldat="":"Add "_$li(lsub,$ll(lsub))_" bit to ",1:"OR the bitmap chunk into ")),lsub=$li(lsub,1,$ll(lsub)-1)
+					s Subscripts=lsub
+					s Data=ldat	
+					s:Subscripts=$LB("the hashing") Subscripts=""
+					s:Subscripts=$LB("a counter") Subscripts=""
+					if Subscripts'="" {
+						s Schema=$P(TableName,".",1)
+						CONTINUE:(SystemTables=0)&($E(Schema,1)="%")
+						CONTINUE:(SystemTables=0)&($E(Schema,1,2)="HS")
+						CONTINUE:(SystemTables=0)&($E(Schema,1,3)="Ens")
+						CONTINUE:(SystemTables=0)&($E(Schema,1,7)="DeepSee")
+						s Table=$P(TableName,".",2)
+						s extentname=$lg($g(^rINDEXSQL("rv",$zu(28,Schema,5),$zu(28,Table,5))),2)
+						s tabinfo=$g(^oddEXTR(extentname,91))
+						s classname=$lg(tabinfo,3)
+						do %0ARo
+	             		s:SQLCODE'=0 Extent=100000
+	             		s:($LL(Subscripts)>1)&($LG(Subscripts,$LL(Subscripts))="ID") Subscripts=$LIST(Subscripts,1,($LL(Subscripts)-1))
+						s TempIndex(Id,TableName,Subscripts)=$LB(Data,BlockCount)
+						s TempIndex(Id,TableName,Subscripts,"Extent")=Extent
+					}
+				}
+			}
+		}
+	}
+	Catch ExTempIndex {
+		set status= ExTempIndex.AsStatus()
+        THROW ExTempIndex
+	}
+	QUIT
+GetSQLArrays(dasl, dmt, dmts, sql, packages = "", schemapath, preparse, bmt, Display = 0)
+	Try {
+		n backgrnd,data,dcost,dint,dmac,dsql,err,i,inclist,j,mcurs,mtag,ok,%substk,%SYSTEMINCLUDE,sqllog,mtc,tSub,errout
+		if schemapath'="" new %sqlSchemaPath set %sqlSchemaPath=schemapath
+		if packages="" s packages=$LB("")
+		if preparse {
+			try {
+				set ppsql=$$preparse^%qaqpreparser(.sql)
+				kill sql
+				set sql=1,sql(1)=$lg(ppsql,1)	// sql is now the preparsed version of the statement
+			}
+			catch {
+				w:Display !,"Unexpected Error:  ",$ze
+				set ok=0
+			}
+		}
+		try { 
+			s ok=1,backgrnd=1
+			d comp^%qaqqt("query",.sql,"info","",0,"","%qsc(%qscacn",,,packages)
+		}
+		catch { 
+			if $g(err)="qaqperr",$g(SQLCODE) { w:Display !,"SQLCODE = ",SQLCODE," ",$$sqlcode(SQLCODE),".  ",!,$g(%msg) }
+			else { w:Display !,"Unexpected Error:  ",$ze }
+			set ok=0
+		}
+		QUIT:'ok
+		s i="" 
+		For  {
+			s i=$o(mtc(0,0,"table",i),1,data)
+			q:i=""  
+			s data=$p(data,$c(1),4)	// data is now the extentname
+			i data'="" {
+				s j="" For  Set j=$o(^oddCOM(data,36,j)) Quit:j=""  Set inclist(j)=""
+			}
+		}
+		k dmac
+		s dmac($i(dmac))="#INCLUDE %systemInclude"
+		i $d(inclist) s i="" f  s i=$o(inclist(i)) q:i=""  s dmac($i(dmac))="#INCLUDE "_i
+		if $g(packages)'="" f i=1:1:$ll(packages) s dmac($i(dmac))="#import "_$lg(packages,i)
+		if schemapath'="" s dmac($i(dmac))="#sqlcompile path="_$listtostring(schemapath)
+		f i=1:1:$g(sql) s dmac($i(dmac))=$s(i=1:" &sql(",1:" ")_$g(sql(i))
+		s dmac($i(dmac))=" )"	// DPV3472 - put closing ")" on line by itself in case SQL satemet ends with comment
+		zb close+1^%qaqcasl:"N"::"MERGE dmt(""sql"")=mt(""sql"")"  ;  AK7xx 3/21/2k9
+		zb +1^%qaqcasl:"N"::"MERGE dsql=sql,dasl=asl,dmt=mt,dcost=omscost,dmts=mts"
+		zb +1^%qaqpqo:"N"::"MERGE bmt(""v"")=mt(""v"")"
+		d LINES^%qarmac("dmac","dint",,,,,"errout")  ;  run the compiler and collect data
+		zb --+1^%qaqcasl  ;  clear the breakpoint
+		zb --close+1^%qaqcasl  ;  clear the breakpoint  ;  AK7xx 3/21/2k9
+		zb --+1^%qaqpqo
+	}
+	Catch ExSQLArrays {
+		set status= ExSQLArrays.AsStatus()
+        THROW ExSQLArrays
+	}
+	QUIT
+FindJoinIndices(Id, sql, Index, packages, QueryCount, schemapath = "", preparse = 0, Display, SystemTables)
+	Try {
+		n actyp,asl,count,Field,i,IDKey,ifn,imp,info,irn,it,item,jinfo,junk,mod,mt,mtc,mts,mtv,node,smdimp,vcol
+		n Data,IndexName,QueryNo,Selectivity,Stream,Source,Subscript,TableName,%sqlcodegen
+		k ^||%sql.smd
+		d GetSQLArrays(.asl, .mt, .mts, .sql, packages, schemapath, preparse, .mtv,Display)
+		s Index(QueryCount,"sql")=Id
+		s QueryNo=""
+		f  {
+			s QueryNo=$O(mts(QueryNo))
+			QUIT:QueryNo=""
+			s Stream=""
+			f  {
+				s Stream=$O(mts(QueryNo,Stream))
+				QUIT:Stream=""
+				s IDKey=$P($g(mts(QueryNo,Stream)),"^",5)  // MRP780
+				s ifn=""
+				s joinlist=$LB()
+				f  {
+					s ifn=$O(mts(QueryNo,Stream,"JOIN",ifn))
+					QUIT:(ifn="")
+					CONTINUE:$g(mt("vor",ifn))'=""		// Virtual field skip.
+					;s junk=$O(mts(QueryNo,Stream,"JOIN",ifn,""),1,jinfo)
+					;s Selectivity=$P(jinfo,"^",2)
+					s vcol=$P(mts(QueryNo,Stream,"ATT",+ifn),"^",5)
+					s irn=$P(mt("r",$P(mt("v",vcol),"^",2)),"^",1)
+					s Schema=$lg($g(^||%sql.smd(1,irn)),1)				// Exact schema name
+					CONTINUE:Schema=""
+					CONTINUE:(SystemTables=0)&($E(Schema,1)="%")
+					CONTINUE:(SystemTables=0)&($E(Schema,1,2)="HS")
+					CONTINUE:(SystemTables=0)&($E(Schema,1,3)="Ens")
+					CONTINUE:(SystemTables=0)&($E(Schema,1,7)="DeepSee")
+					s Table=$lg($g(^||%sql.smd(1,irn)),2)					// Exact table name
+					s field=$p($g(^||%sql.smd(1,"ifn",+ifn)),$c(1))				// Exact field name
+					s Index(QueryCount,"Join",Stream,irn)=$g(Index(QueryCount,"Join",Stream,irn))_$LB(field)
+					s Index(QueryCount,"Join",Stream,irn,field)=$LB(Schema,Table,field)	
+					s mapname=""
+					f  {
+						s mapname=$O(^||%sql.smd(1,irn,"map",mapname))
+						QUIT:mapname=""
+						s imap=$O(^||%sql.smd(1,irn,"map",mapname,""))
+						s indexlist=$$GetIndexFields(imap)
+						s:indexlist="" indexlist=$LB("ID")
+						f i=1:1:$LL(indexlist) {
+							s prop=$LG(indexlist,i)
+							s Index(QueryCount,"Index",irn,imap,i)=$zu(28,prop,5)
+						}
+						s Index(QueryCount,"Index",irn,imap)=indexlist
+					}
+				}
+			}
+		}
+	}
+	Catch ExJoinIndices {
+		set status= ExJoinIndices.AsStatus()
+        THROW ExJoinIndices
+	}
+	QUIT
+GetIndexFields(map)
+	Try {
+		;first loop over all the subscripts and get the fields
+		n id,indexlist,sub,subs
+		s sub=""
+		f  {
+			s sub=$O(^||%sql.smd(12,map,6,sub),1,data)
+			QUIT:sub=""
+			s:$LG(data,1)'="" subs($LG(data,4))=$LG(data,1)	
+		}
+		;Now remove the parts of the ID Key
+		s id=""
+		f  {
+			s id=$O(^||%sql.smd(12,map,8.5,id),1,data)
+			QUIT:id=""
+			k subs("{"_$lg(data,1)_"}")
+		}
+		; finally put the remaining fields in a listbuild
+		s indexlist=""
+		s sub=""
+		f  {
+			s sub=$O(subs(sub),1,data)
+			QUIT:sub=""
+			s indexlist=indexlist_$LB(subs(sub))
+		}
+	}
+	Catch ExIndexFields {
+		set status= ExIndexFields.AsStatus()
+        THROW ExIndexFields
+	}
+	QUIT indexlist
+IndexDefined(ClassName, JoinIndex)
+{
+	Try {
+		s final=0
+		set rs=##class(%Library.ResultSet).%New("%Dictionary.IndexDefinitionQuery:Summary")
+		set sc=rs.Execute(ClassName) 
+		while rs.%Next() { 
+			s flag=0
+			s indexID=ClassName_"||"_rs.Data("Name")
+			s IndexRef=##class(%Dictionary.IndexDefinition).%OpenId(indexID)
+			s ClassIndex=$LISTFROMSTRING($ZCVT(IndexRef.Properties,"U"),",")
+			If ClassIndex=JoinIndex {
+				s flag=3
+				w !,"Got a 3 on indexID = ",indexID,"  ",$LISTTOSTRING(JoinIndex),"  ",$LISTTOSTRING(ClassIndex)
+			}
+			ELSEIF $LISTFIND(JoinIndex,$LG(ClassIndex,1)) {
+				s flag=2 
+				w !,"Got a 2 on indexID = ",indexID,"  ",$LISTTOSTRING(JoinIndex),"  ",$LISTTOSTRING(ClassIndex)
+				}
+			Else { 
+				f i=1:2:$LL(ClassIndex) {
+					i $LISTFIND(JoinIndex,$LG(ClassIndex,i)) s flag=1 w !,"Got a 1 on indexID = ",indexID,"  ",$LISTTOSTRING(JoinIndex),"  ",$LISTTOSTRING(ClassIndex)
+				}
+			}
+			s:flag>final final=flag
+		 }
+	}
+	Catch ExIndexDefined {
+		set status= ExIndexDefined.AsStatus()
+        THROW ExIndexDefined
+	}
+	QUIT final
+}
+	;This method exports the class definitions for each of the classes referenced in the query statement into a stream that is stored inside the report
+FetchPlan(me) Private {
+	Try {
+		new %plan
+		s i=1,sc=1
+		s sql=1,sql(1)=me.QueryStatement
+		s myio=$IO
+		s devnull=$s(($zversion(1)=2):"//./nul",($zversion(1)=3):"/dev/null/",($zversion(1)=1):"NL:")
+		o devnull
+		u devnull
+		s sc=$$FetchPlanSecure(.me,.%plan,.sql)
+		u myio
+	}
+	Catch {
+	}
+	q sc
+}
+FetchPlanSecure(me, plan, sql) Private {
+	i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"} 
+	s sc=1
+	d ShowPlan^%apiSQL(.sql,1,,1)
+	i ($d(plan)){
+		s tStream=##class(%Stream.TmpCharacter).%New()
+		s me.QueryCompileStatus=1
+		f i=1:1:plan {
+			s sc=tStream.Write(plan(i))
+			q:('sc) 
+		}
+		s sc=me.QueryPlan.CopyFromAndSave(tStream)
+	}
+	else {
+		s stmterr=##class(%SQL.Statement).%New()
+		s me.QueryCompileStatus=stmterr.%Prepare(.sql)
+	}
+	QUIT sc
+}
+InsertQuery(query, wrcnum, includeresults, debug) Public
+{
+	new %objlasterror
+	new %ROWCOUNT,%ROWID,%sqlcontext,%sqlrmac
+ 	set tSC=1
+ try {
+	set tSC=$$CheckPrivs(query)
+	if tSC.%Message'="" THROW tSC.%Message
+	set me=##class(%SQL.Manager.QButtons.Base).%New()
+	do me.GetVersion()
+	set me.WRCNumber=wrcnum
+	set me.IncludeResults=includeresults
+	set me.AllowDelimitedIdentifiers=$$GetDelimitedIds^%SYS.CONFIG()
+	set me.DefaultSchema=$SYSTEM.SQL.DefaultSchema()
+	set me.QueryStatement=query
+	set tSC=$$FetchPlan(.me)
+	if '(('me.QueryCompileStatus)) {
+		set tSC=me.BuildClassList() THROW:('tSC)
+		set tSC=$$FetchClassDef(.me) THROW:('tSC)	
+		set tSC=$$QueryIntCodeCreate(.me) THROW:('tSC)
+	}
+	set tSC=me.%Save()
+ }
+ catch {
+	set:tSC=1 tSC=$$Error^%apiOBJ(5002,$ze)
+	if tSC.%Message'="" {
+		set tSC=$$Error^%apiOBJ(tSC.SQLCODE,tSC.%Message)
+	}
+ }
+	QUIT tSC
+}
+CheckPrivs(sql) PRIVATE
+{
+	Set responseTimeout = 15
+	x:$d(^%SYS("sql","server","init code",$namespace)) ^%SYS("sql","server","init code",$namespace)
+	Set tStatement = ##class(%SQL.Statement).%New()
+	Set tResult = ##class(%SQL.StatementResult).%New()
+	Set tResult.%Message = ""
+	try {
+		s pText(1)=sql
+		s pText=1
+		Do $System.Alarm.Set(responseTimeout)
+		Do tStatement.prepare(.pText)
+		Do $System.Alarm.Clear()
+	}
+	catch tException {
+		Do $System.Alarm.Clear()
+		If ($ZE["<ALARM>") {
+			Set tResult.%Message = $ZCVT("Query did not compile or execute within "_responseTimeout_" seconds.","O","HTML")
+		} Else {	
+			Set tResult.%SQLCODE = tException.AsSQLCODE()
+			Set tResult.%Message = tException.SQLMessageString()
+		}
+	}
+	QUIT tResult
+}
+QueryIntCodeCreate(me) PRIVATE
+{
+	s rName="%sqlcq."_$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")_"."_".QButtons.WRC"_me.WRCNumber_me.%Id()
+	Set routine = ##class(%Library.Routine).%New(rName_".MAC")
+	; Write lines of code to the routine
+	Do routine.WriteLine(me.WRCNumber_me.%Id()) 
+	Do routine.WriteLine(" &sql("_me.QueryStatement_")")
+	Do routine.WriteLine(" q")
+	; save the routine
+	s sc=$$SecureRoutineSave(.routine)
+	q:('sc) sc
+	s sc=$system.OBJ.ExportToStream(rName_".INT",.output,"/nodisplay",.error)
+	q:('sc) sc
+	s sc=me.QueryIntCode.CopyFromAndSave(.output)
+	q:('sc) sc
+	s sc=$$SecureRoutineDelete(rName)
+	q sc
+}
+SecureRoutineSave(routine) PRIVATE
+{
+	i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"}
+	 try {
+	    s sc=routine.Save()
+	    THROW:('sc) sc
+	    s sc=routine.Compile("k-d")
+	    THROW:('sc) sc
+	 }
+	 catch {
+		set:sc=1 sc=$$Error^%apiOBJ(5002,$ze)
+	 }
+		QUIT sc	
+}
+SecureRoutineDelete(rName) PRIVATE
+{
+ 	i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"}
+ 	try {
+	    s sc=##class(%Library.Routine).Delete(rName)
+	    THROW:('sc) sc
+	 }
+	 catch {
+		set:sc=1 sc=$$Error^%apiOBJ(5002,$ze)
+	 }
+	 QUIT sc	
+}
+WriteAllToFile(wrcnum, filename) [%ROWCOUNT, %ROWID, %msg, SQLCODE, objid, wrcnum] PUBLIC 
+{
+ new %ROWCOUNT, %ROWID, %msg, SQLCODE, objid
+ try {
+    set:$g(filename)="" filename=##class(%Library.File).TempFilename("xml")     
+    set writer=##class(%XML.Writer).%New()
+    set writer.Indent=1
+    set tSC=writer.OutputToFile(filename) THROW:('tSC)    
+    set tSC=writer.RootElement("QButtons") THROW:('tSC)
+    //Get IDs of objects in the extent for the given class
+    
+    do %cur0o
+    For {
+	    do %0AWo
+	    QUIT:SQLCODE'=0
+        set obj=##class(%SQL.Manager.QButtons.Base).%OpenId(objid)
+        set tSC=writer.Object(obj) THROW:('tSC)
+    }
+    do %cur0c
+    set tSC=writer.EndRootElement() THROW:('tSC)
+    set tSC=writer.EndDocument()
+ }
+ catch {
+	set:tSC=1 tSC=$$Error^%apiOBJ(5002,$ze)
+ }
+	QUIT tSC	
+}
+ConsumeReport(filename, qspec = "ck", loadcode = 1, NameSpace) PUBLIC {
+	if $zu(28,NameSpace,5)'=$NAMESPACE {
+		new $NAMESPACE set $NAMESPACE=NameSpace
+	}
+	Set reader = ##class(%XML.Reader).%New()
+	// Begin processing of the XML input
+	Set sc=reader.OpenFile(filename)
+	q:('sc) sc  
+	Do reader.Correlate("QButton","%SQL.Manager.QButtons.Base")
+	Set Count=0
+	While reader.Next(.report,.sc) {
+	    //Write "WRC "_report.WRCNumber_" Query: "_report.QueryStatement_" imported.",!
+	    Set Count=Count+1
+	    Set sc=report.%Save()
+	    q:('sc)
+	    i (loadcode){
+		 s sc=report.LoadClassDefs(qspec,.loadedlist)
+		 s sc=report.LoadIntCode(qspec,.loadedlist)   
+	    }
+	    q:('sc)  
+	}	
+	q sc
+}
+FetchClassDef(me)
+{
+	s sc=1,key="",cur=""
+	for {
+	 s class=me.ClassList.GetNext(.key)
+	 q:key=""
+	 s $p(cur,",",key)=class_".cls"
+	}
+	i (cur'=""){
+	 s sc=$system.OBJ.ExportToStream(cur,.output,"/nodisplay/exportselectivity/recursive",.error)
+	 //insert error checking
+	 s sc=me.ClassDefXml.CopyFromAndSave(output)
+	}
+	//insert error checking
+	q sc
+}	
+ q
+%0Ao n sqldata10d,sqldata11d,sqldata12d,sqldata13d,sqldata25d,sqldata2d,sqldata4d,sqldata6d,sqldata3d,sqldata5d,sqldata1d,sqldata7d,sqldata8d,sqldata9d
+ s $zt="%0Aerr"
+ s sqldata10d=0 s:$d(%0CacheRowLimit)#2 sqldata11d=%0CacheRowLimit
+ s sqldata2d=$g(NameSpace),sqldata4d=$g(RoutineName),sqldata6d=$g(CursorName)
+ s SQLCODE=100
+ If $zu(115,1)=2,'$TLEVEL { s sqldata12d=1 TSTART } If $zu(115,1) { s sqldata13d=1 TSTART  }
+ s sqldata8d=$zu(28,sqldata2d,7)
+ ; asl MOD# 2
+ s sqldata3d=sqldata4d
+ s sqldata5d=sqldata6d
+ i sqldata3d="" g %0AmBdun
+ i sqldata5d="" g %0AmBdun
+ i '$d(^%sqlcq($NAMESPACE,"PTools","RunTime","SQLQueryD",sqldata3d,sqldata5d)) g %0AmBdun
+ s sqldata25d=$g(^%sqlcq($NAMESPACE,"PTools","RunTime","SQLQueryD",sqldata3d,sqldata5d))
+ Set sqldata1d=$lg(sqldata25d,6)
+ s sqldata7d=$zu(28,sqldata1d,7)
+ g:'(sqldata7d=sqldata8d) %0AmBdun
+ g:'(sqldata7d'=" ") %0AmBdun
+ s sqldata9d=(sqldata3d)_"||"_(sqldata5d)
+ do ##class(%SYS.PTools.SQLQuery).%SQLDelete(sqldata9d,$c(0,1,0,0,0,0,0),'$g(sqldata13d))
+ g:SQLCODE<0 %0Ac i $i(sqldata10d)'<$g(sqldata11d,9223372036854775807) g %0Ac
+%0AmBdun 
+%0AmAdun 
+%0Ac s %ROWCOUNT=$s($g(SQLCODE)'<0:+$g(sqldata10d),1:0)
+ If $zu(115,1),$g(sqldata13d) { TCOMMIT:SQLCODE'<0  TROLLBACK:SQLCODE<0 1 } TCOMMIT:SQLCODE=100&&(%ROWCOUNT=0)&&($g(sqldata12d))&&($zu(115,1)=2) 
+ q
+%0Aerr s $zt=""
+ d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg)
+ g %0Ac
+%0Co try { n sqldata17d
+ 	if $zu(115,1)=1||('$TLEVEL&&($zu(115,1)=2)) { TSTART  s sqldata17d=1 }
+ 	n %i
+ 	s %i(7)=$g(NameSpace),%i(10)=$g(RoutineName),%i(3)=$g(CursorName),%i(6)=$g(sql(1)),%i(9)=$g(SQLType),%i(2)=$g(CompileTime),%i(4)=$g(hash),%i(5)=$g(schema)
+ 	s %ROWID=##class(%SYS.PTools.SQLQuery).%SQLInsert(.%i,$c(1,1,0,0,0,0,0),,,'$g(sqldata17d)),%ROWCOUNT='SQLCODE
+ 	if $zu(115,1)=1,$g(sqldata17d) { TCOMMIT:SQLCODE'<0  TROLLBACK:SQLCODE<0 1 }
+ }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) if $zu(115,1)=1,$g(sqldata17d) { TROLLBACK 1 } }
+ quit  // From %0Co
+%0Eo n sqldata15d,sqldata16d,sqldata28d,sqldata29d,sqldata41d,sqldata4d,sqldata6d,sqldata8d,sqldata5d,sqldata7d,sqldata3d,sqldata10d,sqldata11d,sqldata12d,sqldata13d,sqldata14d
+ s $zt="%0Eerr"
+ s sqldata15d=0,sqldata16d=""
+ d:$zu(115,15) $system.ECP.Sync()
+ s sqldata4d=$g(NS),sqldata6d=$g(Rou),sqldata8d=$g(Cur)
+ s SQLCODE=100
+ s sqldata11d=$zu(28,sqldata4d,7)
+ ; asl MOD# 2
+ s sqldata5d=sqldata6d
+ s sqldata7d=sqldata8d
+ i sqldata5d="" g %0EmBdun
+ i sqldata7d="" g %0EmBdun
+ i '$d(^%sqlcq($NAMESPACE,"PTools","RunTime","SQLQueryD",sqldata5d,sqldata7d)) g %0EmBdun
+ s sqldata29d=$g(^%sqlcq($NAMESPACE,"PTools","RunTime","SQLQueryD",sqldata5d,sqldata7d))
+ Set sqldata3d=$lg(sqldata29d,6)
+ s sqldata10d=$zu(28,sqldata3d,7)
+ g:'(sqldata10d=sqldata11d) %0EmBdun
+ g:'(sqldata10d'=" ") %0EmBdun
+ Set sqldata28d=$lg(sqldata29d,2)
+ s sqldata12d=(sqldata5d)_"||"_(sqldata7d)
+ d
+ . try {  s sql=$S($D(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",$S(sqldata5d[".cls":$E(sqldata5d,1,*-2),1:sqldata5d))):$P(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",$S(sqldata5d[".cls":$E(sqldata5d,1,*-2),1:sqldata5d),1),"~RUNTIME~",1),1:sqldata28d)
+ . } catch { ztrap:$ze["<ALARM" $ze set SQLCODE=-350,%msg="Unexpected error executing SqlCompute code for field 'QueryText': "_$ze ztrap "COMP" }
+ goto:$zu(115,2)=0 %0EmBuncommitted
+ if $zu(115,2)=1 {
+ 	lock +^%sqlcq($NAMESPACE,"PTools","RunTime","SQLQueryD",$p(sqldata12d,"||",1),$p(sqldata12d,"||",2))#"S":$zu(115,4)
+ 	if $t { set sqldata16d=$name(^%sqlcq($NAMESPACE,"PTools","RunTime","SQLQueryD",$p(sqldata12d,"||",1),$p(sqldata12d,"||",2)))_"#""SI""",sqldata15d=1 }
+ 	else { s SQLCODE=-114,%msg="Unable to acquire shared lock on table %SYS_PTools.SQLQuery for RowID value: "_sqldata12d ztrap "LOCK"  }
+ }
+ ; asl MOD# 3
+ s sqldata13d=$zlist(sqldata10d)
+ s sqldata5d=$p(sqldata12d,"||"),sqldata7d=$p(sqldata12d,"||",2)
+ i sqldata5d'="",sqldata7d'="" s sqldata41d="" i $d(^%sqlcq($NAMESPACE,"PTools","RunTime","SQLQueryD",sqldata5d,sqldata7d),sqldata41d)
+ e  g %0EmCdun
+ Set sqldata28d=$lg(sqldata41d,2),sqldata3d=$lg(sqldata41d,6)
+ s sqldata10d=$zu(28,sqldata3d,7)
+ d
+ . try {  s sql=$S($D(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",$S(sqldata5d[".cls":$E(sqldata5d,1,*-2),1:sqldata5d))):$P(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",$S(sqldata5d[".cls":$E(sqldata5d,1,*-2),1:sqldata5d),1),"~RUNTIME~",1),1:sqldata28d)
+ . } catch { ztrap:$ze["<ALARM" $ze set SQLCODE=-350,%msg="Unexpected error executing SqlCompute code for field 'QueryText': "_$ze ztrap "COMP" }
+ s sqldata14d=$zlist(sqldata10d)
+ g:sqldata13d'=sqldata14d %0EmCdun
+%0EmBuncommitted ;
+ s SQLCODE=0 g %0Ec
+%0EmCdun if $zu(115,2)=1 { if $g(sqldata15d)=1 { l -@sqldata16d s sqldata15d=0 } elseif $g(sqldata15d)=2 { do $classmethod($li(sqldata16d),"%UnlockId",$li(sqldata16d,2),1,1)  s sqldata15d=0 } }
+%0EmBdun 
+%0EmAdun 
+%0Ec s %ROWCOUNT='SQLCODE
+ if $zu(115,2)=1 { if $g(sqldata15d)=1 { l -@sqldata16d } elseif $g(sqldata15d)=2 { do $classmethod($li(sqldata16d),"%UnlockId",$li(sqldata16d,2),1,1)  } }
+ q
+%0Eerr s $zt=""
+ d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg)
+ g %0Ec
+%0Go try { n sqldata9d
+ 	if $zu(115,1)=1||('$TLEVEL&&($zu(115,1)=2)) { TSTART  s sqldata9d=1 }
+ 	n %i
+ 	s %i(4)=$g(sql),%i(5)=$g(ts),%i(2)=$g(Job),%i(3)=$g(NS)
+ 	s %ROWID=##class(%SYS.PTools.SQLBenchMarkQueries).%SQLInsert(.%i,$c(1,1,0,0,0,0,0),,,'$g(sqldata9d)),%ROWCOUNT='SQLCODE
+ 	if $zu(115,1)=1,$g(sqldata9d) { TCOMMIT:SQLCODE'<0  TROLLBACK:SQLCODE<0 1 }
+ }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) if $zu(115,1)=1,$g(sqldata9d) { TROLLBACK 1 } }
+ quit  // From %0Go
+%0Io try { n sqldata7d
+ 	if $zu(115,1)=1||('$TLEVEL&&($zu(115,1)=2)) { TSTART  s sqldata7d=1 }
+ 	n %i
+ 	s %i(0)=$g(childparent),%i(2)=$g(Parms(i)),%i(3)=$g(i)
+ 	s %ROWID=##class(%SYS.PTools.SQLBenchMarkQueriesPValues).%SQLInsert(.%i,$c(1,1,0,0,0,0,0),,,'$g(sqldata7d)),%ROWCOUNT='SQLCODE
+ 	if $zu(115,1)=1,$g(sqldata7d) { TCOMMIT:SQLCODE'<0  TROLLBACK:SQLCODE<0 1 }
+ }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) if $zu(115,1)=1,$g(sqldata7d) { TROLLBACK 1 } }
+ quit  // From %0Io
+%0KmD0pad s sqldatap(4)=2,sqldata21d="",sqldata22d="",sqldata3d="",Counter="",sqldata20d="",sqldata17d=""
+ g %0KmDpdtg
+%0Ko n sqldata23d,sqldata24d,sqldata25d,sqldata26d,sqldata38d,sqldata39d,sqldata51d,sqldatap,sqldata9d,sqldata11d,sqldata13d,sqldata10d,sqldata12d,sqldata8d,sqldata15d,sqldata16d,sqldata18d,sqldata19d,sqldata3d,sqldata21d,sqldata22d,sqldata20d,sqldata17d
+ s $zt="%0Kerr"
+ s sqldata23d=0,sqldata24d="",sqldata25d=0,sqldata26d=""
+ d:$zu(115,15) $system.ECP.Sync()
+ s sqldata9d=$g(NS),sqldata11d=$g(Rou),sqldata13d=$g(Cur)
+ s SQLCODE=100
+ s sqldata16d=$zu(28,sqldata9d,7)
+ ; asl MOD# 2
+ s sqldata10d=sqldata11d
+ s sqldata12d=sqldata13d
+ i sqldata10d="" g %0KmBdun
+ i sqldata12d="" g %0KmBdun
+ i '$d(^%sqlcq($NAMESPACE,"PTools","RunTime","SQLQueryD",sqldata10d,sqldata12d)) g %0KmBdun
+ s sqldata39d=$g(^%sqlcq($NAMESPACE,"PTools","RunTime","SQLQueryD",sqldata10d,sqldata12d))
+ Set sqldata8d=$lg(sqldata39d,6)
+ s sqldata15d=$zu(28,sqldata8d,7)
+ g:'(sqldata15d=sqldata16d) %0KmBdun
+ g:'(sqldata15d'=" ") %0KmBdun
+ Set sqldata38d=$lg(sqldata39d,2)
+ s QueryId=(sqldata10d)_"||"_(sqldata12d)
+ d
+ . try {  s QueryText=$S($D(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",$S(sqldata10d[".cls":$E(sqldata10d,1,*-2),1:sqldata10d))):$P(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",$S(sqldata10d[".cls":$E(sqldata10d,1,*-2),1:sqldata10d),1),"~RUNTIME~",1),1:sqldata38d)
+ . } catch { ztrap:$ze["<ALARM" $ze set SQLCODE=-350,%msg="Unexpected error executing SqlCompute code for field 'QueryText': "_$ze ztrap "COMP" }
+ goto:$zu(115,2)=0 %0KmBuncommitted
+ if $zu(115,2)=1 {
+ 	lock +^%sqlcq($NAMESPACE,"PTools","RunTime","SQLQueryD",$p(QueryId,"||",1),$p(QueryId,"||",2))#"S":$zu(115,4)
+ 	if $t { set sqldata24d=$name(^%sqlcq($NAMESPACE,"PTools","RunTime","SQLQueryD",$p(QueryId,"||",1),$p(QueryId,"||",2)))_"#""SI""",sqldata23d=1 }
+ 	else { s SQLCODE=-114,%msg="Unable to acquire shared lock on table %SYS_PTools.SQLQuery for RowID value: "_QueryId ztrap "LOCK"  }
+ }
+ ; asl MOD# 3
+ s sqldata18d=$zlist(sqldata15d)
+ s sqldata10d=$p(QueryId,"||"),sqldata12d=$p(QueryId,"||",2)
+ i sqldata10d'="",sqldata12d'="" s sqldata51d="" i $d(^%sqlcq($NAMESPACE,"PTools","RunTime","SQLQueryD",sqldata10d,sqldata12d),sqldata51d)
+ e  g %0KmCdun
+ Set sqldata38d=$lg(sqldata51d,2),sqldata8d=$lg(sqldata51d,6)
+ s sqldata15d=$zu(28,sqldata8d,7)
+ d
+ . try {  s QueryText=$S($D(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",$S(sqldata10d[".cls":$E(sqldata10d,1,*-2),1:sqldata10d))):$P(^%sqlcq($s($e($namespace)'="^":$namespace,1:$tr($namespace,"%_-$@:/\[]^ ","pudsssssssss")),"QueryText",$S(sqldata10d[".cls":$E(sqldata10d,1,*-2),1:sqldata10d),1),"~RUNTIME~",1),1:sqldata38d)
+ . } catch { ztrap:$ze["<ALARM" $ze set SQLCODE=-350,%msg="Unexpected error executing SqlCompute code for field 'QueryText': "_$ze ztrap "COMP" }
+ s sqldata19d=$zlist(sqldata15d)
+ g:sqldata18d'=sqldata19d %0KmCdun
+%0KmBuncommitted ;
+ ; asl MOD# 4
+ s sqldata3d=QueryId
+ s sqldata21d=$p(sqldata3d,"||"),sqldata22d=$p(sqldata3d,"||",2)
+ s sqldatap(4)=0
+ i sqldata21d="" g %0KmDdun:sqldatap(4)=1 g %0KmD0pad
+ i sqldata22d="" g %0KmDdun:sqldatap(4)=1 g %0KmD0pad
+ s Counter=""
+%0KmDk1 i sqldatap(4)=2 g %0KmDdun
+ s Counter=$o(^%sqlcq($NAMESPACE,"PTools","RunTime","SQLStatsD",sqldata21d,sqldata22d,Counter))
+ i Counter="" g %0KmDdun:sqldatap(4)=1 g %0KmD0pad
+ s sqldata20d=""
+%0KmDk2 i sqldatap(4)=2 g %0KmDdun
+ s sqldata20d=$o(^%sqlcq($NAMESPACE,"PTools","RunTime","SQLStatsD",sqldata21d,sqldata22d,Counter,sqldata20d))
+ i sqldata20d="" g %0KmDk1
+ s sqldata17d=(sqldata21d)_"||"_(sqldata22d)_"||"_(Counter)_"||"_(sqldata20d)
+ s sqldatap(4)=1
+%0KmDpdtg goto:$zu(115,2)=0||($g(sqldatap(4))=2) %0KmDuncommitted
+ if $zu(115,2)=1 {
+ 	lock +^%sqlcq($NAMESPACE,"PTools","RunTime","SQLStatsD",$p(sqldata17d,"||",1),$p(sqldata17d,"||",2),$p(sqldata17d,"||",3),$p(sqldata17d,"||",4))#"S":$zu(115,4)
+ 	if $t { set sqldata26d=$name(^%sqlcq($NAMESPACE,"PTools","RunTime","SQLStatsD",$p(sqldata17d,"||",1),$p(sqldata17d,"||",2),$p(sqldata17d,"||",3),$p(sqldata17d,"||",4)))_"#""SI""",sqldata25d=1 }
+ 	else { s SQLCODE=-114,%msg="Unable to acquire shared lock on table %SYS_PTools.SQLStats for RowID value: "_sqldata17d ztrap "LOCK"  }
+ }
+ ; asl MOD# 5
+ s sqldata21d=$p(sqldata17d,"||"),sqldata22d=$p(sqldata17d,"||",2),Counter=$p(sqldata17d,"||",3),sqldata20d=$p(sqldata17d,"||",4)
+ i sqldata21d'="",sqldata22d'="",Counter'="",sqldata20d'="",$d(^%sqlcq($NAMESPACE,"PTools","RunTime","SQLStatsD",sqldata21d,sqldata22d,Counter,sqldata20d))
+ e  s Counter="",sqldata17d="",sqldata3d="" g %0KmEp2
+ s sqldata3d=$p(sqldata17d,"||",1,2)
+%0KmEp2 
+%0KmDuncommitted ;
+ s SQLCODE=0 g %0Kc
+%0KmEdun if $zu(115,2)=1 { if $g(sqldata25d)=1 { l -@sqldata26d s sqldata25d=0 } elseif $g(sqldata25d)=2 { do $classmethod($li(sqldata26d),"%UnlockId",$li(sqldata26d,2),1,1)  s sqldata25d=0 } }
+ g %0KmDk2
+%0KmDdun 
+%0KmCdun if $zu(115,2)=1 { if $g(sqldata23d)=1 { l -@sqldata24d s sqldata23d=0 } elseif $g(sqldata23d)=2 { do $classmethod($li(sqldata24d),"%UnlockId",$li(sqldata24d,2),1,1)  s sqldata23d=0 } }
+%0KmBdun 
+%0KmAdun 
+%0Kc s %ROWCOUNT='SQLCODE
+ if $zu(115,2)=1 { if $g(sqldata23d)=1 { l -@sqldata24d } elseif $g(sqldata23d)=2 { do $classmethod($li(sqldata24d),"%UnlockId",$li(sqldata24d,2),1,1)  } } if $zu(115,2)=1 { if $g(sqldata25d)=1 { l -@sqldata26d } elseif $g(sqldata25d)=2 { do $classmethod($li(sqldata26d),"%UnlockId",$li(sqldata26d,2),1,1)  } }
+ q
+%0Kerr s $zt=""
+ d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg)
+ g %0Kc
+%0No n sqldata9d,sqldata10d,sqldata11d,sqldata12d,sqldata3d,sqldata4d,sqldata6d,sqldata5d,sqldata7d,sqldata8d
+ s $zt="%0Nerr"
+ s sqldata9d=0 s:$d(%0CacheRowLimit)#2 sqldata10d=%0CacheRowLimit
+ s sqldata3d=$g(SavedDetails),sqldata4d=$g(Counter),sqldata6d=$g(QueryId)
+ n %data,%soid
+ s SQLCODE=100
+ If $zu(115,1)=2,'$TLEVEL { s sqldata11d=1 TSTART } If $zu(115,1) { s sqldata12d=1 TSTART  }
+ ; asl MOD# 2
+ s sqldata5d=sqldata6d
+ s sqldata7d=$p(sqldata5d,"||"),sqldata8d=$p(sqldata5d,"||",2)
+ i sqldata7d'="",sqldata8d'="",$d(^%sqlcq($NAMESPACE,"PTools","RunTime","SQLQueryD",sqldata7d,sqldata8d))
+ e  g %0NmBdun
+ k %data
+ s %data(12)=$g(sqldata3d),%data(11)=$g(sqldata4d)
+ do ##class(%SYS.PTools.SQLQuery).%SQLUpdate(sqldata5d,$c(1,1,0,0,0,0,0),.%data,,'$g(sqldata12d),,,.%soid)
+ g:SQLCODE<0 %0Nc i $i(sqldata9d)'<$g(sqldata10d,9223372036854775807) g %0Nc
+%0NmBdun 
+%0NmAdun 
+%0Nc s %ROWCOUNT=$s($g(SQLCODE)'<0:+$g(sqldata9d),1:0)
+ If $zu(115,1),$g(sqldata12d) { TCOMMIT:SQLCODE'<0  TROLLBACK:SQLCODE<0 1 } TCOMMIT:SQLCODE=100&&(%ROWCOUNT=0)&&($g(sqldata11d))&&($zu(115,1)=2) 
+ q
+%0Nerr s $zt=""
+ d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg)
+ g %0Nc
+%0Po try { n sqldata17d
+ 	if $zu(115,1)=1||('$TLEVEL&&($zu(115,1)=2)) { TSTART  s sqldata17d=1 }
+ 	n %i
+ 	s %i(7)=$g(NS),%i(10)=$g(Rou),%i(3)=$g(Cur),%i(9)="Unknown",%i(8)=$g(sql(1)),%i(4)=$g(hash),%i(11)=1,%i(12)=$g(CurrentLevel)
+ 	s %ROWID=##class(%SYS.PTools.SQLQuery).%SQLInsert(.%i,$c(1,1,0,0,0,0,0),,,'$g(sqldata17d)),%ROWCOUNT='SQLCODE
+ 	if $zu(115,1)=1,$g(sqldata17d) { TCOMMIT:SQLCODE'<0  TROLLBACK:SQLCODE<0 1 }
+ }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) if $zu(115,1)=1,$g(sqldata17d) { TROLLBACK 1 } }
+ quit  // From %0Po
+%0RmBd1  s sqldata10d=$zu(67,3,sqldata7d)
+ q
+%0RmBd2  s sqldata11d=""
+ q
+%0RmBd3 s ExeName=$zu(61,13,sqldata10d)
+ q
+%0RmBd4 s IPAddress=$zu(61,15,sqldata10d) 
+ q
+%0RmBd5 s NodeName=$zu(61,12,sqldata10d)
+ q
+%0Ro n sqldata10d,sqldata11d,sqldata8d,sqldata7d
+ s $zt="%0Rerr"
+ d:$zu(115,15) $system.ECP.Sync()
+ s sqldata8d=$g(pid),sqldata8d=$s(sqldata8d="":"",$isvalidnum(sqldata8d):+sqldata8d,1:sqldata8d)
+ s SQLCODE=100
+ ; asl MOD# 2
+ s sqldata7d=sqldata8d
+ i sqldata7d'=""
+ i '$t
+ e  i ##Class(%SYS.ProcessQuery).AllowToOpen(sqldata7d)'=1
+ e  d %0RmBd1 i 0
+ e  d %0RmBd2 i 0
+ i  g %0RmBdun
+ d %0RmBd3
+ d %0RmBd4
+ d %0RmBd5
+ s SQLCODE=0 g %0Rc
+%0RmBdun 
+%0RmAdun 
+%0Rc s %ROWCOUNT='SQLCODE
+ q
+%0Rerr s $zt=""
+ d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg)
+ g %0Rc
+%0Yo try { n sqldata31d
+ 	if $zu(115,1)=1||('$TLEVEL&&($zu(115,1)=2)) { TSTART  s sqldata31d=1 }
+ 	n %i
+ 	s %i(0)=$g(QueryPointer),%i(6)=$g(Module),%i(5)=$g(Counter),%i(11)=$g(StartTime),%i(8)=$g(GlobalRefs),%i(9)=$g(LinesOfCode),%i(10)=$g(TotalTime),%i(21)=$g(FirstRow),%i(7)=$g(Rows),%i(16)=$g(ModCount),%i(13)=$g(IPAddress),%i(14)=$g(NodeName),%i(15)=$g(ExeName),%i(17)=$g(pid),%i(18)=$g(DiskWait)
+ 	s %ROWID=##class(%SYS.PTools.SQLStats).%SQLInsert(.%i,$c(1,1,0,0,0,0,0),,,'$g(sqldata31d)),%ROWCOUNT='SQLCODE
+ 	if $zu(115,1)=1,$g(sqldata31d) { TCOMMIT:SQLCODE'<0  TROLLBACK:SQLCODE<0 1 }
+ }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) if $zu(115,1)=1,$g(sqldata31d) { TROLLBACK 1 } }
+ quit  // From %0Yo
+%00mBd1 s %expcm02010d(8)=$s($d(^oddDEF(class,"m",name,23))#2:^(23),1:0)
+ q
+%00mBd2 s %expcm02010d(9)=$s($d(^oddDEF(class,"m",name,25))#2:^(25),1:"code")
+ q
+%00mCd1 s %expcm02010d(8)=$s($d(^oddDEF(%expcm02010d(12),"m",name,23))#2:^(23),1:0)
+ q
+%00mCd2 s %expcm02010d(9)=$s($d(^oddDEF(%expcm02010d(12),"m",name,25))#2:^(25),1:"code")
+ q
+%expcm0o 
+ try { s SQLCODE=$s($g(%expcm02010c):-101,1:0) q:SQLCODE'=0 
+ s %expcm02010d(1)=0 s:$d(%0CacheRowLimit)#2 %expcm02010d(2)=%0CacheRowLimit
+ s %expcm02010d(3)=0,%expcm02010d(4)=""
+ d:$zu(115,15) $system.ECP.Sync()
+ s %expcm02010d(5)=1,%expcm02010d(5)=$s($isvalidnum(%expcm02010d(5)):+%expcm02010d(5),1:%expcm02010d(5)),%expcm02010d(6)="code"
+ s %expcm02010c=1,SQLCODE=0 q  }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) k %expcm02010c,%expcm02010d,%expcm02010E,%expcm02010n,%expcm02010R q  }
+ q
+%00first 
+ ; asl MOD# 2
+ s class=""
+%00mBk1 s class=$o(^oddDEF(class),1)
+ i class="" g %00mBdun
+ s name=""
+%00mBk2 s %expcm02010d(7)="" s name=$o(^oddDEF(class,"m",name),1,%expcm02010d(7))
+ i name="" g %00mBk1
+ d %00mBd1
+ g:'(%expcm02010d(8)=%expcm02010d(5)) %00mBk2
+ g:'(%expcm02010d(8)'="") %00mBk2
+ d %00mBd2
+ g:'(%expcm02010d(9)=%expcm02010d(6)) %00mBk2
+ g:'(%expcm02010d(9)'="") %00mBk2
+ s %expcm02010d(10)=(class)_"||"_(name)
+ g:$zu(115,2)=0 %00mBuncommitted i $zu(115,2)=1 if $classmethod("%Dictionary.MethodDefinition","%LockId",%expcm02010d(10),1) { s %expcm02010d(3)=2,%expcm02010d(4)=$lb("%Dictionary.MethodDefinition",%expcm02010d(10)) } else { s SQLCODE=-114,%msg="Unable to acquire shared lock on table %Dictionary.MethodDefinition for RowID value: "_%expcm02010d(10) ztrap "LOCK"  }
+ ; asl MOD# 3
+ s %expcm02010d(11)=$zlist(%expcm02010d(8),%expcm02010d(9))
+ s %expcm02010d(12)=$p(%expcm02010d(10),"||"),name=$p(%expcm02010d(10),"||",2)
+ i %expcm02010d(12)'="",name'="" s %expcm02010d(13)="" i $d(^oddDEF(%expcm02010d(12),"m",name),%expcm02010d(13))
+ e  g %00mCdun
+ d %00mCd1
+ d %00mCd2
+ s class=$p(%expcm02010d(10),"||")
+ s %expcm02010d(14)=$zlist(%expcm02010d(8),%expcm02010d(9))
+ g:%expcm02010d(11)'=%expcm02010d(14) %00mCdun
+%00mBuncommitted ;
+ s:$g(SQLCODE)'<0 SQLCODE=0 s %ROWCOUNT=$i(%expcm02010d(1)),%ROWID=%expcm02010d(10),%expcm02010c=10
+ //-- FETCH Output
+ quit
+%expcm0f //-- FETCH tag
+ i '$g(%expcm02010c) { s SQLCODE=-102 q  } i %expcm02010c=100 { s SQLCODE=100 q  } s SQLCODE=0
+ i $d(%expcm02010d(2))#2,$g(%expcm02010d(1))'<%expcm02010d(2) { s SQLCODE=100,%ROWCOUNT=%expcm02010d(1),%expcm02010c=100 q }
+ g %00first:%expcm02010c=1
+%00mCdun if $zu(115,2)=1 { if $g(%expcm02010d(3))=1 { l -@%expcm02010d(4) s %expcm02010d(3)=0 } elseif $g(%expcm02010d(3))=2 { do $classmethod($li(%expcm02010d(4)),"%UnlockId",$li(%expcm02010d(4),2),1,1)  s %expcm02010d(3)=0 } }
+ g %00mBk2
+%00mBdun 
+%00mAdun 
+ s %ROWCOUNT=%expcm02010d(1),SQLCODE=100,%expcm02010c=100
+ //-- no [more] data
+ quit
+%expcm0c i '$g(%expcm02010c) { s SQLCODE=-102 q  }
+ s %ROWCOUNT=$s($g(SQLCODE)'<0:+$g(%expcm02010d(1)),1:0)
+ if $zu(115,2)=1 { if $g(%expcm02010d(3))=1 { l -@%expcm02010d(4) } elseif $g(%expcm02010d(3))=2 { do $classmethod($li(%expcm02010d(4)),"%UnlockId",$li(%expcm02010d(4),2),1,1)  } }
+ k %expcm02010c,%expcm02010d,%expcm02010E,%expcm02010n,%expcm02010R
+ s SQLCODE=0
+ quit  // close
+%00err d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg)
+ s %expcm02010c=100
+ quit  // error
+%07o try { do %expcm0f q:SQLCODE'=0
+ } catch { do %00err }
+ q
+%09mBd1 s query=$s($d(^oddDEF(class,"q",name,29))#2:^(29),1:"")
+ q
+%09mCd1 s query=$s($d(^oddDEF(%expcq02011d(8),"q",name,29))#2:^(29),1:"")
+ q
+%expcq0o 
+ try { s SQLCODE=$s($g(%expcq02011c):-101,1:0) q:SQLCODE'=0 
+ s %expcq02011d(1)=0 s:$d(%0CacheRowLimit)#2 %expcq02011d(2)=%0CacheRowLimit
+ s %expcq02011d(3)=0,%expcq02011d(4)=""
+ d:$zu(115,15) $system.ECP.Sync()
+ s %expcq02011c=1,SQLCODE=0 q  }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) k %expcq02011c,%expcq02011d,%expcq02011E,%expcq02011n,%expcq02011R q  }
+ q
+%09first 
+ ; asl MOD# 2
+ s class=""
+%09mBk1 s class=$o(^oddDEF(class),1)
+ i class="" g %09mBdun
+ s name=""
+%09mBk2 s %expcq02011d(5)="" s name=$o(^oddDEF(class,"q",name),1,%expcq02011d(5))
+ i name="" g %09mBk1
+ d %09mBd1
+ g:'(query'="") %09mBk2
+ s %expcq02011d(6)=(class)_"||"_(name)
+ g:$zu(115,2)=0 %09mBuncommitted i $zu(115,2)=1 if $classmethod("%Dictionary.QueryDefinition","%LockId",%expcq02011d(6),1) { s %expcq02011d(3)=2,%expcq02011d(4)=$lb("%Dictionary.QueryDefinition",%expcq02011d(6)) } else { s SQLCODE=-114,%msg="Unable to acquire shared lock on table %Dictionary.QueryDefinition for RowID value: "_%expcq02011d(6) ztrap "LOCK"  }
+ ; asl MOD# 3
+ s %expcq02011d(7)=$zlist(query)
+ s %expcq02011d(8)=$p(%expcq02011d(6),"||"),name=$p(%expcq02011d(6),"||",2)
+ i %expcq02011d(8)'="",name'="" s %expcq02011d(9)="" i $d(^oddDEF(%expcq02011d(8),"q",name),%expcq02011d(9))
+ e  g %09mCdun
+ d %09mCd1
+ s class=$p(%expcq02011d(6),"||")
+ s %expcq02011d(10)=$zlist(query)
+ g:%expcq02011d(7)'=%expcq02011d(10) %09mCdun
+%09mBuncommitted ;
+ s:$g(SQLCODE)'<0 SQLCODE=0 s %ROWCOUNT=$i(%expcq02011d(1)),%ROWID=%expcq02011d(6),%expcq02011c=10
+ //-- FETCH Output
+ quit
+%expcq0f //-- FETCH tag
+ i '$g(%expcq02011c) { s SQLCODE=-102 q  } i %expcq02011c=100 { s SQLCODE=100 q  } s SQLCODE=0
+ i $d(%expcq02011d(2))#2,$g(%expcq02011d(1))'<%expcq02011d(2) { s SQLCODE=100,%ROWCOUNT=%expcq02011d(1),%expcq02011c=100 q }
+ g %09first:%expcq02011c=1
+%09mCdun if $zu(115,2)=1 { if $g(%expcq02011d(3))=1 { l -@%expcq02011d(4) s %expcq02011d(3)=0 } elseif $g(%expcq02011d(3))=2 { do $classmethod($li(%expcq02011d(4)),"%UnlockId",$li(%expcq02011d(4),2),1,1)  s %expcq02011d(3)=0 } }
+ g %09mBk2
+%09mBdun 
+%09mAdun 
+ s %ROWCOUNT=%expcq02011d(1),SQLCODE=100,%expcq02011c=100
+ //-- no [more] data
+ quit
+%expcq0c i '$g(%expcq02011c) { s SQLCODE=-102 q  }
+ s %ROWCOUNT=$s($g(SQLCODE)'<0:+$g(%expcq02011d(1)),1:0)
+ if $zu(115,2)=1 { if $g(%expcq02011d(3))=1 { l -@%expcq02011d(4) } elseif $g(%expcq02011d(3))=2 { do $classmethod($li(%expcq02011d(4)),"%UnlockId",$li(%expcq02011d(4),2),1,1)  } }
+ k %expcq02011c,%expcq02011d,%expcq02011E,%expcq02011n,%expcq02011R
+ s SQLCODE=0
+ quit  // close
+%09err d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg)
+ s %expcq02011c=100
+ quit  // error
+%0eo try { do %expcq0f q:SQLCODE'=0
+ } catch { do %09err }
+ q
+%0go try { n sqldata9d
+ 	if $zu(115,1)=1||('$TLEVEL&&($zu(115,1)=2)) { TSTART  s sqldata9d=1 }
+ 	n %i
+ 	s %i(5)=$g(type),%i(3)=$g(rtn),%i(4)=$g(sqlRef),%i(2)=$g(Package)
+ 	s %ROWID=##class(%SYS.PTools.SQLUtilities).%SQLInsert(.%i,$c(0,0,0,0,0,0,0),,,'$g(sqldata9d)),%ROWCOUNT='SQLCODE
+ 	if $zu(115,1)=1,$g(sqldata9d) { TCOMMIT:SQLCODE'<0  TROLLBACK:SQLCODE<0 1 }
+ }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) if $zu(115,1)=1,$g(sqldata9d) { TROLLBACK 1 } }
+ quit  // From %0go
+%cur10o 
+ try { s SQLCODE=$s($g(%cur102012c):-101,1:0) q:SQLCODE'=0 
+ s %cur102012d(1)=0 s:$d(%0CacheRowLimit)#2 %cur102012d(2)=%0CacheRowLimit
+ s %cur102012d(3)=0,%cur102012d(4)=""
+ d:$zu(115,15) $system.ECP.Sync()
+ s %cur102012c=1,SQLCODE=0 q  }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) k %cur102012c,%cur102012d,%cur102012E,%cur102012n,%cur102012R q  }
+ q
+%0ifirst 
+ ; asl MOD# 2
+ s %cur102012d(5)=""
+%0imBk1 s %cur102012d(6)="" s %cur102012d(5)=$o(^%sqlcq($NAMESPACE,"PTools","Utils","Queries","D",%cur102012d(5)),1,%cur102012d(6))
+ i %cur102012d(5)="" g %0imBdun
+ Set Type=$lg(%cur102012d(6),2),Name=$lg(%cur102012d(6),3),sqlRef=##class(%SYS.PTools.SQLUtilities).SQLTextOid($lg(%cur102012d(6),4)),Package=$lg(%cur102012d(6),5)
+ goto:$zu(115,2)=0 %0imBuncommitted
+ if $zu(115,2)=1 {
+ 	lock +^%sqlcq($NAMESPACE,"PTools","Utils","Queries","D",$p(%cur102012d(5),"||",1))#"S":$zu(115,4)
+ 	if $t { set %cur102012d(4)=$name(^%sqlcq($NAMESPACE,"PTools","Utils","Queries","D",$p(%cur102012d(5),"||",1)))_"#""SI""",%cur102012d(3)=1 }
+ 	else { s SQLCODE=-114,%msg="Unable to acquire shared lock on table %SYS_PTools.SQLUtilities for RowID value: "_%cur102012d(5) ztrap "LOCK"  }
+ }
+ ; asl MOD# 3
+ i %cur102012d(5)'="" s %cur102012d(7)="" i $d(^%sqlcq($NAMESPACE,"PTools","Utils","Queries","D",%cur102012d(5)),%cur102012d(7))
+ e  g %0imCdun
+ Set Type=$lg(%cur102012d(7),2),Name=$lg(%cur102012d(7),3),sqlRef=##class(%SYS.PTools.SQLUtilities).SQLTextOid($lg(%cur102012d(7),4)),Package=$lg(%cur102012d(7),5)
+%0imBuncommitted ;
+ s:$g(SQLCODE)'<0 SQLCODE=0 s %ROWCOUNT=$i(%cur102012d(1)),%ROWID=%cur102012d(5),%cur102012c=10
+ //-- FETCH Output
+ quit
+%cur10f //-- FETCH tag
+ i '$g(%cur102012c) { s SQLCODE=-102 q  } i %cur102012c=100 { s SQLCODE=100 q  } s SQLCODE=0
+ i $d(%cur102012d(2))#2,$g(%cur102012d(1))'<%cur102012d(2) { s SQLCODE=100,%ROWCOUNT=%cur102012d(1),%cur102012c=100 q }
+ g %0ifirst:%cur102012c=1
+%0imCdun if $zu(115,2)=1 { if $g(%cur102012d(3))=1 { l -@%cur102012d(4) s %cur102012d(3)=0 } elseif $g(%cur102012d(3))=2 { do $classmethod($li(%cur102012d(4)),"%UnlockId",$li(%cur102012d(4),2),1,1)  s %cur102012d(3)=0 } }
+ g %0imBk1
+%0imBdun 
+%0imAdun 
+ s %ROWCOUNT=%cur102012d(1),SQLCODE=100,%cur102012c=100
+ //-- no [more] data
+ quit
+%cur10c i '$g(%cur102012c) { s SQLCODE=-102 q  }
+ s %ROWCOUNT=$s($g(SQLCODE)'<0:+$g(%cur102012d(1)),1:0)
+ if $zu(115,2)=1 { if $g(%cur102012d(3))=1 { l -@%cur102012d(4) } elseif $g(%cur102012d(3))=2 { do $classmethod($li(%cur102012d(4)),"%UnlockId",$li(%cur102012d(4),2),1,1)  } }
+ k %cur102012c,%cur102012d,%cur102012E,%cur102012n,%cur102012R
+ s SQLCODE=0
+ quit  // close
+%0ierr d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg)
+ s %cur102012c=100
+ quit  // error
+%0lo try { do %cur10f q:SQLCODE'=0
+ } catch { do %0ierr }
+ q
+%cur20o 
+ try { s SQLCODE=$s($g(%cur202013c):-101,1:0) q:SQLCODE'=0 
+ s %cur202013d(1)=0 s:$d(%0CacheRowLimit)#2 %cur202013d(2)=%0CacheRowLimit
+ s %cur202013d(3)=0,%cur202013d(4)=""
+ d:$zu(115,15) $system.ECP.Sync()
+ s %cur202013c=1,SQLCODE=0 q  }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) k %cur202013c,%cur202013d,%cur202013E,%cur202013n,%cur202013R q  }
+ q
+%0nfirst 
+ ; asl MOD# 2
+ s Id=""
+%0nmBk1 s %cur202013d(5)="" s Id=$o(^%sqlcq($NAMESPACE,"PTools","Utils","Queries","D",Id),1,%cur202013d(5))
+ i Id="" g %0nmBdun
+ Set Type=$lg(%cur202013d(5),2),Name=$lg(%cur202013d(5),3),sqlRef=##class(%SYS.PTools.SQLUtilities).SQLTextOid($lg(%cur202013d(5),4)),Package=$lg(%cur202013d(5),5)
+ goto:$zu(115,2)=0 %0nmBuncommitted
+ if $zu(115,2)=1 {
+ 	lock +^%sqlcq($NAMESPACE,"PTools","Utils","Queries","D",$p(Id,"||",1))#"S":$zu(115,4)
+ 	if $t { set %cur202013d(4)=$name(^%sqlcq($NAMESPACE,"PTools","Utils","Queries","D",$p(Id,"||",1)))_"#""SI""",%cur202013d(3)=1 }
+ 	else { s SQLCODE=-114,%msg="Unable to acquire shared lock on table %SYS_PTools.SQLUtilities for RowID value: "_Id ztrap "LOCK"  }
+ }
+ ; asl MOD# 3
+ i Id'="" s %cur202013d(6)="" i $d(^%sqlcq($NAMESPACE,"PTools","Utils","Queries","D",Id),%cur202013d(6))
+ e  g %0nmCdun
+ Set Type=$lg(%cur202013d(6),2),Name=$lg(%cur202013d(6),3),sqlRef=##class(%SYS.PTools.SQLUtilities).SQLTextOid($lg(%cur202013d(6),4)),Package=$lg(%cur202013d(6),5)
+%0nmBuncommitted ;
+ s:$g(SQLCODE)'<0 SQLCODE=0 s %ROWCOUNT=$i(%cur202013d(1)),%ROWID=Id,%cur202013c=10
+ //-- FETCH Output
+ quit
+%cur20f //-- FETCH tag
+ i '$g(%cur202013c) { s SQLCODE=-102 q  } i %cur202013c=100 { s SQLCODE=100 q  } s SQLCODE=0
+ i $d(%cur202013d(2))#2,$g(%cur202013d(1))'<%cur202013d(2) { s SQLCODE=100,%ROWCOUNT=%cur202013d(1),%cur202013c=100 q }
+ g %0nfirst:%cur202013c=1
+%0nmCdun if $zu(115,2)=1 { if $g(%cur202013d(3))=1 { l -@%cur202013d(4) s %cur202013d(3)=0 } elseif $g(%cur202013d(3))=2 { do $classmethod($li(%cur202013d(4)),"%UnlockId",$li(%cur202013d(4),2),1,1)  s %cur202013d(3)=0 } }
+ g %0nmBk1
+%0nmBdun 
+%0nmAdun 
+ s %ROWCOUNT=%cur202013d(1),SQLCODE=100,%cur202013c=100
+ //-- no [more] data
+ quit
+%cur20c i '$g(%cur202013c) { s SQLCODE=-102 q  }
+ s %ROWCOUNT=$s($g(SQLCODE)'<0:+$g(%cur202013d(1)),1:0)
+ if $zu(115,2)=1 { if $g(%cur202013d(3))=1 { l -@%cur202013d(4) } elseif $g(%cur202013d(3))=2 { do $classmethod($li(%cur202013d(4)),"%UnlockId",$li(%cur202013d(4),2),1,1)  } }
+ k %cur202013c,%cur202013d,%cur202013E,%cur202013n,%cur202013R
+ s SQLCODE=0
+ quit  // close
+%0nerr d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg)
+ s %cur202013c=100
+ quit  // error
+%0qo try { do %cur20f q:SQLCODE'=0
+ } catch { do %0nerr }
+ q
+%cur30o 
+ try { s SQLCODE=$s($g(%cur302014c):-101,1:0) q:SQLCODE'=0 
+ s %cur302014d(1)=0 s:$d(%0CacheRowLimit)#2 %cur302014d(2)=%0CacheRowLimit
+ s %cur302014d(3)=0,%cur302014d(4)=""
+ d:$zu(115,15) $system.ECP.Sync()
+ s %cur302014c=1,SQLCODE=0 q  }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) k %cur302014c,%cur302014d,%cur302014E,%cur302014n,%cur302014R q  }
+ q
+%0sfirst 
+ ; asl MOD# 2
+ s Id=""
+%0smBk1 s %cur302014d(5)="" s Id=$o(^%sqlcq($NAMESPACE,"PTools","Utils","Queries","D",Id),1,%cur302014d(5))
+ i Id="" g %0smBdun
+ Set Type=$lg(%cur302014d(5),2),Name=$lg(%cur302014d(5),3),sqlRef=##class(%SYS.PTools.SQLUtilities).SQLTextOid($lg(%cur302014d(5),4)),Package=$lg(%cur302014d(5),5)
+ goto:$zu(115,2)=0 %0smBuncommitted
+ if $zu(115,2)=1 {
+ 	lock +^%sqlcq($NAMESPACE,"PTools","Utils","Queries","D",$p(Id,"||",1))#"S":$zu(115,4)
+ 	if $t { set %cur302014d(4)=$name(^%sqlcq($NAMESPACE,"PTools","Utils","Queries","D",$p(Id,"||",1)))_"#""SI""",%cur302014d(3)=1 }
+ 	else { s SQLCODE=-114,%msg="Unable to acquire shared lock on table %SYS_PTools.SQLUtilities for RowID value: "_Id ztrap "LOCK"  }
+ }
+ ; asl MOD# 3
+ i Id'="" s %cur302014d(6)="" i $d(^%sqlcq($NAMESPACE,"PTools","Utils","Queries","D",Id),%cur302014d(6))
+ e  g %0smCdun
+ Set Type=$lg(%cur302014d(6),2),Name=$lg(%cur302014d(6),3),sqlRef=##class(%SYS.PTools.SQLUtilities).SQLTextOid($lg(%cur302014d(6),4)),Package=$lg(%cur302014d(6),5)
+%0smBuncommitted ;
+ s:$g(SQLCODE)'<0 SQLCODE=0 s %ROWCOUNT=$i(%cur302014d(1)),%ROWID=Id,%cur302014c=10
+ //-- FETCH Output
+ quit
+%cur30f //-- FETCH tag
+ i '$g(%cur302014c) { s SQLCODE=-102 q  } i %cur302014c=100 { s SQLCODE=100 q  } s SQLCODE=0
+ i $d(%cur302014d(2))#2,$g(%cur302014d(1))'<%cur302014d(2) { s SQLCODE=100,%ROWCOUNT=%cur302014d(1),%cur302014c=100 q }
+ g %0sfirst:%cur302014c=1
+%0smCdun if $zu(115,2)=1 { if $g(%cur302014d(3))=1 { l -@%cur302014d(4) s %cur302014d(3)=0 } elseif $g(%cur302014d(3))=2 { do $classmethod($li(%cur302014d(4)),"%UnlockId",$li(%cur302014d(4),2),1,1)  s %cur302014d(3)=0 } }
+ g %0smBk1
+%0smBdun 
+%0smAdun 
+ s %ROWCOUNT=%cur302014d(1),SQLCODE=100,%cur302014c=100
+ //-- no [more] data
+ quit
+%cur30c i '$g(%cur302014c) { s SQLCODE=-102 q  }
+ s %ROWCOUNT=$s($g(SQLCODE)'<0:+$g(%cur302014d(1)),1:0)
+ if $zu(115,2)=1 { if $g(%cur302014d(3))=1 { l -@%cur302014d(4) } elseif $g(%cur302014d(3))=2 { do $classmethod($li(%cur302014d(4)),"%UnlockId",$li(%cur302014d(4),2),1,1)  } }
+ k %cur302014c,%cur302014d,%cur302014E,%cur302014n,%cur302014R
+ s SQLCODE=0
+ quit  // close
+%0serr d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg)
+ s %cur302014c=100
+ quit  // error
+%0vo try { do %cur30f q:SQLCODE'=0
+ } catch { do %0serr }
+ q
+%cur40o 
+ try { s SQLCODE=$s($g(%cur402015c):-101,1:0) q:SQLCODE'=0 
+ s %cur402015d(1)=0 s:$d(%0CacheRowLimit)#2 %cur402015d(2)=%0CacheRowLimit
+ s %cur402015d(3)=0,%cur402015d(4)=""
+ d:$zu(115,15) $system.ECP.Sync()
+ s %cur402015c=1,SQLCODE=0 q  }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) k %cur402015c,%cur402015d,%cur402015E,%cur402015n,%cur402015R q  }
+ q
+%0xfirst 
+ ; asl MOD# 2
+ s sqlId=""
+%0xmBk1 s %cur402015d(5)="" s sqlId=$o(^%sqlcq($NAMESPACE,"PTools","Utils","Queries","D",sqlId),1,%cur402015d(5))
+ i sqlId="" g %0xmBdun
+ Set Type=$lg(%cur402015d(5),2),Name=$lg(%cur402015d(5),3),sqlRef=##class(%SYS.PTools.SQLUtilities).SQLTextOid($lg(%cur402015d(5),4)),Package=$lg(%cur402015d(5),5)
+ goto:$zu(115,2)=0 %0xmBuncommitted
+ if $zu(115,2)=1 {
+ 	lock +^%sqlcq($NAMESPACE,"PTools","Utils","Queries","D",$p(sqlId,"||",1))#"S":$zu(115,4)
+ 	if $t { set %cur402015d(4)=$name(^%sqlcq($NAMESPACE,"PTools","Utils","Queries","D",$p(sqlId,"||",1)))_"#""SI""",%cur402015d(3)=1 }
+ 	else { s SQLCODE=-114,%msg="Unable to acquire shared lock on table %SYS_PTools.SQLUtilities for RowID value: "_sqlId ztrap "LOCK"  }
+ }
+ ; asl MOD# 3
+ i sqlId'="" s %cur402015d(6)="" i $d(^%sqlcq($NAMESPACE,"PTools","Utils","Queries","D",sqlId),%cur402015d(6))
+ e  g %0xmCdun
+ Set Type=$lg(%cur402015d(6),2),Name=$lg(%cur402015d(6),3),sqlRef=##class(%SYS.PTools.SQLUtilities).SQLTextOid($lg(%cur402015d(6),4)),Package=$lg(%cur402015d(6),5)
+%0xmBuncommitted ;
+ s:$g(SQLCODE)'<0 SQLCODE=0 s %ROWCOUNT=$i(%cur402015d(1)),%ROWID=sqlId,%cur402015c=10
+ //-- FETCH Output
+ quit
+%cur40f //-- FETCH tag
+ i '$g(%cur402015c) { s SQLCODE=-102 q  } i %cur402015c=100 { s SQLCODE=100 q  } s SQLCODE=0
+ i $d(%cur402015d(2))#2,$g(%cur402015d(1))'<%cur402015d(2) { s SQLCODE=100,%ROWCOUNT=%cur402015d(1),%cur402015c=100 q }
+ g %0xfirst:%cur402015c=1
+%0xmCdun if $zu(115,2)=1 { if $g(%cur402015d(3))=1 { l -@%cur402015d(4) s %cur402015d(3)=0 } elseif $g(%cur402015d(3))=2 { do $classmethod($li(%cur402015d(4)),"%UnlockId",$li(%cur402015d(4),2),1,1)  s %cur402015d(3)=0 } }
+ g %0xmBk1
+%0xmBdun 
+%0xmAdun 
+ s %ROWCOUNT=%cur402015d(1),SQLCODE=100,%cur402015c=100
+ //-- no [more] data
+ quit
+%cur40c i '$g(%cur402015c) { s SQLCODE=-102 q  }
+ s %ROWCOUNT=$s($g(SQLCODE)'<0:+$g(%cur402015d(1)),1:0)
+ if $zu(115,2)=1 { if $g(%cur402015d(3))=1 { l -@%cur402015d(4) } elseif $g(%cur402015d(3))=2 { do $classmethod($li(%cur402015d(4)),"%UnlockId",$li(%cur402015d(4),2),1,1)  } }
+ k %cur402015c,%cur402015d,%cur402015E,%cur402015n,%cur402015R
+ s SQLCODE=0
+ quit  // close
+%0xerr d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg)
+ s %cur402015c=100
+ quit  // error
+%0AAo try { do %cur40f q:SQLCODE'=0
+ } catch { do %0xerr }
+ q
+%0ACo try { n sqldata9d
+ 	if $zu(115,1)=1||('$TLEVEL&&($zu(115,1)=2)) { TSTART  s sqldata9d=1 }
+ 	n %i
+ 	s %i(13)=$g(Schema),%i(14)=$g(Table),%i(7)=$g(Index),%i(15)=$g(Usage)
+ 	s %ROWID=##class(%SYS.PTools.SQLUtilResults).%SQLInsert(.%i,$c(0,0,0,0,0,0,0),,,'$g(sqldata9d)),%ROWCOUNT='SQLCODE
+ 	if $zu(115,1)=1,$g(sqldata9d) { TCOMMIT:SQLCODE'<0  TROLLBACK:SQLCODE<0 1 }
+ }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) if $zu(115,1)=1,$g(sqldata9d) { TROLLBACK 1 } }
+ quit  // From %0ACo
+%0AEo n sqldata18d,sqldata19d,sqldata20d,sqldata21d,sqldata22d,sqldata36d,sqldata38d,sqldata52d,sqldata2d,sqldata4d,sqldata6d,sqldata8d,sqldata15d,sqldata16d,sqldata17d,sqldata3d,sqldata9d,sqldata10d,sqldata5d,sqldata11d,sqldata12d,sqldata7d,sqldata13d,sqldata14d
+ s $zt="%0AEerr"
+ s sqldata18d=0 s:$d(%0CacheRowLimit)#2 sqldata19d=%0CacheRowLimit
+ s sqldata20d=""
+ s sqldata2d=$g(Usage),sqldata4d=$g(Schema),sqldata6d=$g(Table),sqldata8d=$g(Index)
+ n %data,%soid
+ s SQLCODE=100
+ If $zu(115,1)=2,'$TLEVEL { s sqldata21d=1 TSTART } If $zu(115,1) { s sqldata22d=1 TSTART  }
+ s sqldata14d=$zu(28,sqldata8d,7)
+ s sqldata12d=$zu(28,sqldata6d,7)
+ s sqldata10d=$zu(28,sqldata4d,7)
+ ; asl MOD# 2
+ s sqldata16d=""
+%0AEmBk1 s sqldata16d=$o(^%sqlcq($NAMESPACE,"PTools","Utils","Results","D",sqldata16d),1)
+ i sqldata16d="" g %0AEmBdun
+ s sqldata17d=""
+%0AEmBk2 s sqldata36d="" s sqldata17d=$o(^%sqlcq($NAMESPACE,"PTools","Utils","Results","D",sqldata16d,sqldata17d),1,sqldata36d)
+ i sqldata17d="" g %0AEmBk1
+ Set sqldata3d=$lg(sqldata36d,2)
+ s sqldata9d=$zu(28,sqldata3d,7)
+ g:'(sqldata9d=sqldata10d) %0AEmBk2
+ g:'(sqldata9d'=" ") %0AEmBk2
+ Set sqldata5d=$lg(sqldata36d,3)
+ s sqldata11d=$zu(28,sqldata5d,7)
+ g:'(sqldata11d=sqldata12d) %0AEmBk2
+ g:'(sqldata11d'=" ") %0AEmBk2
+ Set sqldata7d=$lg(sqldata36d,4)
+ s sqldata13d=$zu(28,sqldata7d,7)
+ g:'(sqldata13d=sqldata14d) %0AEmBk2
+ g:'(sqldata13d'=" ") %0AEmBk2
+ s sqldata15d=(sqldata16d)_"||"_(sqldata17d)
+ set sqldata38d=##class(%SYS.PTools.SQLUtilResults).%SQLGetLock(sqldata15d) i 'sqldata38d s SQLCODE=-110,%msg=$$FormatMessage^%occMessages(,"%SQL.Filer","SQLFiler40",,"UPDATE","%SYS_PTools"_"."_"SQLUtilResults",sqldata15d) g %0AEc
+ ; asl MOD# 3
+ s sqldata16d=$p(sqldata15d,"||"),sqldata17d=$p(sqldata15d,"||",2)
+ i sqldata16d'="",sqldata17d'="" s sqldata52d="" i $d(^%sqlcq($NAMESPACE,"PTools","Utils","Results","D",sqldata16d,sqldata17d),sqldata52d)
+ e  g %0AEmCdun
+ Set sqldata3d=$lg(sqldata52d,2)
+ s sqldata9d=$zu(28,sqldata3d,7)
+ g:'(sqldata9d=sqldata10d) %0AEmCdun
+ g:'(sqldata9d'=" ") %0AEmCdun
+ Set sqldata5d=$lg(sqldata52d,3)
+ s sqldata11d=$zu(28,sqldata5d,7)
+ g:'(sqldata11d=sqldata12d) %0AEmCdun
+ g:'(sqldata11d'=" ") %0AEmCdun
+ Set sqldata7d=$lg(sqldata52d,4)
+ s sqldata13d=$zu(28,sqldata7d,7)
+ g:'(sqldata13d=sqldata14d) %0AEmCdun
+ g:'(sqldata13d'=" ") %0AEmCdun
+ k %data
+ s %data(15)=$g(sqldata2d)
+ do ##class(%SYS.PTools.SQLUtilResults).%SQLUpdate(sqldata15d,$c(0,2,0,0,0,0,0),.%data,,'$g(sqldata22d),,,.%soid)
+ i 'SQLCODE i $i(sqldata18d)'<$g(sqldata19d,9223372036854775807) d:sqldata38d=1 ##class(%SYS.PTools.SQLUtilResults).%SQLReleaseLock(sqldata15d) g %0AEc
+%0AEmCdun d:sqldata38d=1 ##class(%SYS.PTools.SQLUtilResults).%SQLReleaseLock(sqldata15d) g:SQLCODE<0 %0AEc
+ g %0AEmBk2
+%0AEmBdun 
+%0AEmAdun 
+%0AEc s %ROWCOUNT=$s($g(SQLCODE)'<0:+$g(sqldata18d),1:0)
+ If $zu(115,1),$g(sqldata22d) { TCOMMIT:SQLCODE'<0  TROLLBACK:SQLCODE<0 1 } TCOMMIT:SQLCODE=100&&(%ROWCOUNT=0)&&($g(sqldata21d))&&($zu(115,1)=2) 
+ q
+%0AEerr s $zt=""
+ d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg)
+ d:$g(sqldata38d)=1 ##class(%SYS.PTools.SQLUtilResults).%SQLReleaseLock(sqldata15d)
+ g %0AEc
+%0AGo try { n sqldata11d
+ 	if $zu(115,1)=1||('$TLEVEL&&($zu(115,1)=2)) { TSTART  s sqldata11d=1 }
+ 	n %i
+ 	s %i(13)=$g(Schema),%i(14)=$g(Table),%i(12)=$g(sqlId),%i(5)=$g(Extent),%i(10)=$g(Module)
+ 	s %ROWID=##class(%SYS.PTools.SQLUtilResults).%SQLInsert(.%i,$c(0,0,0,0,0,0,0),,,'$g(sqldata11d)),%ROWCOUNT='SQLCODE
+ 	if $zu(115,1)=1,$g(sqldata11d) { TCOMMIT:SQLCODE'<0  TROLLBACK:SQLCODE<0 1 }
+ }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) if $zu(115,1)=1,$g(sqldata11d) { TROLLBACK 1 } }
+ quit  // From %0AGo
+%0AIo try { n sqldata13d
+ 	if $zu(115,1)=1||('$TLEVEL&&($zu(115,1)=2)) { TSTART  s sqldata13d=1 }
+ 	n %i
+ 	s %i(13)=$g(Schema),%i(14)=$g(Table),%i(6)=$g(Subscripts),%i(4)=$g(Data),%i(5)=$g(Extent),%i(12)=$g(sqlId)
+ 	s %ROWID=##class(%SYS.PTools.SQLUtilResults).%SQLInsert(.%i,$c(0,0,0,0,0,0,0),,,'$g(sqldata13d)),%ROWCOUNT='SQLCODE
+ 	if $zu(115,1)=1,$g(sqldata13d) { TCOMMIT:SQLCODE'<0  TROLLBACK:SQLCODE<0 1 }
+ }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) if $zu(115,1)=1,$g(sqldata13d) { TROLLBACK 1 } }
+ quit  // From %0AIo
+%0AKo try { n sqldata11d
+ 	if $zu(115,1)=1||('$TLEVEL&&($zu(115,1)=2)) { TSTART  s sqldata11d=1 }
+ 	n %i
+ 	s %i(13)=$g(Schema),%i(14)=$g(Table),%i(6)=$g(Index),%i(8)=$g(bestflag),%i(12)=$g(sqlId)
+ 	s %ROWID=##class(%SYS.PTools.SQLUtilResults).%SQLInsert(.%i,$c(0,0,0,0,0,0,0),,,'$g(sqldata11d)),%ROWCOUNT='SQLCODE
+ 	if $zu(115,1)=1,$g(sqldata11d) { TCOMMIT:SQLCODE'<0  TROLLBACK:SQLCODE<0 1 }
+ }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) if $zu(115,1)=1,$g(sqldata11d) { TROLLBACK 1 } }
+ quit  // From %0AKo
+%0AMmBd1 s Extent=$s($d(^oddDEF(sqldata3d,"s",sqldata7d,34))#2:^(34),1:"")
+ q
+%0AMmCd1 s Extent=$s($d(^oddDEF(sqldata10d,"s",sqldata7d,34))#2:^(34),1:"")
+ q
+%0AMmCd2 s sqldata6d=$s($d(^oddDEF(sqldata5d,59))#2:^(59),1:"")
+ q
+%0AMo n sqldata13d,sqldata14d,sqldata15d,sqldata16d,sqldata21d,sqldata28d,sqldata31d,sqldata34d,sqldata4d,sqldata3d,sqldata7d,sqldata9d,sqldata10d,sqldata5d,sqldata6d,sqldata11d,sqldata12d
+ s $zt="%0AMerr"
+ s sqldata13d=0,sqldata14d="",sqldata15d=0,sqldata16d=""
+ d:$zu(115,15) $system.ECP.Sync()
+ s sqldata4d=$g(classname)
+ s SQLCODE=100
+ ; asl MOD# 2
+ s sqldata3d=sqldata4d
+ i sqldata3d="" g %0AMmBdun
+ s sqldata7d=""
+%0AMmBk1 s sqldata21d="" s sqldata7d=$o(^oddDEF(sqldata3d,"s",sqldata7d),1,sqldata21d)
+ i sqldata7d="" g %0AMmBdun
+ d %0AMmBd1
+ s sqldata9d=(sqldata3d)_"||"_(sqldata7d)
+ g:$zu(115,2)=0 %0AMmBuncommitted i $zu(115,2)=1 if $classmethod("%Dictionary.StorageDefinition","%LockId",sqldata9d,1) { s sqldata13d=2,sqldata14d=$lb("%Dictionary.StorageDefinition",sqldata9d) } else { s SQLCODE=-114,%msg="Unable to acquire shared lock on table %Dictionary.StorageDefinition for RowID value: "_sqldata9d ztrap "LOCK"  }
+ ; asl MOD# 3
+ s sqldata10d=$p(sqldata9d,"||"),sqldata7d=$p(sqldata9d,"||",2)
+ i sqldata10d'="",sqldata7d'="" s sqldata28d="" i $d(^oddDEF(sqldata10d,"s",sqldata7d),sqldata28d)
+ e  g %0AMmCdun
+ d %0AMmCd1
+ s sqldata3d=$p(sqldata9d,"||")
+%0AMmBuncommitted ;
+ s sqldata5d=sqldata3d
+ i sqldata5d'="" s sqldata31d="" i $d(^oddDEF(sqldata5d),sqldata31d)
+ e  s sqldata5d="",sqldata6d="" g %0AMmCp5
+ d %0AMmCd2
+%0AMmCp5 g:'((sqldata6d=sqldata7d)||(sqldata6d="")) %0AMmCdun
+ g:$zu(115,2)=0 %0AMmCuncommitted i $zu(115,2)=1 if $classmethod("%Dictionary.ClassDefinition","%LockId",sqldata5d,1) { s sqldata15d=2,sqldata16d=$lb("%Dictionary.ClassDefinition",sqldata5d) } else { s SQLCODE=-114,%msg="Unable to acquire shared lock on table %Dictionary.ClassDefinition for RowID value: "_sqldata5d ztrap "LOCK"  }
+ ; asl MOD# 4
+ s sqldata11d=$zlist(sqldata6d)
+ i sqldata5d'="" s sqldata34d="" i $d(^oddDEF(sqldata5d),sqldata34d)
+ e  s sqldata5d="",sqldata6d="" g %0AMmDp2
+ d %0AMmCd2
+%0AMmDp2 s sqldata12d=$zlist(sqldata6d)
+ g:sqldata11d'=sqldata12d %0AMmDdun
+%0AMmCuncommitted ;
+ s SQLCODE=0 g %0AMc
+%0AMmDdun if $zu(115,2)=1 { if $g(sqldata15d)=1 { l -@sqldata16d s sqldata15d=0 } elseif $g(sqldata15d)=2 { do $classmethod($li(sqldata16d),"%UnlockId",$li(sqldata16d,2),1,1)  s sqldata15d=0 } }
+%0AMmCdun if $zu(115,2)=1 { if $g(sqldata13d)=1 { l -@sqldata14d s sqldata13d=0 } elseif $g(sqldata13d)=2 { do $classmethod($li(sqldata14d),"%UnlockId",$li(sqldata14d,2),1,1)  s sqldata13d=0 } }
+ g %0AMmBk1
+%0AMmBdun 
+%0AMmAdun 
+%0AMc s %ROWCOUNT='SQLCODE
+ if $zu(115,2)=1 { if $g(sqldata13d)=1 { l -@sqldata14d } elseif $g(sqldata13d)=2 { do $classmethod($li(sqldata14d),"%UnlockId",$li(sqldata14d,2),1,1)  } } if $zu(115,2)=1 { if $g(sqldata15d)=1 { l -@sqldata16d } elseif $g(sqldata15d)=2 { do $classmethod($li(sqldata16d),"%UnlockId",$li(sqldata16d,2),1,1)  } }
+ q
+%0AMerr s $zt=""
+ d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg)
+ g %0AMc
+%0ARo n sqldata13d,sqldata14d,sqldata15d,sqldata16d,sqldata21d,sqldata28d,sqldata31d,sqldata34d,sqldata4d,sqldata3d,sqldata7d,sqldata9d,sqldata10d,sqldata5d,sqldata6d,sqldata11d,sqldata12d
+ s $zt="%0ARerr"
+ s sqldata13d=0,sqldata14d="",sqldata15d=0,sqldata16d=""
+ d:$zu(115,15) $system.ECP.Sync()
+ s sqldata4d=$g(classname)
+ s SQLCODE=100
+ ; asl MOD# 2
+ s sqldata3d=sqldata4d
+ i sqldata3d="" g %0ARmBdun
+ s sqldata7d=""
+%0ARmBk1 s sqldata21d="" s sqldata7d=$o(^oddDEF(sqldata3d,"s",sqldata7d),1,sqldata21d)
+ i sqldata7d="" g %0ARmBdun
+ d %0AMmBd1
+ s sqldata9d=(sqldata3d)_"||"_(sqldata7d)
+ g:$zu(115,2)=0 %0ARmBuncommitted i $zu(115,2)=1 if $classmethod("%Dictionary.StorageDefinition","%LockId",sqldata9d,1) { s sqldata13d=2,sqldata14d=$lb("%Dictionary.StorageDefinition",sqldata9d) } else { s SQLCODE=-114,%msg="Unable to acquire shared lock on table %Dictionary.StorageDefinition for RowID value: "_sqldata9d ztrap "LOCK"  }
+ ; asl MOD# 3
+ s sqldata10d=$p(sqldata9d,"||"),sqldata7d=$p(sqldata9d,"||",2)
+ i sqldata10d'="",sqldata7d'="" s sqldata28d="" i $d(^oddDEF(sqldata10d,"s",sqldata7d),sqldata28d)
+ e  g %0ARmCdun
+ d %0AMmCd1
+ s sqldata3d=$p(sqldata9d,"||")
+%0ARmBuncommitted ;
+ s sqldata5d=sqldata3d
+ i sqldata5d'="" s sqldata31d="" i $d(^oddDEF(sqldata5d),sqldata31d)
+ e  s sqldata5d="",sqldata6d="" g %0ARmCp5
+ d %0AMmCd2
+%0ARmCp5 g:'((sqldata6d=sqldata7d)||(sqldata6d="")) %0ARmCdun
+ g:$zu(115,2)=0 %0ARmCuncommitted i $zu(115,2)=1 if $classmethod("%Dictionary.ClassDefinition","%LockId",sqldata5d,1) { s sqldata15d=2,sqldata16d=$lb("%Dictionary.ClassDefinition",sqldata5d) } else { s SQLCODE=-114,%msg="Unable to acquire shared lock on table %Dictionary.ClassDefinition for RowID value: "_sqldata5d ztrap "LOCK"  }
+ ; asl MOD# 4
+ s sqldata11d=$zlist(sqldata6d)
+ i sqldata5d'="" s sqldata34d="" i $d(^oddDEF(sqldata5d),sqldata34d)
+ e  s sqldata5d="",sqldata6d="" g %0ARmDp2
+ d %0AMmCd2
+%0ARmDp2 s sqldata12d=$zlist(sqldata6d)
+ g:sqldata11d'=sqldata12d %0ARmDdun
+%0ARmCuncommitted ;
+ s SQLCODE=0 g %0ARc
+%0ARmDdun if $zu(115,2)=1 { if $g(sqldata15d)=1 { l -@sqldata16d s sqldata15d=0 } elseif $g(sqldata15d)=2 { do $classmethod($li(sqldata16d),"%UnlockId",$li(sqldata16d,2),1,1)  s sqldata15d=0 } }
+%0ARmCdun if $zu(115,2)=1 { if $g(sqldata13d)=1 { l -@sqldata14d s sqldata13d=0 } elseif $g(sqldata13d)=2 { do $classmethod($li(sqldata14d),"%UnlockId",$li(sqldata14d,2),1,1)  s sqldata13d=0 } }
+ g %0ARmBk1
+%0ARmBdun 
+%0ARmAdun 
+%0ARc s %ROWCOUNT='SQLCODE
+ if $zu(115,2)=1 { if $g(sqldata13d)=1 { l -@sqldata14d } elseif $g(sqldata13d)=2 { do $classmethod($li(sqldata14d),"%UnlockId",$li(sqldata14d,2),1,1)  } } if $zu(115,2)=1 { if $g(sqldata15d)=1 { l -@sqldata16d } elseif $g(sqldata15d)=2 { do $classmethod($li(sqldata16d),"%UnlockId",$li(sqldata16d,2),1,1)  } }
+ q
+%0ARerr s $zt=""
+ d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg)
+ g %0ARc
+%cur0o n %sqlup
+ try { s SQLCODE=$s($g(%cur02016c):-101,1:0) q:SQLCODE'=0 
+ s %cur02016d(1)=0 s:$d(%0CacheRowLimit)#2 %cur02016d(2)=%0CacheRowLimit
+ s %cur02016d(3)=0,%cur02016d(4)=""
+ d:$zu(115,15) $system.ECP.Sync()
+ s %cur02016d(5)=$g(wrcnum),%cur02016d(6)=" ",%cur02016d(7)=5,%cur02016d(8)=" "
+ s %cur02016t(1)=$i(^||%sql.temp)
+ s %cur02016d(9)=$zu(28,%cur02016d(5),7)
+ k %cur02016d(10) s %cur02016d(10,$s(%cur02016d(8)'="":%cur02016d(8),1:-1E14))=""
+ s %cur02016d(11)=$zstl($Roles)
+ k %cur02016d(12) f %sqlup=1:1:$ll(%cur02016d(11)) s %cur02016d(12,$s($li(%cur02016d(11),%sqlup)'="":$li(%cur02016d(11),%sqlup),1:-1E14))=""
+ k %cur02016d(13) s %sqlup="" f  s %sqlup=$o(%cur02016d(12,%sqlup)) q:%sqlup=""  s %cur02016d(13,$zu(28,$s(%sqlup'=-1E14:%sqlup,1:""),7))=""
+ k %cur02016d(14) m %cur02016d(14)=%cur02016d(10),%cur02016d(14)=%cur02016d(13)
+ k %cur02016d(15) s %cur02016d(15,$s($zu(28,$Username,7)'="":$zu(28,$Username,7),1:-1E14))="" s %cur02016d(15,$s(%cur02016d(6)'="":%cur02016d(6),1:-1E14))=""
+ k %cur02016d(16) m %cur02016d(16)=%cur02016d(14),%cur02016d(16)=%cur02016d(15)
+ s %cur02016c=1,SQLCODE=0 q  }
+ catch { d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg) k %cur02016c,%cur02016d,%cur02016E,%cur02016n,%cur02016R,%cur02016s,%cur02016t q  }
+ q
+%0ATfirst 
+ ; asl MOD# 2
+ k ^||%sql.temp(%cur02016t(1))
+ s %cur02016d(17)=""
+%0ATmBk1 s %cur02016d(17)=$o(%cur02016d(16,%cur02016d(17)))
+ g:%cur02016d(17)="" %0ATmBdun
+ s %cur02016d(18)=$s(%cur02016d(17)'=-1E14:%cur02016d(17),1:"")
+ s:%cur02016d(18)="" %cur02016d(18)=-1E14
+ s %cur02016d(19)="",%cur02016d(20)="",%cur02016d(21)=1
+%0ATmBk2 s:%cur02016d(18)="" %cur02016d(18)=-1E14
+ f  s %cur02016d(21)=$bitfind(%cur02016d(20),1,%cur02016d(21)+1) i %cur02016d(21) { s objid=%cur02016d(22)+%cur02016d(21)-1 q } s %cur02016d(19)=$o(^ISC.QButtons.BaseI("%RLI",%cur02016d(18),%cur02016d(19)),1,%cur02016d(20)) q:%cur02016d(19)=""  s %cur02016d(22)=%cur02016d(19)-1*64000
+ i %cur02016d(19)="" g %0ATmBk1
+ s:%cur02016d(18)=-1E14 %cur02016d(18)=""
+ s %cur02016d(23)=$s(objid'="":objid,1:-1E14)
+ s %cur02016d(24)=%cur02016d(23),%cur02016d(25)=1 g:$d(^||%sql.temp(%cur02016t(1),%cur02016d(24),1)) %0ATmBk2 s ^(1)=""
+ i objid'="" s %cur02016d(26)="" i $d(^ISC.QButtons.BaseD(objid),%cur02016d(26))
+ e  g %0ATmBk2
+ Set %cur02016d(27)=$lg(%cur02016d(26),10)
+ s %cur02016d(28)=$zu(28,%cur02016d(27),7)
+ g:'(%cur02016d(28)=%cur02016d(9)) %0ATmBk2
+ goto:$zu(115,2)=0 %0ATmBuncommitted
+ if $zu(115,2)=1 {
+ 	lock +^ISC.QButtons.BaseD($p(objid,"||",1))#"S":$zu(115,4)
+ 	if $t { set %cur02016d(4)=$name(^ISC.QButtons.BaseD($p(objid,"||",1)))_"#""SI""",%cur02016d(3)=1 }
+ 	else { s SQLCODE=-114,%msg="Unable to acquire shared lock on table %SQL_Manager_QButtons.Base for RowID value: "_objid ztrap "LOCK"  }
+ }
+ ; asl MOD# 3
+ s %cur02016d(29)=$zlist(%cur02016d(28))
+ i objid'="" s %cur02016d(30)="" i $d(^ISC.QButtons.BaseD(objid),%cur02016d(30))
+ e  g %0ATmCdun
+ Set %cur02016d(27)=$lg(%cur02016d(30),10),%cur02016d(31)=$lg(%cur02016d(30),15)
+ s %cur02016d(28)=$zu(28,%cur02016d(27),7)
+ s %cur02016d(32)=$zlist(%cur02016d(28))
+ g:%cur02016d(29)'=%cur02016d(32) %0ATmCdun
+%0ATmBuncommitted ;
+ s:$g(SQLCODE)'<0 SQLCODE=0 s %ROWCOUNT=$i(%cur02016d(1)),%ROWID=objid,%cur02016c=10
+ //-- FETCH Output
+ quit
+%cur0f //-- FETCH tag
+ i '$g(%cur02016c) { s SQLCODE=-102 q  } i %cur02016c=100 { s SQLCODE=100 q  } s SQLCODE=0
+ i $d(%cur02016d(2))#2,$g(%cur02016d(1))'<%cur02016d(2) { s SQLCODE=100,%ROWCOUNT=%cur02016d(1),%cur02016c=100 q }
+ g %0ATfirst:%cur02016c=1
+%0ATmCdun if $zu(115,2)=1 { if $g(%cur02016d(3))=1 { l -@%cur02016d(4) s %cur02016d(3)=0 } elseif $g(%cur02016d(3))=2 { do $classmethod($li(%cur02016d(4)),"%UnlockId",$li(%cur02016d(4),2),1,1)  s %cur02016d(3)=0 } }
+ g %0ATmBk2
+%0ATmBdun  s:$g(%cur02016d(18))=-1E14 %cur02016d(18)=""
+%0ATmAdun 
+ s %ROWCOUNT=%cur02016d(1),SQLCODE=100,%cur02016c=100
+ //-- no [more] data
+ quit
+%cur0c i '$g(%cur02016c) { s SQLCODE=-102 q  }
+ s %ROWCOUNT=$s($g(SQLCODE)'<0:+$g(%cur02016d(1)),1:0)
+ kill:$d(%cur02016t(1))#2 ^||%sql.temp(%cur02016t(1))
+ if $zu(115,2)=1 { if $g(%cur02016d(3))=1 { l -@%cur02016d(4) } elseif $g(%cur02016d(3))=2 { do $classmethod($li(%cur02016d(4)),"%UnlockId",$li(%cur02016d(4),2),1,1)  } }
+ k %cur02016c,%cur02016d,%cur02016E,%cur02016n,%cur02016R,%cur02016s,%cur02016t
+ s SQLCODE=0
+ quit  // close
+%0ATerr d SQLRunTimeError^%apiSQL($ze,.SQLCODE,.%msg)
+ s %cur02016c=100
+ quit  // error
+%0AWo try { do %cur0f q:SQLCODE'=0
+ } catch { do %0ATerr }
+ q

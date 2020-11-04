@@ -1,0 +1,455 @@
+ROUTINE WMIMOF [Type=INT]
+WMIMOF	; Windows Management Instrumentation MOF defintions ; RFD401 08/07/08
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;
+ ; Class definitions for Cache WMI used to generate the MOF file and IscMOF.
+ ; Definitions are stored in $TEXT pieces as described below.
+ ; Do build^WMIMOF to generate both the .MOF and the .h files.
+ ; Do doc^WMIMOF to print a text listing of all Classes and Properties.
+ ; 
+ ; At the "Schema" tag is a list of all classes. The first line of a
+ ; Class definition contains:
+ ; 
+ ; ";; Name_of_Class ; Class_qualifiers ; Super_Class ; Routine ; Application". 
+ ; 
+ ; The lines after a Class definition line are the class description, terminated by a 
+ ; blank line. 
+ ; 
+ ; By convention, each Class name will begin with the application name ("Cache" or 
+ ; "Ensemble"), followed by an underscore. The Class name is entered below without
+ ; the application name, which will then be added to the actual Class name by this code.
+ ; The Class name (sans application name) is used as a text label in the routine which 
+ ; contains all the Property defintions for that Class. It is also used as name of the Class
+ ; PropertyList structure in IscMOF.h.
+ ; 
+ ; Class qualifiers are a comma delimited list of qualifiers in MOF format (copied 
+ ; directly into the MOF). All classes are 'Dynamic' and 'Provider("IscProv")' by
+ ; default.
+ ; 
+ ; The Super_Class identifies a class that this class inherits from. Again the leading
+ ; application name is automatically added to the class name (unless the name begins with a
+ ; leading "_", and then it's considered a Win system class and left 'as is').
+ ; 
+ ; The 'Routine' piece identifies the Cache routine where the Property definition of
+ ; the Class is stored. By default (a blank routine) this is ^WMIMOF2 for Cache. Other
+ ; routines can be used to manage the size of the routines, and a separate routine is
+ ; used fro Ensemble. 
+ ; 
+ ; 
+ ; The Property definitions are similarly constructed at the Class name text label. 
+ ; The first line is a Property definition containing:
+ ; 
+ ; ";;Property_type ; Name_of_Property ; Example_Instance ; Property_qualifiers ; Class_Ref".
+ ; 
+ ; The lines after a Property are the Property Description, terminated by a blank line.
+ ; 
+ ; Property Qualifiers are a comma-delimited list of qualifiers in MOF format 
+ ; (copied directly into the MOF). All Properties are 'Read' by default.
+ ; 
+ ; NOTE !! - The order of properties within a class is important for decoding the 
+ ; messages returned to the DLL. The order here is maintained in IscMOF.h and must
+ ; match the order they appear in the messages constructed by ^WMI.
+ ;
+ ; NOTE !! - The DLL needs the config name to Get a specific instance. It assumes that 
+ ; the first property of each class is the key for that class, and also that the configuration 
+ ; name is the first "_" piece in all keys.
+ ;  
+ ; ==========================================================================
+ ; 
+build ; Build MOF file and IscMOF.h
+ ;
+ ; Class definitions are taken from the text tags below 
+ ;
+ n err,q,tlist,stars,mof,inc,i,l,cline,pline,text,clist,cname,cqual,csuper,cstruct
+ n pname,pqual,pref,ptype,pinst,app
+ s err="",clist=0,q=$c(34)
+ s tlist="string,uint32,datetime,boolean,uint16,REF" ; property types list
+ s stars="// *********************************************************"
+ s mof="IscProv.Mof",inc="IscMOF.h"
+ o mof:"NWS":1 e  w "Error opening ",mof q
+ o inc:"NWS":1 e  w "Error opening ",inc c f1 q
+ u 0 w !,"Building MOF and header for WMI Classes ...",!
+ u mof f i=1:1 s l=$t(mofhead+i),l=$p(l,";",3,$l(l,";")) q:l="ENDOFHEADER"  w l,!
+ u inc f i=1:1 s l=$t(inchead+i),l=$p(l,";",3,$l(l,";")) q:l="ENDOFHEADER"  w l,!
+ ; get first class
+ s cline=1,text=$t(Schema+cline)
+DoClass	; handle a class definition
+ ; ";; Name_of_Class ; Class_qualifiers ; Super_Class ; Structure_name"
+ i $p(text,";",3)="" s err="Blank class name found at line "_cline g bldex
+ s ctag=$p(text,";",3),app=$p(text,";",7),cname=app_"_"_ctag
+ s cqual=$p(text,";",4),csuper=$p(text,";",5),crou=$p(text,";",6) s:crou="" crou="WMIMOF2"
+ s cstruct=$p(text,";",3)_"Prop" i csuper]"",$e(csuper)'="_" s csuper=app_"_"_csuper
+ s clist=clist+1,clist(clist)=cname_";"_cstruct ; maintain class list
+ u 0 w !,text,! u mof
+ ; write comment header for class
+ w !,stars,!,"//",!,"//",?10,cname,!,"//",!,stars,!
+ ; write start of class
+ w !,"[" w:cqual]"" cqual,", " w "Dynamic, Provider(""IscProv""), Description ("
+ ; class description
+ ; make sure each line ends with a space so they format OK if concatenated together
+ f i=1:1 s text=$p($t(Schema+(cline+i)),";",3) q:text=""  s:$e(text,$l(text))'=" " text=text_" " w !,?4,q,text,q
+ s cline=cline+i
+ ; class name
+ w ")]",!," class ",cname w:csuper]"" " : ",csuper w " {",!
+ ; write .h file
+ u inc w !,"// ",cname," class"
+ w !,"const PropertyList ",cstruct,"[] = {"
+ ; get first property
+ s pline=1,ref=ctag_"+"_pline_"^"_crou,text=$t(@ref)
+DoProp	; handle property of class
+ ; ";; Property_type ; Name_of_Property ; Example_Instance ; Property_qualifiers ; Class_Ref"
+ u mof
+ i $p(text,";",3)="" s err="Extra blank line found at line "_pline_", class "_cname g bldex
+ i tlist'[$p(text,";",3) s err="Unknown property type "_$p(text,";",3)_" on line "_pline_", class "_cname g bldex
+ s ptype=$p(text,";",3),pname=$p(text,";",4),pinst=$p(text,";",5),pqual=$p(text,";",6),pref=$p(text,";",7)
+ w !,"    [Description ("
+ ; property description
+ ; make sure each line ends with a space so they format if concatenated together
+ f i=1:1 s ref=ctag_"+"_(pline+i)_"^"_crou,text=$p($t(@ref),";",3) q:text=""  s:$e(text,$l(text))'=" " text=text_" " w !,?8,q,text,q
+ s pline=pline+i
+ w " ),",!,"     Read" w:pqual]"" ", ",pqual w "]"
+ i ptype="REF"  w !,"     ",pref," ",ptype," ",pname,";",! 
+ e  w !,"     ",ptype," ",pname w:pinst]"" " = ",q,pinst,q w ";",!
+ ; write .h file
+ u inc w !,"    { L",q,pname,q,", CIM_"
+ i ptype="REF" w "STRING }"
+ e  w $zcvt(ptype,"U")," }"
+ ; check next property
+ s pline=pline+1,ref=ctag_"+"_pline_"^"_crou,text=$t(@ref)
+ i $p(text,";",3)'="ENDOFMOF" u inc w "," g DoProp
+ ; close class structures
+ u mof w !,"};",! u inc w !,"};",!
+ ; check next class
+ s cline=cline+1,text=$t(Schema+cline)
+ i $p(text,";",3)'="ENDOFMOF" g DoClass
+ ;
+bldex	; build exit
+ ; add class list to end of .h
+ i err="" {
+	 u inc w !!,"// List of classes"
+	 w !,"const ClassList CacheClass[] = {"
+	 f i=1:1:clist {
+		 s l=clist(i)
+		 w !,"    {L",q,$p(l,";"),q,", (PropertyList *)"
+		 w $p(l,";",2),", sizeof(",$p(l,";",2),")/sizeof(PropertyList) }"
+		 w:i<clist ","
+	 }
+	 w !,"};"
+	 w !!,"#define NUM_CLASS sizeof(CacheClass)/sizeof(ClassList)"
+	 w !!,"#endif" ; endif from header
+ }
+ u 0 i err]"" w !!,err
+ c mof c inc
+ q
+ ;
+ ;
+doc	; print out the MOF in a more human-friendly format
+ ;
+ ; Class definitions are taken from the text tags below 
+ ;
+ n err,tlist,i,l,cline,pline,text,cname,cqual,csuper,cstruct
+ n pname,pqual,pref,ptype,pinst,ctag,doc,tab,app
+ s err="",tab=4
+ s tlist="string,uint32,datetime,boolean,uint16,REF" ; property types list
+ w !!,"File: <IscProv.txt> " u 0 r doc i doc="" s doc="IscProv.txt" 
+ o doc:"NWS":1 e  w "Error opening ",doc q
+ u 0 w !,"Creating doc file for WMI Classes ...",!
+ u doc w !!,"Cache Classes and Properties for WMI Provider",!
+ ; get first class
+ s cline=1,text=$t(Schema+cline)
+DocClass	; handle a class definition
+ ; ";; Name_of_Class ; Class_qualifiers ; Super_Class ; Structure_name"
+ i $p(text,";",3)="" s err="Blank class name found at line "_cline g docex
+ s ctag=$p(text,";",3),app=$p(text,";",7) s cname=app_"_"_ctag
+ s cqual=$p(text,";",4),csuper=$p(text,";",5),crou=$p(text,";",6) s:crou="" crou="WMIMOF2"
+ s cstruct=$p(text,";",3)_"Prop" i csuper]"",$e(csuper)'="_" s csuper=app_"_"_csuper
+ ; skip association classes for now
+ i cqual["Association" {
+	 f i=1:1 s text=$p($t(Schema+(cline+i)),";",3) q:text=""
+	 s cline=cline+i+1,text=$t(Schema+cline)
+	 g DocClass
+ }
+ u 0 w !,text,! u doc
+ ; write class
+ w !!,cname w:csuper]"" " {",csuper,"}"
+ ; class description
+ f i=1:1 s text=$p($t(Schema+(cline+i)),";",3) q:text=""  w !,?tab,text
+ s cline=cline+i
+ ; get first property
+ s pline=1,ref=ctag_"+"_pline_"^"_crou,text=$t(@ref)
+DocProp	; handle property of class
+ ; ";; Property_type ; Name_of_Property ; Example_Instance ; Property_qualifiers ; Class_Ref"
+ u doc
+ i $p(text,";",3)="" s err="Extra blank line found at line "_pline_", class "_cname g docex
+ i tlist'[$p(text,";",3) s err="Unknown property type "_$p(text,";",3)_" on line "_pline_", class "_cname g bldex
+ s ptype=$p(text,";",3),pname=$p(text,";",4),pinst=$p(text,";",5),pqual=$p(text,";",6),pref=$p(text,";",7)
+ w !!,?tab,pname," - ",ptype
+ ; property description
+ f i=1:1 s ref=ctag_"+"_(pline+i)_"^"_crou,text=$p($t(@ref),";",3) q:text=""  w !,?(tab*2),text
+ s pline=pline+i
+ ; check next property
+ s pline=pline+1,ref=ctag_"+"_pline_"^"_crou,text=$t(@ref)
+ i $p(text,";",3)'="ENDOFMOF" g DocProp
+ ; check next class
+ s cline=cline+1,text=$t(Schema+cline)
+ i $p(text,";",3)'="ENDOFMOF" g DocClass
+ ;
+docex	; build exit
+ u 0 i err]"" w !!,err
+ c doc
+ q
+ ;
+ ; ";; Name_of_Class ; Class_qualifiers ; Super_Class ; Routine ; Application". 
+ ; 
+Schema	; List of Cache CIM classes
+ ;;DatabaseSystem;;;;Cache;
+ ;;This class defines the properties of a Cache configuration. 
+ ;;There may be more than one Cache configuration installed on a system.
+ ;;It is modeled after the CIM_DatabaseSystem class.
+ ;;
+ ;;CommonDatabase;;;;Cache;
+ ;;This class defines the properties of a database within a Cache configuration. 
+ ;;Each Cache configuration may define several databases. Each database is created as a 
+ ;;'cache.dat' file in a separate directory for that database.
+ ;;It is modeled after the CIM_CommonDatabase class.
+ ;;
+ ;;AssociatedDatabaseSystem;Association:ToInstance;;;Cache;
+ ;;The Cache_AssociatedDatabaseSystem association identifies the relationship between 
+ ;;databases and the database system (i.e. Cache configuration) that manages them.
+ ;;
+ ;;SystemStatistics;Abstract;;;Cache;
+ ;;This class serves as an abstract parent class for Cache statistics at the 'system', 
+ ;;or Cache configuration, level. The class is used to associate each of the sub-classes 
+ ;;with a Cache_DatabaseSystem.
+ ;;
+ ;;ElementStatisticalData;Association:ToInstance;;;Cache;
+ ;;This class defines the association between statistical elements (a Cache_SystemStatistics
+ ;;subclass) and the database system (i.e. Cache configuration) they measure.
+ ;;
+ ;;DatabaseStatistics;;SystemStatistics;;Cache;
+ ;;This class defines the general performance metrics for a Cache configuration.
+ ;;
+ ;;ECPClientStatistics;;SystemStatistics;;Cache;
+ ;;This class defines the performance metrics for the configuration acting as an ECP client.
+ ;;
+ ;;ECPServerStatistics;;SystemStatistics;;Cache;
+ ;;This class defines the performance metrics for the Cache ECP servers in a configuration.
+ ;;
+ ;;WriteDemonStatistics;;SystemStatistics;;Cache;
+ ;;This class defines the status and statistical properties of the Write Demons for the configuration. 
+ ;;Each instance represents a separate Write Demon on the configuration.
+ ;;
+ ;;GlobalBufferStatistics;;SystemStatistics;;Cache;
+ ;;This class defines the metrics for global buffers in a Cache configuration.
+ ;;There is one instance for each buffer size group within a Cache configuration. 
+ ;;
+ ;;ResourceSeizeStatistics;;SystemStatistics;;Cache;
+ ;;This class defines one instance for each resource - seize_type combination in a Cache configuration. 
+ ;;This table lists the different 'resources' that are used to limit access within the Cache 
+ ;;system code. The names displayed indicate a brief resource name concatenated with an indicator 
+ ;;of the manner in which the seize occurs. Some common resources are 'Pid' for process related 
+ ;;locks, 'Routine' for routine buffers, and 'Global' for global buffers. Some common ways in 
+ ;;which the seize counts are sorted include 'Sz' which is a count of all resource seizes, 'Nsz' 
+ ;;which indicates a failure to acquire the resource, 'Asz' is a successful spin lock on a 
+ ;;multi-processor system, and 'Dsz'which indicates we woke the next process on the wait queue. 
+ ;;Associated to the Cache_DatabaseSystem by an instance of the Cache_ElementStatisticalData class.
+ ;;
+ ;;ECPConnection;Abstract;;;Cache;
+ ;;This class is an abstract class used to identify and show the status of ECP client and server 
+ ;;connections. The class is used to build associations between the connections 
+ ;;classes and classes for configurations and statistics. It is modeled after the 
+ ;;CIM_DatabaseService class.
+ ;;
+ ;;ECPServerConnection;;ECPConnection;;Cache;
+ ;;This class defines one instance for each ECP Server Connection. It inherits the 
+ ;;basic identification and status properties from Cache_ECPConnection and further
+ ;;defines the TCP connection propertis for the Server.
+ ;;
+ ;;ECPClientConnection;;ECPConnection;;Cache;
+ ;;This class defines one instance for each ECP Client Connection. It inherits the 
+ ;;basic identification and status properties from Cache_ECPConnection and further
+ ;;defines the TCP connection propertis for the Client.
+ ;;
+ ;;ECPServerConnectionStats;;;;Cache;
+ ;;This class defines the statistical propeties for an individual ECP Server Connection.
+ ;;
+ ;;ECPConnectionToSystem;Association:ToInstance;;;Cache;
+ ;;This class defines the association between a Cache_ECPConnection instance and a
+ ;;Cache_DatabaseSystem (i.e. Cache Configuration) instance.
+ ;;
+ ;;ECPConnectionStatisticalData;Association:ToInstance;;;Cache;
+ ;;This class defines the association between a Cache_ECPServerConnectionStats instance and a
+ ;;Cache_ECPConnection instance.
+ ;;
+ ;;ShadowJournal;Abstract;;;Cache;
+ ;;This class is an abstract class used to identify and show the status of Shadow 
+ ;;Journal activity. This may be either a Shadow Source connection or a Shadow
+ ;;Destination server. The class is used to build associations between these classes
+ ;;and a Cache_DatabaseSystem (i.e. Cache Configuration) instance.
+ ;;
+ ;;ShadowSourceConn;;ShadowJournal;;Cache;
+ ;;This class defines the properties of a Shadow Source connection
+ ;;
+ ;;ShadowDestServer;;ShadowJournal;;Cache;
+ ;;This class defines the properties of a Shadow Destination server
+ ;;
+ ;;ShadowToSystem;Association:ToInstance;;;Cache;
+ ;;This class defines the association between a Cache_ShadowJournal instance and a
+ ;;Cache_DatabaseSystem (i.e. Cache Configuration) instance.
+ ;;
+ ;;Event;;__ExtrinsicEvent;;Cache
+ ;;This class defines the properties of a Cache Event. 
+ ;;
+ ;;LogEvent;;__ExtrinsicEvent;WMIMOF3;Ensemble
+ ;;This class defines the properties of an Ensemble LogEvent.
+ ;;This Event is generated by messages in the Ensemble Event Log and includes
+ ;;properties that are the same as those in the Ensemble_EventLog Class.  
+ ;;
+ ;;Production;;;WMIMOF3;Ensemble;
+ ;;This class defines the properties of an Ensemble Production. 
+ ;;Each Production is associated with a Cache instance and namespace, and there
+ ;;may be multiple Productions on a system (but for each Cache namespace, only one 
+ ;;Production may be running).
+ ;;
+ ;;EventLog;;;WMIMOF3;Ensemble;
+ ;;This class defines the properties of the Ensemble Event Log. 
+ ;;The Event Log is associated with a specific Cache instance and namespace.
+ ;;There may be multiple Event Logs on a system. 
+ ;;
+ ;;ENDOFMOF
+ ;
+ ;
+ ;               Header text for MOF and Include files
+ ; 
+ ; 
+mofhead ; header for MOF file
+ ;;// **************************************************************************
+ ;;//	Copyright (c) 1994-2005 by InterSystems.
+ ;;//	Cambridge, Massachusetts, U.S.A.  All rights reserved.
+ ;;//	
+ ;;//	File:  iscprov.mof
+ ;;//	
+ ;;//	Description: Class definitions for Cache WMI-enabled objects
+ ;;//	
+ ;;//	NOTE: This file is generated from internal Cache class definitions
+ ;;//	and should not be editted by hand.
+ ;;//
+ ;;// **************************************************************************
+ ;;// 
+ ;;// Create and set default to Cache namespace
+ ;;#pragma classflags("forceupdate")
+ ;;#pragma namespace ("\\\\.\\Root")
+ ;;
+ ;;instance of __Namespace
+ ;;{
+ ;;    Name = "Cache";
+ ;;};
+ ;; 
+ ;;#pragma namespace ("\\\\.\\Root\\Cache")
+ ;;
+ ;;// Declare an instance of the __Win32Provider so as to "register" the
+ ;;// sample provider. Since Win2000 doesn't have the HostingModel property
+ ;;// we create a derived class so it works there too.
+ ;;
+ ;;class CacheWin32Provider : __Win32Provider
+ ;;{
+ ;;	string	HostingModel;
+ ;;};
+ ;;
+ ;;instance of CacheWin32Provider as $P
+ ;;{
+ ;;    Name        = "IscProv" ;
+ ;;    ClsId   = "{C36C6E56-9FDC-4308-A443-D4D298B23E6D}" ;
+ ;;    HostingModel = "NetworkServiceHost";
+ ;;};
+ ;; 
+ ;;instance of __InstanceProviderRegistration
+ ;;{
+ ;;    Provider = $P;
+ ;;    SupportsPut = FALSE;
+ ;;    SupportsGet = TRUE;
+ ;;    SupportsDelete = FALSE;
+ ;;    SupportsEnumeration = TRUE;
+ ;;};
+ ;;	
+ ;;instance of __EventProviderRegistration
+ ;;{
+ ;;    Provider = $p;
+ ;;    EventQueryList = { "select * from Cache_Event", 
+ ;;                       "select * from Ensemble_LogEvent" };
+ ;;};
+ ;;
+ ;;ENDOFHEADER
+ ;;	
+inchead ; header for iscMOF.h file
+ ;;// ***************************************************************************
+ ;;//	iscmof.h
+ ;;//	Module: WMI Instance provider for Cache
+ ;;//	
+ ;;//	Purpose: Structures which define the Cache MOF objects
+ ;;//	
+ ;;//	NOTE: This file is generated by build^WMIMOF and should not be editted by hand
+ ;;//	
+ ;;//	Copyright (c) 1994-2005 by InterSystems.
+ ;;//	Cambridge, Massachusetts, U.S.A.  All rights reserved.
+ ;;//	
+ ;;// ***************************************************************************
+ ;;
+ ;;#ifndef _iscmof_H_
+ ;;#define _iscmof_H_
+ ;;
+ ;;// Data types for objects from wbemcli.h
+ ;;// CIM_ILLEGAL	= 0xfff,
+ ;;// CIM_EMPTY	= 0,
+ ;;// CIM_SINT8	= 16,
+ ;;// CIM_UINT8	= 17,
+ ;;// CIM_SINT16	= 2,
+ ;;// CIM_UINT16	= 18,
+ ;;// CIM_SINT32	= 3,
+ ;;// CIM_UINT32	= 19,
+ ;;// CIM_SINT64	= 20,
+ ;;// CIM_UINT64	= 21,
+ ;;// CIM_REAL32	= 4,
+ ;;// CIM_REAL64	= 5,
+ ;;// CIM_BOOLEAN	= 11,
+ ;;// CIM_STRING	= 8,
+ ;;// CIM_DATETIME	= 101,
+ ;;// CIM_REFERENCE	= 102,
+ ;;// CIM_CHAR16	= 103,
+ ;;// CIM_OBJECT	= 13,
+ ;;// CIM_FLAG_ARRAY	= 0x2000
+ ;;
+ ;;// Structure for property definition
+ ;;typedef struct {
+ ;;    WCHAR    *pwcProperty;       // property name
+ ;;    UINT	    iType;              // CIM property type
+ ;;} PropertyList;
+ ;;	
+ ;;// Structure for class definition
+ ;;typedef struct {
+ ;;    WCHAR          *pwcClass;    // class name
+ ;;    PropertyList   *pList;       // pointer to property list
+ ;;    UINT           iCount;       // number of properties
+ ;;} ClassList;
+ ;;	
+ ;;// Object.Property lists
+ ;;// The order of the properties must be kept in sync with
+ ;;// the order they are returned by ^WMI
+ ;;
+ ;;ENDOFHEADER
+ ; 

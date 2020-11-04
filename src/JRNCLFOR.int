@@ -1,0 +1,423 @@
+ROUTINE JRNCLFOR [Type=INT]
+JRNCLFOR ;Journal forward for a cluster environment ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/jrnclfor.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+START(checkerr,errlist,crashcsn)
+ n clu,adr,type,seq,nxtseq,jrnseq,dir,thiscsn,jrnold,repold
+ n clulist 
+ n a
+ n nextadr
+ n glo,dbcol  ;stores collations of the databases involved
+ n initialopen ;to distinguish open2 calls by open (START) and nextupd (main)
+ n lastseq ;the sequence # of the last journal record restored
+ n jrnend,prevend ;for comparing journal end offset to detect corruption
+ n errsave 
+ s errsave=$G(errlist,0) ;remember where this started
+ s reporterr=0 ; ***for debugging, use 1 to display output on terminal ***
+ s jrnold=$$STOP^%SYS.NOJRN ; disable journalling for this process
+ n nullsubstat s nullsubstat=$zu(68,1,1)
+ i checkerr s $zt="err"
+   ; Establish open of all files to be dejournalled
+ s initialopen=1
+ do buildclulist(.clulist,checkerr,.errlist)
+ quit:$G(errlist,0)'=errsave  ;abort if buildclulist() failed
+ f thiscsn=0:1:14-1 d open(thiscsn,$G(clulist(thiscsn)))
+ s initialopen=0
+   ;
+   ; main restore loop
+ for  s seq=$o(jrnseq("")) q:seq=""  d main ; get lowest sequence #
+ If ($zu(78,41,0)<+$g(lastseq,0)) d $zu(78,41,0,$g(lastseq,0)+1)
+   ;
+   ; restore completed
+ ;If there were no errors during the restore then run through the 
+ ;manager directories and set a global to indicate that journal
+ ;recovery has been performed. This is a note for STU^JRNRESTO which says 
+ ;that it is ok if there isn't a journal file listed in the WIJ. 
+ ;Cluster recovery zeroes these out.
+ if errsave=$G(errlist,0) {
+    if $g(crashcsn)="" {	// cluster crash recovery (CLURECOV^STU)
+      s csn="" 
+      for { 
+         s csn=$O(mgrdir(csn)) 
+         q:csn=""
+         s a=$G(dir(mgrdir(csn)),0)  ;mount mode, 0 = not, 1 = priv, 2 = clu, 3 = read-only
+         if (a=1)!(a=2) {
+            s ^|"^^"_mgrdir(csn)|SYS("SHUTDOWN","JRNCLEAN")=$ZTIMESTAMP_"^"_"CLURECOV"
+            i $g(lastjrnf(mgrdir(csn)))]"" s ^|"^^"_mgrdir(csn)|%SYS("JOURNAL","LAST")="1,CLURECOV^"_lastjrnf(mgrdir(csn))
+         }
+      }
+    } else {			// cluster failover recovery (^RCVRYDMN)
+       s csn=crashcsn-1	;crashcsn is 1-based, whereas mgrdir() index is 0-based
+       s a=$G(dir(mgrdir(csn)),0)  ;mount mode, 0 = not, 1 = priv, 2 = clu, 3 = read-only
+       if (a=1)!(a=2) {
+          s ^|"^^"_mgrdir(csn)|SYS("SHUTDOWN","JRNCLEAN")=$ZTIMESTAMP_"^"_"CLURECOV"
+          i $g(lastjrnf(mgrdir(csn)))]"" s ^|"^^"_mgrdir(csn)|%SYS("JOURNAL","LAST")="1,CLURECOV^"_lastjrnf(mgrdir(csn))
+       }
+    }
+ }
+   ; dismount directories we mounted in this routine
+done ;
+ i checkerr s $zt="done2"
+ i $zu(68,1,nullsubstat)  ;restore null subscript setting
+ s mgdir=$ZU(12)
+ s dir="" f  s dir=$o(dir(dir)) q:dir=""  d:dir(dir)
+ . i dir'=mgdir s a=$zu(3,dir)  ; don't dismount mgr's dir
+   ; just in case due to errors we failed to close any journal files,
+   ; close them now
+ s clu="" 
+ f  s clu=$o(cluopen(clu)) q:clu=""  k cluopen(clu) s a=$zu(78,7,clu)
+done2 ;
+ i jrnold d ENABLE^%SYS.NOJRN
+ q
+err ;
+   ; errors in "START" and "main" come here. We know checkerr is not zero
+	s $ZT="done"
+	d miscerrlog($G(thiscsn,-1),$G(clu,-1))
+	g done
+   ; Build a list of systems to be restored in the array which
+   ; was passed by reference. The array contains $$$JRNLOOKUP results
+   ; with the starting journal position for each system loaded in the
+   ; $$$JLJRNOFF/$$$JLJRNFILENAME fields. The return array is empty if
+   ; there is nothing to restore or if we encounter an error. 
+buildclulist(retarr,checkerr,errlist) {
+   i checkerr s $zt="buildend"
+   f csn=0:1:14-1 {
+      s a=$zu(78,20,csn)
+      ; If jrnoff is 0 then don't restore this file as it has already
+      ; been restored once
+      if a'="",+$P(a,",",1) {
+	      s clulist(csn)=a
+	      s wdpass=$P(a,",",6)
+	      s wdpass(wdpass)=1,passlist(csn)=wdpass
+      }
+   }
+   quit:'$D(clulist)  ; no systems to be restored
+   s pass1=$O(wdpass(""))
+   s pass2=$O(wdpass(pass1))
+   if pass2'="" {
+      s pass3=$O(wdpass(pass2))
+      ; There should only be two different values for wdpass and
+      ; they should be within +/- 1 of each other. If not we don't
+      ; have enough WIJ information to perform a cluster journal restore
+      ; as we can't locate a "checkpoint" across the journal files.
+      if pass3'="" {
+	     s errlist=$G(errlist)+1
+	     s errlist("all",errlist)=$LB("buildclulist",0,"Found 3 wdpass values in cluster: "_pass1_", "_pass2_", and "_pass3)
+	     do $ZU(9,"","Cluster journal restore impossible, found 3 wdpass values: "_pass1_","_pass2_","_pass3)
+	     if 'chkerror ztrap "CLUJRN"
+	     quit
+      }
+   }
+   s pass1=+pass1
+   s pass2=+pass2
+   ; if we don't have a pass2 value, or if pass2 is the same as pass1, then
+   ; we start the restore at $$$JLJRNOFF/$$$JLJRNFILECNT for each cluster
+   ; member
+   if ('pass2)||(pass1=pass2) {
+	   merge retarr = clulist
+	   quit
+   }
+   ; Deal with the odd case where wdpass wrapped from 4294967295 to 0
+   if 'pass1,pass2=$ZH("ffffffff") {
+	   s pass1=pass2,pass2=pass1+1
+	   s csn=$O(passlist(""),1,wdpass)
+	   while (csn '= "") {
+		   if 'wdpass s passlist(csn)=pass2
+		   s csn=$O(passlist(csn),1,wdpass)
+	   }
+   }
+   if pass2,(pass1+1)'=pass2 {
+	     s errlist=$G(errlist)+1
+	     s errlist("all",errlist)=$LB("buildclulist",0,"Wdpass values in cluster are more than +/- 1 apart: "_pass1_"/"_pass2)
+	   do $ZU(9,"","Cluster journal restore impossible, pass values are not +/- 1: "_pass1_"/"_pass2)
+	   if 'chkerror ztrap "CLUJRN"
+	   quit
+   }
+   ; pass1 and pass2 are different so we must adjust the journal restore
+   ; point for some of the nodes. pass1 is lower than pass2 (due to the
+   ; $O() function). Nodes which match pass1, the lower value, start their
+   ; restore from imjrnoff/imjrnfilecnt. Nodes which match the higher value 
+   ; start their restore from previmjnroff/previmjrnfilecnt.
+   s csn=$O(clulist(""),1,a)
+   s err=0
+   while ('err && (csn '= "")) {
+	  s wdpass=passlist(csn)
+	  if wdpass=pass2 {
+		  s prevjrncnt=$P(a,",",8)
+		  s jrncnt=$P(a,",",3)
+		  if jrncnt'=prevjrncnt {
+			  s jfile=$P(a,",",2)
+		      s prev=$P($zu(78,22,jfile,1),",",2) 
+		      if prev="" {
+			      s err=1
+			      do $ZU(9,"","Cluster journal restore aborted: Unable to determine prior journal file from "_jfile)
+		      }
+		      if $ZU(78,22,prev)<1 {
+			      s err=1
+			      do $ZU(9,"","Cluster journal restore aborted: Prior journal file "_prev_" of "_jfile_" is not valid")
+		      }
+			  s $P(a,",",2)=prev
+			  s $P(a,",",3)=prevjrncnt
+		  }
+		  s $P(a,",",1)=$P(a,",",7)
+		  s clulist(csn)=a
+	  }
+      s csn=$O(clulist(csn),1,a)
+   }
+   merge:'err retarr = clulist
+   quit
+buildend ;
+   s $zt=""   
+   quit
+}
+   ; open journal files
+   ; see if there is a journal file for this cluster system number
+   ; if we open a journal file store the name in cluopen(clu) and
+   ; the manager's directory in mgdir(dir). Also, make sure we mount
+   ; the database in the manager's directory.
+ ; open() is passed the $$$JRNLOOKUP() string for the 'thiscsn'
+ ; cluster member. $$$JLJRNOFF/$$$JLJRNFILENAM has been adjusted
+ ; by buildclulist to cater for differences in imjrnwdpass values
+ ; between cluster members so that the $$$JLJRN values represent
+ ; the same point in time across the cluster.
+open(thiscsn,a)
+ i checkerr s $zt="openend"
+ ; NB: $P(a,",",$$$JLMGRDIR) is the manager's directory spec for this 
+ ;     system as the journal file name must not contain any commas.
+ q:a="" 
+ ; If imjrnoff is 0 then don't restore this file as its already
+ ; been restored once. 
+ q:'+$P(a,",",1)     ;JO2192
+ ; Pick up the manager's dataset and mount it. If we can't mount it
+ ; we can't access its ^%SYS("JOURNAL","HISTORY") so we can't execute
+ ; the restore.
+ s dir=$P(a,",",9)  ;JO2192
+ i '$D(dir(dir)),'$$mount(),'$$mountreadonly() d  q
+ . w:'reporterr !,*7,"[ERROR MOUNTING MANAGER'S DATASET ",dir,"]",!
+ s mgdir=dir
+ s mgrdir(thiscsn)=mgdir
+ s dir=$p(a,",",2)  ; dir = journal file name
+ s adr=+$P(a,",",1)
+open2 ; come here with adr, dir and mgdir already loaded
+ ; if adr is null, we use $$$JRNNEXT(0) to load it
+   ; yes - open it
+ s clu=$zu(78,5,dir,0)
+ i clu<0 w:'reporterr !,*7,"[ERROR OPENING JOURNAL FILE ",dir,"]",! q
+ s cluopen(clu)=dir,mgdir(clu)=mgdir
+ s lastjrnf(mgdir)=dir
+   ; get to the first record to be dejournalled and obtain its
+   ; journal sequence number
+ s b=$zu(78,6,clu)
+ i adr="" s adr=$zu(78,17,0)
+ s type=$zu(78,8,adr)
+ i type'=6,type'=7,type'=10,type'=11,type'=9,type'=12,type'=14 d nextupd
+ ;
+ ;WARNING: The code from here down must be reentrant. If there are
+ ;         empty journal files that we've skipped then we may have
+ ;         multiple calls to nextupd stacked so the QUIT at label
+ ;         openend will return to this point to unwind those calls.
+ ;         (nextupd goes to nextfile which goes to open2 which can
+ ;         DO nextupd...)
+ q:type=-1  ; nextupd closed the file for us
+ i type=10 s type=6
+ i type=11 s type=7
+ i type=12 s type=9
+ i '$g(initialopen) q
+ s seq=$zu(78,11,adr)
+ do $ZU(9,"","open2^JRNCLFOR: clu: "_clu_" seq: "_seq_" adr: "_adr_" a: /"_a_"/")  ;JO2192
+ s jrnseq(seq,clu)="",adr(clu)=adr,type(clu)=type
+openend q
+   ; main restore loop
+main s clu=$o(jrnseq(seq,"")) k jrnseq(seq,clu)
+ s a=$zu(78,6,clu) ; use file w/ that seq #
+ s type=type(clu),adr=adr(clu)
+ ; Restore from this file until we find a sequence number that
+ ; is higher than the lowest sequence number in one of the other
+ ; files. nextupd will switch journal files for us if we reach
+ ; the end of the current one. When it returns with type=$$$JRNEND
+ ; the journal file is closed.
+ s nxtseq=$O(jrnseq(""))
+ n curseq s curseq=seq 
+ d restore  ;seq'<curseq
+ i nxtseq="" d  q  ;type=$$$JRNEND
+ . f  d nextupd q:type=-1  s seq=$zu(78,11,adr) i seq'<curseq s lastseq=seq d restore
+ f  d nextupd q:type=-1  s seq=$zu(78,11,adr) q:seq>nxtseq  i seq'<curseq d restore
+ q:type=-1
+   ; must process entries from another file
+ s type(clu)=type,adr(clu)=adr,jrnseq(seq,clu)="" 
+ q
+   ; restore the current record if its directory is mountable
+   ; in the case of cluster failover, this means:
+   ;   a.  it is to a clustered directory, OR
+   ;   b.  it is to the crashed system, OR
+   ;   c.  it is to the failed system
+   ; input variables: type,adr
+   ;   Note: if type was JRNNSET, JRNNKILL, JRNNZKILL or JRNNBITSET it was
+   ;         changed to look like JRNSET, JRNKILL, JRNZKILL or JRNBITSET
+   ;         so that 'restore'can work faster
+   ; get directory and make sure it is mounted
+restore i checkerr s $zt="skiprec"
+ s dir=$zu(78,12,adr) i '$d(dir(dir)) q:$d(nomount(dir))  q:'$$mount
+ q:dir(dir)=3  ; read-only directory, don't restore to it
+ i type=6 d  
+ . s glo=$zu(78,13,adr) 
+ . s colseq=$ZU(78,27,adr) i colseq'=dbcol(dir),('$d(@($p(glo,"(",1,$l(dir,"("))))),$zu(178,"^^"_dir,$qs(glo,0),colseq)
+ . s @glo=$zu(78,15,adr)
+ e  i type=7 k @$zu(78,13,adr)
+ e  i type=9 zkill @$zu(78,13,adr)
+ e  i type=14 d  
+ . s glo=$zu(78,13,adr) 
+ . s colseq=$ZU(78,27,adr) i colseq'=dbcol(dir),('$d(@($p(glo,"(",1,$l(dir,"("))))),$zu(178,"^^"_dir,$qs(glo,0),colseq)
+ . Set $Bit(@glo,$zu(78,36,adr))=$zu(78,37,adr)
+ q
+skiprec i reporterr w $zt,!
+ s $ZT="skiprec1"
+ s errlist=$G(errlist)+1
+ d:checkerr=1 
+ . n %jrnfile
+ . s %jrnfile=$G(cluopen($G(clu,-1)))
+ . d $zu(9,"","Error in JRNCLFOR: "_$ZE_$C(10,13)_"     "_%jrnfile_" addr="_$g(adr)_$C(10,13)_"     "_$zu(78,13,adr),(0>0),0)
+ d:checkerr=2
+ . ; for checkerr=2 we record error detail in the errlist array. 
+ . n i,dirname,%jrnfile
+ . s %jrnfile=$G(cluopen($G(clu,-1)))
+ . s errlist("all",errlist)=$LISTBUILD(%jrnfile,$G(adr),$ZE)  ;all errors in order
+ . s dirname=$S($G(adr):$zu(78,12,adr),1:"<unknown>")
+ . ; if this is the 1st error for this directory then count another db err
+ . if '$G(errlist("db",dirname)) s i=$I(errlist("db")),errlist("db",i)=dirname  ;databases with errors
+ . s i=$I(errlist("db",dirname))
+ . s errlist("db",dirname,i)=$LISTBUILD($G(%jrnfile),$G(adr),$ZE)
+ . d $zu(9,"","Error in JRNCLFOR: "_$ZE_$C(10,13)_"     "_%jrnfile_" addr="_$g(adr)_$C(10,13)_"     "_$zu(78,13,adr),(0>0),0)
+ . q:'$L(dirname)!('$G(adr))  ;if dir is "<unknown>" or "" then stop here
+ . d:i>$G(errmax)  ; stop restoring this db if the max # of errors/db is exceeded
+ . . ; If we remove dir(dirname) and set nomount(dirname) to true then restore 
+ . . ; will stop writing records to this database. We also dismount it now so 
+ . . ; that in case something goes wrong, and we don't abort, it can't be used.
+ . . k dir(dirname)
+ . . s nomount(dirname)=1
+ . . do $ZU(3,dirname)
+ . . d $zu(9,"","Too many errors restoring to "_dirname_"."_$C(10,13)_" Dismounting and skipping subsequent records",(0>0),0)
+ . . s errlist("db",dirname)=errlist("db",dirname)_"^1"  ;flag we skipped the rest
+skiprec1 ;
+ q
+   ; we haven't dejournalled from this directory - see if its mounted
+mount() i checkerr s $zt="nomnt"
+ n a
+ s a=+$zu(49,dir) i a>-1,a<$zu(40,0,41) s dir(dir)=0,dbcol(dir)=$Piece($zu(49,dir),",",13) q 1  ; already mntd
+ i (a=-2)!(a=-3) s nomount(dir)=1 q 0 ; doesn't exist or not a database
+   ; 1st try to mount privately, then clustered
+   ; *** note: can't mount a directory with implicits or replication
+ s a=+$zu(17,dir,0) i a'<0 s dir(dir)=1,dbcol(dir)=$Piece($zu(49,dir),",",13) q 1 ; private mount
+ s a=+$zu(17,dir,1) i a'<0 s dir(dir)=2,dbcol(dir)=$Piece($zu(49,dir),",",13) q 1 ; cluster mount
+nomnt s nomount(dir)=1 
+ q 0 ; problems
+mountreadonly() i checkerr s $zt="nomntronly"
+ ;This is used only for the mgr's directory and it gets called when
+ ;mount() fails. When mount() fails this is the mgr directory of
+ ;a surviving slave. We only need read access to get to the journal
+ ;history (NEXTUPD^JRNUTIL). dir(dir)=3 means we won't try to restore
+ ;to it but we'll still dismount it when we're done.
+ n a
+ s a=+$zu(49,dir) i a>-1,a<$zu(40,0,41) s dir(dir)=0 q 1  ; already mntd
+ i (a=-2)!(a=-3) s nomount(dir)=1 q 0 ; doesn't exist or not a database
+ ; try a private, read-only mount. If this succeeds return success
+ ; but don't add the directory to dir() as we don't want to restore 
+ ; to it.
+ k nomount(dir) ;mount() may have set this
+ s a=+$zu(17,dir,0,1) i a'<0 s dir(dir)=3 q 1 ; private,read-only mount
+nomntronly s nomount(dir)=1 
+ q 0 ; problems
+   ; get to next update record, not counting JRNKILLDES
+   ; to improve performance, act as if JRNNSET/JRNNKILL/JRNNZKILL/JRNNBITSET
+   ;   are JRNSET/JRNKILL/JRNZKILL/JRNBITSET types (this avoids additional
+   ;   checking in 'restore'). If we reach the end of a journal file we
+   ;   use nextfile to see if we can find another journal file in the 
+   ;   series. If this routine returns with type=$$$JRNEND then the
+   ;   journal file is closed. 
+   ; call: adr = address
+   ;       clu = 'fd' of this journal file
+   ;       cluopen(clu) = array of open journal files
+   ;       type = $$$JRNTYPE(adr)
+   ; return: adr = address (0 if reached the end)
+   ;         type = record type ($$$JRNEND if reached the end)
+nextupd i checkerr s $zt="nxterr"
+ i type=-1 g nextfile
+ s nextadr=$zu(78,17,adr) g filedone:'nextadr s adr=nextadr
+ s type=$zu(78,8,adr)
+ q:type=6  q:type=7  ;q:type=$$$JRNKILLDES
+ q:type=9
+ q:type=14
+ ;q:type=$$$JRNNSET q:type=$$$JRNNKILL
+ i type=10 s type=6 q
+ i type=11 s type=7 q
+ i type=12 s type=9 q
+ i type=-1 g nextfile
+ g nextupd
+nxterr i reporterr w $zt,!
+ d miscerrlog($G(thiscsn),$G(clu))
+nextfile ;
+ s jrnend=$zu(78,18,0),jrnpath=dir ;save it before overwriting it with next file
+ s type=-1,adr=0
+ ; When we reach the end of a journal file, close it and see if there's
+ ; a subsequent journal file in the series. The number "clu" might
+ ; change when we open the next journal file for this system so
+ ; don't assume we'll get the same one we had before.
+ s dir=cluopen(clu),a=$zu(78,7,clu)
+ s mgdir=mgdir(clu)
+ k cluopen(clu),type(clu),adr(clu),mgdir(clu)
+ s dir=$$NEXTJRN0^JRNUTIL(dir,mgdir)
+ q:dir=""  ;no next file
+ s prevend=$p($zu(78,22,dir,99),",",11+1)
+ i prevend,prevend'=jrnend s $ze="Inconsistency in "_jrnpath_": The last reachable journal record ends @ offset "_jrnend_", different from the journal end offset "_prevend g nxterr
+ s adr=""  ; set adr to null so open2 will use $$$JRNNEXT(0) to init it
+ ; open2 will open the journal file and position us on the
+ ; 1st record to be restore (calling nextupd if necessary).
+ g open2
+ ; verify that we are indeed at the end of this file and warn if not
+filedone ;
+ i adr'<$zu(78,18,$zu(78,18,0)) g nextfile
+ s $ze="unexpected End Of Journal at "_adr_" (EOJ expected at "_$zu(78,18,$zu(78,18,0))_")" 
+ g nxterr
+miscerrlog(csn,clu) ;
+ ; csn is thiscsn or -1 if we don't have one
+ ; clu is the current value of the clu variable (the index into the
+ ;    arrays of journal files) or -1 if its not defined.
+ ; We try to use these to get the current journal file we're processing
+ ; 
+ ; for checkerr=2 we record errors in the errlist array. Here we
+ ; have a unexpected problem (eg. not during a database set/kill).
+ ; These are recorded in the "misc" (as opposed to "db") subnode.
+ s errlist=$G(errlist)+1
+ if checkerr=2 { ;for checkerr=1 we just count the errors and log them
+    n index,errfile,i
+    s index=$I(errlist("misc"))
+    s errfile=""
+    s:clu'=-1 errfile=$G(cluopen(clu))
+    i '$L(errfile) {
+	    if csn'=-1 {
+		    s i=$G(mgrdir(csn))
+		    s:$L(i) errfile=$G(lastjrnf(i))
+	    }
+    }
+    s:'$L(errfile) errfile="<unknown, csn="_csn_", clu="_clu_">"
+    s errlist("all",errlist)=$LISTBUILD(errfile,$g(adr),$ZE)
+    s errlist("misc",index)=$LISTBUILD(errfile,$G(adr),$ZE)
+ }
+ do $zu(9,"","Unexpected error "_$ZE_" encountered during cluster journal restore",(0>0),0)
+ q

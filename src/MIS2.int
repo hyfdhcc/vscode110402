@@ -1,0 +1,78 @@
+ROUTINE MIS2 [Type=INT]
+MIS2 ;(PTR,CHH,PK) ADD/EDIT DEVICE SUBTYPES ; 10 Dec 92  5:43 PM
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+A W !,"Terminal subtypes are used by the %IS utility to specify terminal",!
+ W "characteristics such as screen length, form feed characters, etc.  For each",!
+ W "terminal there should be a subtype.  In general, you should follow these",!
+ W "naming conventions:",!
+ W ?5,"C-...",?15,"CRT terminal",!,?5,"P-...",?15,"Printer without keyboard",!
+ W ?5,"PK-...",?15,"Printer with keyboard",!!
+ W "This utility is used to add new terminal subtypes and edit existing ones."
+B W !!,"Subtype",?9,"IORM",?15,"IOSL",?21,"IOBS/",?40,"IOF/",!,?21,"ZBS",?40,"ZFF",!!
+ S A="" F I=1:1 S A=$O(^%IS(0,"SUB",A)) Q:A=""  S X=^(A),W=$P(X,"^",2),Y=$P(X,"^",5) W A,?10,+X,?15,$P(X,"^",3),?21,$P(X,"^",4) D B0
+ G C
+B0 S Z=$X I $L(W)+Z>80,Z>39 W !
+B1 I $L(W)>40 W ?40,$E(W,1,40),! s W=$E(W,41,$L(W)) G B1
+ W ?40,W S W=$P(X,"^",9) W:W'="" !,?21,W S W=$P(X,"^",8),Z=$X I $L(W)+Z>80,Z>39,W'="" W !
+B2 I $L(W)>40 W ?40,$E(W,1,40),! S W=$E(W,41,$L(W)) G B2
+ W ?40,W
+B3 W:Y'="" !,?6,"XY:"
+B4 I $L(Y)>70 W ?10,$E(Y,1,70),! S Y=$E(Y,71,$L(Y)) G B4
+ W:Y'="" ?10,Y W !! Q
+C R !,"Add/edit subtype: ",A,! Q:A=""
+ I $D(^%IS(0,"SUB",A)) S X=^(A),IORT=+X,IOF=$P(X,"^",2),IOSL=$P(X,"^",3),IOBS=$P(X,"^",4),XY=$P(X,"^",5),IOZF=$P(X,"^",8),IOZB=$P(X,"^",9)
+ E  R "*** Not found.  Add a new subtype?" d NY w ! G C:'$t S IORT=$S(A?1"C".E:80,1:132),IOF="#",IOSL=$S(A?1"C".E:24,1:66),IOBS="$C(8)",XY="",IOZF="",IOZB=IOBS_"_"" ""_"_IOBS
+RIGHT W "Right margin: ",IORT,"=> " R C G FF:C="" I (C>255)!(C'?.N) W " ???",! G RIGHT
+ S IORT=+C
+FF W !,"Form feed (clear screen and home cursor): ",IOF,"=> " R C,! I C]"" S IOF=C
+SL W "Screen length: ",IOSL,"=> " R C G BS:C="" I 'C!(C>100)!(C'?.N) W " ???",! G SL
+ S IOSL=C
+BS W !,"Backspace code (decimal value of ASCII char): ",IOBS,"=> " R C G XY:C=""
+ I C?1"*".E S C=$E(X,2,9)
+ I C?1"$C("1N.N1")" S C=$P(C,")",1),C=$E(C,4,9)
+ I 'C!(C>143)!(C'?.N) W " ???" G BS
+ S IOBS="$C("_+C_")"
+XY W !,"Cursor control code: ",XY,"=> " R C I C]"" S XY=C
+ ; Prompt for control sequences for the form feed and backspace that
+ ; allow non-DG-standard terminals to echo these properly.
+ ; After setting them here, the sequence to put them into effect is:
+ ; D CURRENT^%IS
+ZF D SETZF W !,"Form Feed for $ZU(22): ",IOZF,"=> " R C I C]""
+ I C?1"?".E D TELLZF G ZF
+ S:C]"" IOZF=$S(C="DEL"!(C="del"):"",1:C)
+ZB D SETZB W !,"Backspace code for $ZU(22): ",IOZB,"=> " R C I C]""
+ I C?1"?".E D TELLZB G ZB
+ S:C]"" IOZB=$S(C="DEL"!(C="del"):"",1:C)
+SET S ^%IS(0,"SUB",A)=IORT_"^"_IOF_"^"_IOSL_"^"_IOBS_"^"_XY_"^^^"_IOZF_"^"_IOZB_"^" W !! G C
+ ;
+NY n X,A s X=$X
+NYQ r "  No=> ",A s A=$f("NnYy",$e(A)) i 'A w !?X g NYQ
+ i A'<4
+ q
+SETZF Q:IOZF'=""!(IOF="#")  N I,J S I=$S($E(IOF,1,2)="#,":$E(IOF,3,$L(IOF)),1:IOF)
+SETZF1 I $E(I)="*" S:IOZF'="" IOZF=IOZF_"_" S J=$F(I,","),IOZF=IOZF_"$C("_$S(J=0:$E(I,2,$L(I)),1:$E(I,2,J-2))_")" Q:J=0  S I=$E(I,J,$L(I)) G SETZF1
+SETZF2 I $E(I)="""" S:IOZF'="" IOZF=IOZF_"_" D SETZF3 Q:I=""  G SETZF1
+ E  S:IOZF'="" IOZF=IOZF_"_" S IOZF=IOZF_I Q
+SETZF3 S J=$F(I,"""",2) S:J=0 J=$L(I)+1 S IOZF=IOZF_$E(I,1,J-1) S I=$S($E(I,J)=",":$E(I,J+1,$L(I)),J>$L(I):"",1:$E(I,J,$L(I))) G:$E(I)="""" SETZF3 Q
+SETZB S:IOZB=""&(IOBS'="") IOZB=IOBS_"_"" ""_"_IOBS Q
+TELLZF W !,"This formfeed sequence, entered as a single character string,"
+ W !,"is used to produce formfeeds on non-DG terminals."
+ W !,"E.g., $C(27)_""[2J""_$C(27)_""[H""" Q
+TELLZB W !,"This destructive backspace sequence, entered as a single"
+ W !,"character string, is used to produce backspaces on non-DG"
+ W !,"terminals.  e.g., $C(8,32,8)" Q

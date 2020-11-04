@@ -1,0 +1,314 @@
+ROUTINE %SYS.GIFMSM [Type=INT]
+%SYSGIFMSM ; Quick input of MSM globals from %FGS FILE ; LFT1320 11/02/04
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;*** THIS ASSUMES A FILE OUTPUT BY MSM'S %FGS UTILITY
+ ; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+ ;
+ ; opsys,block_size,link_address,type,bit8,blkoff,swapflg
+OSS ;;1
+ ;;MSM-UNIX3,1024,1012,4,0,1022,1
+ ;
+START N %DIR,BACKUP,BIT8,BLKOFF,BLKSIZ,BLOCK,DATABN,ENDIAN,ERR,GLO,GLONAM
+ N GLOVEC,GVECA,GVLAST,GVPNT,HOWFULL,IO,IOPAR,IOSZ,IOT,LEN,LINKA,LNKSIZ
+ N MTB,NBLKS,NEXTBN,NG,OFF,OS,PNTRBN,POP,RESTART,STOP,SWAPFLG,SYS,T,TAPE,vol,ZA
+ N TIM2,TM,TYPE,X,Y
+ N offset
+ ;
+ S $ZT="EXIT^"_$ZN,$ZE=""
+ D INIT Q:STOP
+ D MT I STOP G EXIT
+ ;
+CMMNT D OPSYS,HEADER Q:STOP
+ D FILL
+ D GLOBALS
+ ;
+EXIT S $ZT=""
+ I $ZE]"" U 0 W !!,$ZE
+ C:0'[IO&(IO'=$P) IO C 63
+ LOCK
+ Q
+ ; End of main line.
+ ;
+ ;===================================================================
+INIT W !,"Load globals from a FILE/TAPE written by MSM'S %FGS UTILITY."
+ N df
+ L %GIQ:0 E  W !,"[Another copy of %GIQ is running now.]" S STOP=1 Q
+ i $$CURRENT^%SYS.NOJRN w !,"Journaling is currently enabled for this process.",!,"All imported data may be journaled.",!
+ e  w !,"Journaling is currently disabled for this process.",!,"No imported data will be journaled.",!
+ K  S IO="",$ZE="",$ZT="EXIT" D INT^%DIR
+ ;
+ S MTB=$ZU(40,1,20),SYS="CACHE"
+ S ENDIAN=$ZU(40,0,0)
+ S GVLAST=$ZU(40,3,13)+ENDIAN
+ S GVPNT=$ZU(40,3,12)+ENDIAN
+ S (STOP,RESTART,BACKUP)=0
+ S IO("DF","RMS","FM")="RU"
+ f df="MT","BT" d
+ . s IO("DF",df,"FM")="AUF",IO("DF",df,"RL")=256
+ . s IO("DF",df,"BL")=1024,IO("DF",df,"RW")="Y"
+ s vol=1
+ ;-------------------------------------------------------------------
+ ;
+ o 63
+ Q
+ ;
+ ;-------------------------------------------------------------------
+MT D INPUT^%IO U 0 I POP S STOP=1 Q
+ I IOT="TRM" W *7,!,"Cannot use TERMINAL devices.",! Q 0
+ I (IOT="MT")!(IOT="BT")!(IOT="RMS")
+ E  W *7,!,"Cannot use '"_IOT_" type devices yet.",! G MT
+ S TAPE=((IOT="MT")!(IOT="BT"))
+ Q
+ ;---------------------------------------------------------------------
+HEADER ; Read Header Record
+ ; FORMAT OF %FGS BINARY HEADER RECORD:
+ ; FIELD #   LENGTH   VALUE      MEANING
+ ; -------   ------   -----      -------
+ ;    1        1       91H       BEGINNING OF %FGS FLAG
+ ;    2        1      1 or 0     REVERSE BYTE ORDERING FLAG
+ ;    3        1      number     SEQUENCE #
+ ;    4        1      number     LENGTH OF DATE-TIME RECORD
+ ;    5       VAR     string     DATE-TIME RECORD
+ ;    6        1      number     LENGTH OF COMMENT RECORD
+ ;    7       VAR     string     COMMENT RECORD
+ ; --------------- repeating record for global list -------------------
+ ;    8        3      string     VOLUME GROUP ID
+ ;    9        3      string     UCI ID
+ ;   10        8      string     GLOBAL (right padded with $C(0)'S)
+ ; --------------------------------------------------------------------
+ ;
+ ; FORMAT OF %FGS TRAILER RECORD:
+ ;    1        1       89H       END OF %FGS FLAG 
+ ;                   -- or --
+ ;                     90H       FILE OR TAPE CONTINUATION FLAG 
+ ;    2        2      number     TOTAL BLOCK COUNT (AT OFFSET 512)
+ ; --------------------------------------------------------------------
+ U 0 W !
+ U IO R BLOCK#BLKSIZ I $A(BLOCK)'=$ZH("91") U 0 W !,"THIS IS NOT A PROPER %FGS FORMAT - QUITTING RESTORE" S STOP=1 Q
+ n srcendian s srcendian=($a(BLOCK,2)=0) s SWAPFLG=$s(srcendian'=ENDIAN:1,1:0)
+ i SWAPFLG U 0 W !,"THIS FAST GLOBAL SAVE WAS DONE ON A MACHINE WITH THE OPPOSITE BYTE ORDERING"
+ S LEN=$A(BLOCK,4),OFF=5 U 0 W !,"THIS FAST GLOBAL SAVE DONE ON "_$E(BLOCK,OFF,OFF+LEN-1)
+ S OFF=OFF+LEN,LEN=$A(BLOCK,OFF) W !,"SAVED WITH COMMENT: ",$E(BLOCK,OFF+1,OFF+LEN)
+ S OFF=OFF+LEN+1 W !!,"GLOBALS SAVED",!,"-------------"
+ F OFF=OFF:14 Q:$A(BLOCK,OFF)=0  d
+ . W !,"^|""^"_$E(BLOCK,OFF+3,OFF+5)_"^"_$E(BLOCK,OFF,OFF+2)_"""|"_$P($E(BLOCK,OFF+6,OFF+13),$C(0))
+ ;
+ ; FORMAT OF ADDITIONAL %FGS BINARY HEADER RECORD:
+ ; FIELD #   LENGTH   VALUE      MEANING
+ ; -------   ------   -----      -------
+ ;    1        1       91H       BEGINNING OF %FGS FLAG
+ ; --------------- repeating record for global list -------------------
+ ;    8        3      string     VOLUME GROUP ID
+ ;    9        3      string     UCI ID
+ ;   10        8      string     GLOBAL (right padded with $C(0)'S)
+ ; --------------------------------------------------------------------
+ s PASSREAD=1
+ F  U IO R BLOCK#BLKSIZ Q:$A(BLOCK)'=$ZH("91")  D
+ . U 0 
+ . S OFF=2 
+ . F OFF=OFF:14 Q:$A(BLOCK,OFF)=0  d
+ . . W !,"^|""^"_$E(BLOCK,OFF+3,OFF+5)_"^"_$E(BLOCK,OFF,OFF+2)_"""|"_$P($E(BLOCK,OFF+6,OFF+13),$C(0))
+ U 0 W ! Q
+ ;
+OPSYS S X=$P($T(OSS+1)," ;;",2),LNKSIZ=4
+ S OS=$p(X,",")
+ S BLKSIZ=$P(X,",",2),LINKA=$P(X,",",3),TYPE=$P(X,",",4)
+ S BIT8=$P(X,",",5),BLKOFF=$P(X,",",6)
+ K OSS
+ Q
+ ;-------------------------------------------------------------------
+FILL W !,"How full shall the ",SYS," global blocks become before splitting"
+ R !,"(85% - 100%)? 95% => ",X S:X="" X=95
+ I X["?" W ! DO  W ! G FILL
+ . W !,"  100% gives the best packing but the first few days of"
+ . W !,"  changes to the database will generate a lot of disk"
+ . W !,"  activity due to block splitting."
+ . W !
+ . W !,"  85% leaves room for some growth before splitting but gives"
+ . W !,"  lower packing efficiency."
+ S X=X/100 I X'<.85,X'>1 S HOWFULL=X*2036\1 Q
+ W *7,"  ???" G FILL
+ ;--------------------------------------------------------------------
+GLOBALS U 0 W !!,"Do you want to proceed, skipping those globals that are "
+ W "already present?",!
+ I $$YN("Proceed","Y")'="Y" S STOP=1 Q
+ ;
+COPY s TIM2=$H ;jsc-
+ S (ERR,NG,TM)=0 F  D GLO Q:(ERR!TM)
+ I ERR S STOP=1 Q
+ ;
+ I TM=99 W !,"Restore aborted",!
+ U 0 W !,$J(NG,4)_" globals restored in "_$J($P($H,",",2)-$P(TIM2,",",2)/60,"",1)_" minutes."
+ Q
+ ;---------------------------------------------------------------------
+GLO ; Read next global's name.
+ ; FORMAT OF %FGS GLOBAL HEADER:
+ ; FIELD #   LENGTH   VALUE      MEANING
+ ; -------   ------   -----      -------
+ ;    1        1       88H       BEGINNING OF GLOBAL
+ ;    2        1      number     VOLUME GROUP INDEX
+ ;    3        1      number     UCI INDEX
+ ;    4        3      string     VOLUME GROUP ID
+ ;    5        3      string     UCI ID
+ ;    6        8      string     GLOBAL (right padded with $C(0)'S)
+ ;    7        8      string     GLOBAL ATTRIBUTE/PROTECTION MASK
+ ;    8        2      number     TOTAL BLOCK CNT - PREVIOUS GLOBAL
+ ;                               (AT OFFSET 512)
+ ; --------------------------------------------------------------------
+ N CTR
+ S $ZT="ERRNEW"
+ I '$d(PASSREAD) U IO R BLOCK#BLKSIZ ;load in next buffer
+ K PASSREAD ;Delete flag preventing blockread after first global
+ V 0:0:-BLKSIZ:BLOCK ; COPY BLOCK TO VIEW BUFFER 
+ I $V(0,0,1)=$ZH("88") ; NORMAL HEADER FOR NEW GLOBAL
+ E  I $V(0,0,1)=$ZH("89") S TM=1 Q  ; TRAILER REC - NORMAL END OF %FGS
+ E  I $V(0,0,1)=$ZH("90") D:TAPE MOUNT D:'TAPE NEXTFILE Q:TM  ; TRAILER REC - CONTINUATION FLAG
+ E  S ERR=1 U 0 W !,"NEXT BLOCK DOESN'T HAVE PROPER GLOBAL HEADER" Q
+ ;
+ ; build the global name from the global header record
+ S GLO=$P($V(9,0,-8),$C(0))
+ I GLO="" S POP=1 U 0 Q  ;end of stuff!
+ ;
+ S GLONAM=$S($E(GLO)="^":GLO,1:"^"_GLO)
+ U 0 W !,$E(GLONAM_"...               ",1,13) I '$D(@GLONAM) G GLO3
+ ;
+ W "is already present.  Skipping it on ",$S(TAPE:"tape",1:"file"),"."
+ S $ZT="ERR2"
+GLO2 F  U IO R BLOCK#BLKSIZ D  Q:(NEXTBN=0)!TM
+ . D ZEROVIEW
+ . V 0:0:-BLKSIZ:BLOCK
+ . I $V(0,0,1)=$ZH("90") D:TAPE MOUNT D:'TAPE NEXTFILE Q:TM  D ZEROVIEW V 0:0:-BLKSIZ:BLOCK  ; TRAILER REC - CONTINUATION FLAG
+ . S NEXTBN=$V(LINKA,0,LNKSIZ)
+ Q
+ ;
+GLO3 U IO R BLOCK#BLKSIZ ; read in first block for global
+ D ZEROVIEW ; zero out view buffer
+ V 0:0:-BLKSIZ:BLOCK S NBLKS=1 ; copy 1st block to VIEW BUFFER
+ S @GLONAM@(1)="" K ^(1) S CTR=0 ; RLL PATCH
+ S NEXTBN=0,NBLKS=1
+ S $ZT="ERR3A"
+GLO3A S NEXTBN=$V(LINKA,0,LNKSIZ)
+ D SWAP:SWAPFLG
+ s X=$zu(93,6,%DIR,$p(GLONAM,"^",2),4,0,$zu(23,0))  ; use system default collation
+ s X=$zu(93,7,BLOCK)
+ S $ZT="ERR3B"
+ ;
+GLO3B F NBLKS=NBLKS:1 Q:NEXTBN=0  D BLOX Q:TM
+ S $ZT="",NG=NG+1
+ U 0 W $J($FN(NBLKS,","),10)," ","MSM"," blocks restored."
+ Q
+ ;-------------------------------------------------------------
+BLOX U IO R BLOCK#BLKSIZ ;load in another block
+ D ZEROVIEW V 0:0:-BLKSIZ:BLOCK ; copy to view buffer
+ I $V(0,0,1)=$ZH("90") D:TAPE MOUNT D:'TAPE NEXTFILE Q:TM  D ZEROVIEW V 0:0:-BLKSIZ:BLOCK  ; TRAILER REC - CONTINUATION FLAG
+ S NEXTBN=$V(LINKA,0,LNKSIZ) D SWAP:SWAPFLG
+ s X=$zu(93,7,BLOCK)
+ Q
+ ;-------------------------------------------------------------
+SWAP S X=$V(BLKOFF,0),Y=$V(BLKOFF+1,0) V BLKOFF:0:1:Y,BLKOFF+1:0:1:X
+ s BLOCK=$v(0,0,-BLKSIZ)  ; Restore BLOCK for call to ZU(93,7,BLOCK)
+ Q
+ ;-------------------------------------------------------------
+ ; Handle multi-volume tape/file called in continuation mark found
+ ; or it <MAGTAPE> error.
+ ;-------------------------------------------------------------
+MOUNT ;
+ S $ZT="ERRNEW" U 0
+ W !,"End of tape encountered for tape volume number ",vol,"."
+ W !,"Mount the next tape after this tape rewinds.",!
+ S vol=vol+1
+MT0 U IO W *-5 U 0
+MT1 W !,"Press <RETURN> when tape volume number ",vol R " is ready: ",X
+ I X="?" D  G MT1
+ . W !,"Mount tape volume number ",vol," and press <RETURN> when it is ready."
+ . W !,"Or enter '^' to abort the restore.",!
+ I X["^" S TM=99 Q
+ I X'="" W *7 G MT1
+ D INPUT^%IO
+ I IO="" S TM=99 Q
+ U IO S ZA=$ZA U 0
+ I ZA\64#2=0 W !,"Tape unit OFFLINE." G MOUNT
+ I ZA\32#2=0 D      ;not fatal
+ . W !,"Tape unit not at BEGINNING OF TAPE."
+ . W !,"Do you want to rewind the tape? " S Y=$$YN("Rewind","Y")
+ . I $E($$UC(Y))="Y" U IO W *-5 U 0
+ I ZA\32768#2=1 W !,"Tape unit reports NOT READY." G MOUNT
+ U IO R BLOCK#BLKSIZ
+ I $A(BLOCK)'=$ZH("91") U 0 W !,"THIS IS NOT A PROPER %FGS FORMAT - Load the correct tape." G MT0
+ I $A(BLOCK,2)'=SWAPFLG U 0 W !,"THIS FAST GLOBAL SAVE WAS DONE ON A MACHINE WITH THE OPPOSITE BYTE ORDERING"
+ S X=$A(BLOCK,3)
+COMMNXT I X=vol G HDRSKP
+ U 0 W !!,"The ",$S(TAPE:"tape",1:"file")," currently loaded is the wrong volume."
+ W !,"This is volume number ",+X,", not volume number ",vol
+MT2 W !,"Do you want to proceed with number ",+X," instead of number ",vol,"?" S Y=$$YN("Proceed","N")
+ I Y["^" S TM=99 Q
+ I $E($$UC(Y))="N" G:TAPE MT0 G NF1
+ I $E($$UC(Y))'="Y" W *7 G MT2
+HDRSKP U IO R BLOCK#BLKSIZ G:$A(BLOCK)=$ZH("91") HDRSKP
+ I GLO="" D:$A(BLOCK)=0  S vol=+X Q
+ . F  R BLOCK#BLKSIZ Q:$A(BLOCK)
+ I $A(BLOCK)=0,GLO'=$P($E(BLOCK,3,1+$A(BLOCK,2)),$C(0)) D  G:TAPE MT1 G NF1
+ . U 0 W !,"Global doesn't match previous ",$S(TAPE:"tape",1:"file"),", please correct"
+ Q
+NEXTFILE ;
+ U 0 W !,"Volume #",vol," restored",!
+ W !,"If using removeable media, please put volume #",(vol+1)," into the drive and"
+ S vol=vol+1
+NF1 R !,"Press <RETURN> when ready",X
+ I X?1"?".E W !!,"Press <RETURN> to continue restoring from volume #",vol,!,"or abort the restore by entering '^'" G NF1
+ I X="^" S TM=99 Q
+ I X'="" W *7 G NF1
+ C IO
+ D INPUT^%IO
+ I IO="" S TM=99 Q
+ U IO R BLOCK#BLKSIZ
+ I $A(BLOCK)'=$ZH("91") U 0 W !,"THIS IS NOT A PROPER %FGS FORMAT - Load the correct file." G NF1
+ I $A(BLOCK,2)'=SWAPFLG U 0 W !,"THIS FAST GLOBAL SAVE WAS DONE ON A MACHINE WITH THE OPPOSITE BYTE ORDERING"
+ S X=$A(BLOCK,3)
+ G COMMNXT
+ ;-------------------------------------------------------------
+ ; Error handling.
+ ;-------------------------------------------------------------
+ERRNEW ;error when starting a new global
+ERR2 D ERR("skipping a global.") Q
+ERR3A D ERR("reading first global data block.") Q
+ERR3B D ERR("reading subsequent data block.") Q
+ERR(msg) I $ZE["<MAGTAP" G MOUNT
+ S $ZT="",ERR=1 U 0 W !,"Error "_msg_" "_"CACHE"_" ERROR = "_$ZE
+ I $ZE?1"<DATAB".E D DBDGD ;database degrade!
+ Q
+ ;--------------------------------------------------------------------
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R
+STOP(x) S x=$$UC($E(x,1,4)) Q (x["EXIT")!(x["STOP")!(x["QUIT")!(x["HALT")!($E(x)="^")
+UC(x) q $zcvt(x,"u")
+ ;
+ZEROVIEW ; Zero out view buffer
+ N I
+ F I=0:1:511 V I*4:0:4:0
+ Q
+ ;---------------------------------------------------------------------
+DBDGD W !,"The original ",OS," block number was ",NEXTBN,"."
+ I '((OS="M/11+")!(OS="M/VX")) Q
+ W !,"The contents are:"
+ F I=1:2 S X=$V(I,-5) Q:X=""  W !,X,"=",$V(I+1,-5)
+ Q
+ ;---------------------------------------------------------------------

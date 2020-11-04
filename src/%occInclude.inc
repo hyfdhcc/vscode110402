@@ -1,0 +1,31 @@
+ROUTINE %occInclude [Type=INC]
+#include %occOptions
+#include %occConstant
+#include %occKeyword
+#include %occProcedure
+#include %occLocation
+#include %occReference
+#include %occCompiler
+#include %occReference2
+#include %occReferenceStorage
+#include %occXXX
+#include %occObject
+#include %occOID
+#include %occFlag
+#include %occQualifier
+#include %occEnvironment
+#include %occMessages
+#include %occStatus
+#include %occDiagnostics
+#include %occName
+#include %occClassname
+#include %occFunctions
+#include %occVersion
+#include %occRoutine
+#include %occJavaMetaDictionary
+#include %occDepend
+#include %occFile
+#include %sySecurity
+#include %syAudit
+#include %xmlDOM
+ 

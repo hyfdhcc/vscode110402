@@ -1,0 +1,1611 @@
+ROUTINE XMM [Type=INT]
+XMM ;
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+again
+    w !,"Extended Memory Diagnostics",!
+    w "1. Analyse an extended memory trace file.",!
+    w "2. Display current extended memory values.",!
+    w "3. Dump extended diagnostic information.",!
+    w "4. Dump verbose extended diagnostic information.",!
+    w "5. Purge trace files.",!
+    w "Q. Quit",!
+    r "Enter option : ",ans,!  r dummy:0
+    s ans=$zstrip($zcvt(ans,"U"),"<>W")
+    if (ans="1") {
+    	; Analyse an extended memory trace file
+	r "Enter name of trace file to be analysed : ",tracefile,!
+	s tracefile=$zstrip(tracefile,"<>W")
+	goto:tracefile="" again
+	w "Enter a start and end boundaries delimited by ^ or , or - (optional) "
+	r boundary,!
+	s boundary=$zstrip(boundary,"<>W")
+	w "Enter any regular expressions as filters (optional) "
+	r filter,!
+	s filter=$zstrip(filter,"<>W")
+opt	w "Enter any options (optional) "
+	r options,!
+	s options=$zstrip(options,"<>W")
+	if options="?" {
+		w "  A - Summarise all memory allocations",!
+		w "  H,B,M - Include Heap, Buddy blocks, Memory maps",!
+		w "  C - Sort by Calls instead of size",!
+		w "  I - Ignore errors",!
+		w "  F - Display memory not freed at the end",!
+		w "  V - Verbose output at end of analysis",!
+		w "  S{nn} - Summary every nn lines (default 1000)",!
+		w "  D - For 'S' show the delta",!
+		w "  E - Expand usage displays to show a drill-down; should increase Tnn",!
+		w "  Tnn - Set depth of Top reports (default 20)",!
+		w "  P{nn} - Summarise usage at Peak or every time peak changes by nn",!
+		w "  For complete details see the source code",!!
+		goto opt
+	}
+	do al(tracefile,boundary,filter,options)
+    } elseif (ans="2") {
+    	; Display extended memory values
+	do mem
+    } elseif (ans="3") {
+    	; Dump extended information
+	d diag(0)
+    } elseif (ans="4") {
+    	; Dump verbose extended information
+	d diag(1)
+    } elseif (ans="5") {
+    	; Purge trace files
+	w "Process ID to purge (* means all)      : "  r pid,!
+	s:$g(pid)="" pid=$J
+	w "Depth of entries to remove (default 2) : "  r depth,!
+	s:$g(depth)="" depth=2
+	w "Verbosity level 0,1 or 2 (default 1)   : "  r verbose,!
+	s:$g(verbose)="" verbose=1
+	w !
+	d purge(pid,depth,verbose)
+    } elseif (ans="Q")||(ans="") {
+    	q
+    } else {
+    	w "Unknown option.",!
+    }
+    goto again
+al(filename="", boundary="" , filter="", options="",outputfile="",snapshots="") [] PUBLIC {
+    set stats=$zu(187,4,1),trace=$p(stats,",",16)
+    if (trace>0) {
+    	w "Warning: Memory tracing is still turned on.",!
+	w "This could affect the operation of this routine if",!
+	w "  you are still udpating the same trace file.",!
+	w "Do you wish to continue [N] ? "
+	r ans,!
+	s ans=$zstrip($zcvt(ans,"U"),"<>W")
+	q:((ans'="Y")&&(ans'="YES"))
+    }
+    set options=$zcvt(options,"U")
+    set optionP=$f(options,"P") , optionV=$f(options,"V") , optionA=$f(options,"A") , 
+    	optionC=$f(options,"C") , optionF=$f(options,"F") , optionS=$f(options,"S"),
+	optionI=$f(options,"I") , optionT=$f(options,"T") , optionD=$f(options,"D"),
+	optionH=$f(options,"H") , optionB=$f(options,"B") , optionM=$f(options,"M"),
+	optionE=$f(options,"E")
+    ; Get numeric arguments for a couple of the options
+    set (optionSBegin,optionSEnd)=0
+    set optionSFrequency=$$getNumericArgument(options,optionS,1000,.optionSBegin,.optionSEnd)
+    set optionTDepth=$$getNumericArgument(options,optionT,20)
+    if ('$l(filename)) { w "Error. You must specify a file name as the first parameter",!  q }
+    open filename:"R":0
+    if ('$T) { w "Unable to open input file "_filename,!  q }
+    if (outputfile'="") {
+    	open outputfile:"WN":0
+	if ('$T) { w "Unable to open output file "_outputfile,!  q }
+    }
+    ;
+    ; See if we have any boundaries.
+    ;
+    set optionBoundary=0, boundaryFlag = 1
+    if (boundary'="") {
+    	; Check boundaries delimited by "^" or "-" or ","
+	set delim=$S($f(boundary,"^"):"^",$f(boundary,","):",",1:"-")
+    	s boundaryStart=$p(boundary,delim,1) , boundaryEnd=$p(boundary,delim,2)
+	if ((boundaryStart?1N.N)||(boundaryEnd?1N.N)) {
+	    ; Numeric start end end -- line numbers.
+	    s:(boundaryStart="") boundaryStart=1
+	    s:(boundaryEnd="") boundaryEnd=999999999999
+	    s optionBoundary=1
+	    w " from line "_boundaryStart_" to line "_boundaryEnd
+	} else {
+	    ; Non-numeric, must be labels
+	    s optionBoundary=2
+	    w " from label "_boundaryStart_" to label "_boundaryEnd
+	    s:'$l(boundaryStart) boundaryStart=$c(255,255),boundaryFlag=0
+	    s:'$l(boundaryEnd) boundaryEnd=$c(255,255)			// Needs something for $locate()
+	}
+    }
+    set (filterI,filterX,filterT)=0
+    if (filter'="") {
+    	set filterT=$l(filter,"^")			// Count number of filters to apply
+	for filterNext=1:1:filterT {			// For each defined filter
+	    set filter2=$p(filter,"^",filterNext)	// Extract next filter
+	    if ($e(filter2)="-") {			// If true it is an exclusion filter
+	    	set idx=$I(filterX), filterX(idx)=$e(filter2,2,*)
+	    } else {					// Must be an inclusion filter.
+	    	set idx=$I(filterI), filterI(idx)=filter2
+	    }
+	}
+    }
+    if (optionH||optionB||optionM) {
+    	set analyseBuddy=optionB,analyseHeap=optionH,analyseMap=optionM
+    } else { set analyseBuddy=1,analyseHeap=0,analyseMap=0}
+    set snapshotsCount = 0
+    if (snapshots '= "") {
+	set snapshotsCountLines=$$CountLines(.filename,1)
+	q:(snapshotsCountLines<=0)
+    	set snapshotsCount = $l(snapshots,",")
+	for snapshotsNext = 1:1:snapshotsCount {
+	    set lineno = $p(snapshots,",",snapshotsNext)
+	    if ($e(lineno,$l(lineno))="%") {		// Want a percentage
+		set lineno=snapshotsCountLines*$e(lineno,1,$l(lineno)-1)\100
+	    }
+	    set snapshots(snapshotsNext)=lineno
+	}
+    }
+    s runtime = 0  , peakBytesInUse = 0 , peakBytesAtLineNo = 0 
+    set IOSAVE=$IO
+    set IOOUT=$SELECT(outputfile="":$IO,1:outputfile)
+    set IOIN=filename
+    use IOIN   set dummp=$zseek(0)  use IOOUT
+    set lineno = 0, errcount = 0, startTime = $zh , $ZE="", currentBytesInUse = 0, err=0
+    set optionSDone = 0 , optionSHeader = 0
+    set linesparsed = 0
+    set allocations = 0 , frees = 0 
+    set (prevAllocations,prevFrees,prevCurrentBytesInUse)=0
+    kill lines,linesAllCache,linesAllRoutine,linesPeak
+    try {
+    	use IOOUT
+	w "Analysis started on file "_filename_" at "_$zt($p($h,",",2))_" "_$zd($p($h,","),2),!
+	use IOIN
+	set dummp=$zseek(0) 
+	for {
+	    read line  
+	    s lineno=lineno + 1
+	    s line=$zstrip(line,"<>W")
+	    ; Ignore blank lines and comment lines
+	    continue:('$l(line))||($e(line)="#")
+	    ;
+	    ; See if boundaries are in effect
+	    ;
+	    if (optionBoundary) {
+	    	if (optionBoundary=1) {
+		    ; Numeric line numbers
+		    continue:((lineno<boundaryStart)||(lineno>boundaryEnd))
+		} else {
+		    ; Alphanumeric labels.
+		    if ($locate(line,boundaryStart)) {
+		    	; Found the start tag, about to go inside the boundary
+			set boundaryFlag=0
+		    } elseif ($locate(line,boundaryEnd)) {
+		    	; Found the end tag, about to go outside the boundary
+			set boundaryFlag=1
+			q
+		    } else {
+		    	; The value 'boundaryFlag' is set to 1 when outside the
+			; boundary or '0' when inside the boundary.
+			continue:boundaryFlag
+		    }
+		}
+	    }
+	    ;
+	    ; See if the filter is going to prevent some lines being parsed.
+	    ;
+	    if (filterT) {
+		if (filterI) {
+		    ; Must contain one or more of the inclusion filters.
+		    set continueline=0
+		    for i=1:1:filterI { 
+		    	if ($locate(line,filterI(i))) { set continueline=1  q }
+		    }
+		    continue:'continueline
+		}
+		if (filterX) {
+		    ; Must NOT contain any of the exclusion filters.
+		    set continueline=1
+		    for i=1:1:filterX { 
+		    	if ($locate(line,filterX(i))) { set continueline=0  q }
+		    }
+		    continue:'continueline
+		}
+	    }
+	    ;
+	    set linesparsed = linesparsed + 1
+	    ;
+	    ; Display summary of status every 'nnn' lines if necessary.
+	    ;
+	    if (optionS) {
+	    	if ((optionSBegin<=0)||((lineno>=optionSBegin)&&(lineno<=optionSEnd))) {
+		    set optionSDone = optionSDone+1
+		    if (optionSDone >= optionSFrequency) {
+			; Display the statistics at this point in the file.
+			; Use of the "D" option means we show the delta between
+			; the operations, not the current value.
+			if (optionD) {
+			    s showAllocations=allocations-prevAllocations,
+				    showFrees=frees-prevFrees,
+				    showCurrentBytesInUse=currentBytesInUse-prevCurrentBytesInUse,
+				    prevAllocations=allocations,
+				    prevFrees=frees,
+				    prevCurrentBytesInUse=currentBytesInUse
+			} else {
+			    s showAllocations=allocations,showFrees=frees,showCurrentBytesInUse=currentBytesInUse
+			}
+			set msg=$fn(lineno,","), $e(msg,16)=$fn(showAllocations,","),
+			    $e(msg,32)=$fn(showFrees,","),$e(msg,48)=$fn(showCurrentBytesInUse,","),
+			    optionSDone=0
+			use IOOUT    
+			if ('optionSHeader) {
+			    write !,"Line Number    Allocations     Frees           In Use",!
+			    set optionSHeader = 1
+			}
+			write msg,!    
+			if (optionV) {
+			    do convertLines(.lines,.ctr,.totalBytes,.xrefCache,.xrefRoutine,1,0,optionE)
+			    d sortLines(.xrefCache,0,optionC," allocations at line "_$fn(lineno,","), "Cache Source",optionTDepth,optionE)
+			    d sortLines(.xrefRoutine,0,optionC," allocations at line "_$fn(lineno,","), "Routine Name",optionTDepth,optionE)
+			}
+			use IOIN
+		    }
+		}
+	    }
+	    ;
+	    ; See if we are performing snapshots
+	    ;
+	    for snapshotsNext=1:1:snapshotsCount {
+	    	set nextlineno = snapshots(snapshotsNext)
+		if (nextlineno <= lineno) {
+		    use IOOUT    
+		    set snapshots(snapshotsNext) = 9999999999999
+		    set msg = " allocations at line "_$fn(lineno,",")_" ("_$fn(lineno/snapshotsCountLines*100,"",2)_" %)"
+		    do convertLines(.lines,.ctr,.totalBytes,.xrefCache,.xrefRoutine,1,0,optionE)
+		    d sortLines(.xrefCache,0,optionC,msg, "Cache Source",optionTDepth,optionE)
+		    d sortLines(.xrefRoutine,0,optionC,msg, "Routine Name",optionTDepth,optionE)
+		    use IOIN
+		}
+	    }
+	    ;
+	    ; The format of the lines can be one of the following
+	    ;
+	    ; ALLOCATE 0x7f9e8ce24eb8 size 6 scope 0 op address ROUTINE : LINENO 1980, MODID 23
+	    ; BuddyAlloc
+	    ; HeapAlloc
+	    ; AlignAlloc
+	    ; Mmap
+	    ; FREE     0x7f9e8ce24eb8 size 6 scope 0 op address ROUTINE : LINENO 1875, MODID 23
+	    ; BuddyFree
+	    ; HeapFree
+	    ; AlignFree
+	    ; Munmap
+	    ; SCOPEPOP scope 2, reclamation 1 op address ROUTINE : LINENO 660, MODID 172
+	    ; PushScope
+	    ; PopScope
+	    ; RUNTIME_STARTUP n
+	    ;
+	    ; The older style entries are ALLOCATE,FREE,SCOPOEPOP,SCOPEPUSH and their sizes are in 
+	    ; buddy block codes (0 == 4 bytes, 1 == 8 bytes etc.). The newer stlye entries are
+	    ; shown below the equivalent older style entries and the sizes are in bytes.
+	    ;
+	    s p1=$p(line," ",1)
+	    ;
+	    ; Remove redundant spaces
+	    ;
+	    for {
+		s offset=$f(line,"  ",1)
+		q:'offset
+		s $e(line,offset-2,offset-1)=" "
+	    }
+	    set addr = $p(line," ",2), size = $p(line," ",4) , scope = $p($p(line," ",6),":",1), source = $p(line,":",2)
+	    set routine = $p(line," ",9)
+	    ;
+	    ; Find out what sort of entry we have.
+	    ;
+	    set %filename=filename
+	    set opcode = $$parseopcode(.p1 , .size , .bytesize)
+	    ;
+	    ; Check what sort of memory operation was performed.
+	    ;
+	    if (((opcode = 2) && analyseBuddy) || 
+	    	((opcode = 3) && analyseMap) ||
+	    	((opcode = 1) && analyseHeap)) {
+	    	; Allocated a space. See if it already exists.
+	    	set data = $g(lines(addr),"")
+		if ($l(data)) {
+		    if ('optionI) {
+			use IOSAVE
+			w "Error at line number "_lineno_": Address "_addr_" is already allocated",!
+			w "    Originally allocated at line number "_$lg(data,4),!
+			s errcount=errcount+1
+			use IOIN
+		    }
+		    continue
+		}
+		;
+		; Add to the following local arrays...
+		;   lines()             Contains all the current allocated memory space
+		;   linesPeak()         Copy of lines() if this is our peak memory usage
+		;   linesAllCache()     Contains all the spaces ever allocated, sorted by Cache kernel source name
+		;   linesAllRoutine()   Contains all the spaces ever allocated, sorted by application routine name
+		;
+		s lines(addr) = $lb(size,scope,source,lineno,routine,opcode)
+		s currentBytesInUse = currentBytesInUse + bytesize
+		set allocations = allocations + 1
+		if (optionA) {
+		    if (source '= "") {
+			set linesAllCache(source,1) = $g(linesAllCache(source,1),0) + 1
+			set linesAllCache(source,2) = $g(linesAllCache(source,2),0) + bytesize
+		    }
+		    if (routine '= "") {
+			set linesAllRoutine(routine,1) = $g(linesAllRoutine(routine,1),0) + 1
+			set linesAllRoutine(routine,2) = $g(linesAllRoutine(routine,2),0) + bytesize
+		    }
+		}
+		if (currentBytesInUse>peakBytesInUse) {
+		    set peakBytesInUse=currentBytesInUse,peakBytesAtLineNo=lineno
+		    if (optionP) {			// Display peak usage at end of analysis
+			kill linesPeak
+			merge linesPeak = lines
+		    }
+		}
+	    } elseif (((opcode = 5) && analyseBuddy) || 
+	    	((opcode = 6) && analyseMap) ||
+	    	((opcode = 4) && analyseHeap)) {
+	    	;
+		; Check the address actually exists to be freed.
+		;
+	    	set data = $g(lines(addr),"")
+		if ('$l(data)) {
+		    if ('optionI) {
+			use IOSAVE
+			w "Error at line number "_lineno_": Address "_addr_" cannot be found to be freed.",!
+			s errcount=errcount+1
+			use IOIN
+		    }
+		    continue
+		}
+		;
+		; Check consistency of the freed address, i.e. scope and size the same.
+		;
+		s origScope = $lg(data,2) , origSize = $lg(data,1), origOpcode = $lg(data,6)
+		set frees = frees + 1
+		if ((opcode = 5) && (origScope '= scope)) {
+		    if ('optionI) {
+			use IOSAVE
+			w "Error at line number "_lineno_" during FREE: Scopes differ from allocation to release.",!
+			w "    Originally allocated at line number "_$lg(data,4),!
+			use IOIN
+			s errcount=errcount+1
+		    }
+		}
+		if (origSize '= size ) {
+		    if ((origSize>1)||(size>1)) {
+		    	if ('optionI) {
+			    use IOSAVE
+			    w "Error at line number "_lineno_" during FREE: Sizes differ from allocation to release.",!
+			    w "    Originally allocated at line number "_$lg(data,4),!
+			    use IOIN
+			    s errcount=errcount+1
+			}
+		    }
+		}
+		;
+		; Remove this address from the lines() array which is memory currently in use.
+		;
+		kill lines(addr)
+		s currentBytesInUse = currentBytesInUse - bytesize
+	    } elseif (opcode = 8) {
+		s scope=$p($p(line," ",3),":")
+		;
+		; Remove all buddy block entries for this scope level
+		;
+		s key=$O(lines(""),1,data)
+		while (key'="") {
+		    s thisscope = $lg(data,2)
+		    if (thisscope=scope) {
+		    	set origOpcode=$lg(data,6)	// Check if buddy block or heap space
+			if (origOpcode=2) {
+			    kill lines(key)
+			    set bytesize = $lg(data,1)
+			    s currentBytesInUse = currentBytesInUse - bytesize
+			}
+		    }
+		    s key=$O(lines(key),1,data)
+		}
+	    } elseif (opcode = 9) {
+		s runtime = $p(line," ",2)+0
+	    } else {
+		continue
+	    }
+	}
+    } catch ex {
+	use IOSAVE
+	if ($e($ZE,1,11)'="<ENDOFFILE>") {
+	    w "Error reading file "_filename_" , error "_$ZE,!
+	    set err=1
+	}
+    }
+    use IOSAVE
+    close filename
+    USE IOOUT
+    w:optionS !
+    if (err) {
+    	use IOSAVE
+	kill IOOUT,outputfile
+	q
+    }
+    ;
+    ; Make a count of the number of memory allocations still outstanding. This
+    ; is basically all the entries in the local array lines(). We optionally
+    ; create a couple more local arrays as follows.
+    ;     xrefCache()        List of remaining allocations sorted by Cache kernel module id and line number
+    ;     xrefRoutine()      List of remaining allocations sorted by application routine name.
+    ;
+    do convertLines(.lines,.ctr,.totalBytes,.xrefCache,.xrefRoutine,optionF,optionV,optionE)
+    ;
+    ; The remaining output depends upon what options were passed to us as a parameter.
+    ;
+    if (optionF ) {
+    	;
+	; optionF means display all the allocations that remain at the end of the file.
+	; By default we display 2 tables with the most allocations sorted by Cache module id/line number
+	;     and by application routine name. The use of option "V" (flag optionV) means instead
+	;     we display each remaining allocation indvidually.
+	;
+	if (optionV) {
+	    w !,"The following "_$fn(ctr,",")_" memory allocations were not freed",!
+	    s lineno = $ORDER(xrefCache(""),1,data), done = 0
+	    while (lineno '= "") {
+	    	write:((done#20)=0) !,"Line #     Size         Scope  Cache Source                 Module",!
+		set done = done + 1
+		set line=$lg(data,4),line=line_$j("",11-$l(line))	// Source line number
+		set line=line_$lg(data,1),line=line_$j("",24-$l(line))	// Size
+		set line=line_$lg(data,2),line=line_$j("",30-$l(line))	// Scope
+		set line=line_$lg(data,3),line=line_$j("",60-$l(line))	// Cache source
+		set line=line_$lg(data,5)				// Routine
+		w line,!
+		s lineno = $ORDER(xrefCache(lineno),1,data)
+	    }
+	} else {
+	    d sortLines(.xrefCache,optionV,optionC," remaining allocations at End Of File", "Cache Source",optionTDepth,optionE)
+	    d sortLines(.xrefRoutine,optionV,optionC," remaining allocations at End Of File", "Routine Name",optionTDepth,optionE)
+	}
+    }
+    ;
+    if (optionP) {
+    	;
+	; optionP means display memory allocation at peak usage.
+	;
+	do convertLines(.linesPeak,.ctr,.totalBytes,.xrefCache,.xrefRoutine,1,optionV,optionE)
+	; By default we display 2 tables with the most allocations sorted by Cache module id/line number
+	;     and by application routine name. The use of option "V" (flag optionV) means instead
+	;     we display each remaining allocation indvidually.
+	;
+	if (optionV) {
+	    w !,"The following "_$fn(ctr,",")_" memory allocations were not freed at Peak Usage",!
+	    s lineno = $ORDER(xrefCache(""),1,data)
+	    while (lineno '= "") {
+		w data,!
+		s lineno = $ORDER(xrefCache(lineno),1,data)
+	    }
+	} else {
+	    d sortLines(.xrefCache,optionV,optionC," allocations at Peak Usage", "Cache Source",optionTDepth,optionE)
+	    d sortLines(.xrefRoutine,optionV,optionC," allocations at Peak Usage", "Routine Name",optionTDepth,optionE)
+	}
+    }
+    ;
+    if (optionA) {
+    	;
+	; optionA means display all memory allocations ever performed.
+	; By default we display a summary of all allocations in 2 ways, first by Cache module id/line number
+	;    and secondly by routine application name. By default this is limited to the top 20 entries,
+	;    but the use of option "V" (flag optionV) means the list is displayed in its entirity.
+	;
+	d sortLines(.linesAllCache,optionV,optionC,"allocations of Cache", "Cache Source",optionTDepth,optionE)
+	d sortLines(.linesAllRoutine,optionV,optionC,"routine allocates","Routine Name",optionTDepth,optionE)
+    }
+    ;
+    ; End of processing stuff
+    ;
+    w "Completed: "_$fnumber(linesparsed,",")_" lines"
+    w:(linesparsed'=lineno) " (out of "_$fn(lineno,",")_")"
+    w " in "_$fnumber(($zh-startTime),",",2)_" seconds. "
+    w "  ",$CASE(errcount,0:"No errors.",1:"1 error.",:errcount_" errors."),!
+    if (ctr>0) {
+	w "  There were "_$fnumber(ctr,",")_" memory loss entries totalling "_$fnumber(totalBytes,",")_" bytes.",!
+    }
+    if (peakBytesAtLineNo>0) {
+	w "  Peak memory utilization occurred at line "_$fn(peakBytesAtLineNo,",")_" with "_$fn(peakBytesInUse,",")_" bytes.",!
+    }
+    use IOSAVE
+    close IOOUT
+    kill IOOUT,outputfile
+    ;
+    ; Finished, go home.
+    ;
+    q
+}
+csv(inputfilename="", outputfilename="" , traces="", sample="1%", options="") [] PUBLIC {
+    set filecount = $l(inputfilename,",")
+    open outputfilename:"WN":0
+    if ('$T) { w "Unable to open output file "_outputfilename,!  q }
+    set traces2 = traces
+    for filenext = 1:1:filecount {
+	kill traces
+	set traces = traces2
+    	set nextfile=$p(inputfilename,",",filenext)
+	set percent = 0
+	do csv2(nextfile,outputfilename,.traces,sample,options,.percent)
+	do csv3(nextfile,outputfilename,.traces,percent,filenext,filecount)
+    }
+    close outputfilename
+}
+csv2(inputfilename, outputfilename , traces, sample, options,percent) [] PRIVATE {
+    set options=$zcvt(options,"U")
+    set optionA=$f(options,"A") , optionD=$f(options,"D") , optionF=$f(options,"F"),
+    	optionB=$f(options,"B") , optionH=$f(options,"H") , optionM=$f(options,"M")
+    if ('$l(inputfilename)) { w "Error. No input file name specified",!  q }
+    if ('$l(outputfilename)) { w "Error. No output file name specified",!  q }
+    if ('$l(traces)) { w "Error. No traces specified",!  q }
+    open inputfilename:"R":0
+    if ('$T) { w "Unable to open input file "_inputfilename,!  q }
+    ;
+    ; Parse the data in the 'traces' parameter. It specifies what to look for.
+    ; The trace specification can contain a number of definitions separater by ","
+    ; for example "MODID 170,MODID 3"
+    ; In this example we will include all traces that include the string (regular expression)
+    ;    "MODID 170" OR "MODID 3". On the output csv, the labels for the lines will be the same.
+    ; The second expression can contain a number of expressions for each trace definition that are
+    ;    separated by |. For example "PTRIE|MODID 170|MODID 3,All Memory|.*". In this example we
+    ;    will output a CSV with 2 rows, the first row will have a label "PTRIE" and will contain
+    ;    all the data with "MODID 170" OR "MODID 3" in it. The second row will have a label "All Memory"
+    ;    and will contain the data which matches the regular expression ".*" i.e. all lines.
+    ;
+    set tracesCount=$l(traces,","),err=0
+    for tracesNext=1:1:tracesCount {
+    	set expression = $p(traces,",",tracesNext)	// E.G. "MODID 170" , E.G. "PTRIE|MODID 170|MODID 3"
+	set expressionCount=$l(expression,"|")		// Find if there is a | modifier
+	// Check the regular expressions are valid and don't give an error later.
+	try {
+	    for i=1:1:expressionCount { s nxtexpr = $p(expression,"|",i) , dummy=$locate("xxx",nxtexpr) }
+	} catch ex {
+	    write ex.Name_" error with """_nxtexpr_"""",!
+	    set err = 1
+	}
+	q:err
+	if (expressionCount=1) {			// If true, there are no | modifiers and is a simple trace
+	    set traces(tracesNext,1) = 1		// Number of expression to evaluate
+	    set traces(tracesNext,2) = expression	// The label, default to same as the expression
+	    set traces(tracesNext,3,1) = expression	// The only single regular expression to evaluate
+	} else {
+	    set traces(tracesNext,1) = expressionCount-1 // Number of expression to evaluate
+	    set traces(tracesNext,2) = $p(expression,"|",1)	// The first expression is the row label
+	    for i=2:1:expressionCount { set traces(tracesNext,3,i-1)=$p(expression,"|",i)}	// Set expressions
+	}
+    }
+    q:err
+    if (optionH||optionB||optionM) {
+    	set analyseBuddy=optionB,analyseHeap=optionH,analyseMap=optionM
+    } else { set analyseBuddy=1,analyseHeap=0,analyseMap=0}
+    ;
+    w "Analysis started on file "_inputfilename,!
+    set IO=$IO
+    use inputfilename   set dummp=$zseek(0)  use IO
+    set lineno = 0, errcount = 0, startTime = $zh , $ZE="", err=0
+    set percent = 0 
+    if ($e(sample,$l(sample))="%") {
+    	; We need to do a further pass to convert a percentage
+	; of lines to a line count
+	set sample=sample+0
+	if (sample<=0) { w "Error, illegal sample value.",!  q}
+	try {
+	    use inputfilename
+	    set dummp=$zseek(0) 
+	    for {
+		read line  
+		s lineno=lineno + 1
+	    }
+	} catch ex {
+	    use IO
+	    if ($e($ZE,1,11)'="<ENDOFFILE>") {
+		w "Error reading file "_inputfilename_" , error "_$ZE,!
+		set err=1
+	    }
+	}
+	use IO
+	q:err
+	set percent = sample
+	set sample=lineno*sample\100
+	w "First pass completed, sample set every "_$fn(sample,",")_" lines",!
+    }
+    set sampledelta=0, samplecount = 0, percentdone = 0
+    set lineno = 0, errcount = 0, $ZE="", err=0
+    kill addresses
+    try {
+	use inputfilename
+	set dummp=$zseek(0) 
+	for {
+	    read line  
+	    s lineno=lineno + 1
+	    s line=$zstrip(line,"<>W")
+	    ; Ignore blank lines and comment lines
+	    continue:('$l(line))||($e(line)="#")
+	    ;
+	    ; The format of the lines can be one of the following
+	    ;
+	    ; ALLOCATE 0x7f9e8ce24eb8 size 6 scope 0 op address ROUTINE : LINENO 1980, MODID 23
+	    ; FREE     0x7f9e8ce24eb8 size 6 scope 0 op address ROUTINE : LINENO 1875, MODID 23
+	    ; SCOPEPOP scope 2, reclamation 1 op address ROUTINE : LINENO 660, MODID 172
+	    ; RUNTIME_STARTUP n
+	    ;
+	    s p1=$p(line," ",1)
+	    ;
+	    ; Remove redundant spaces
+	    ;
+	    for {
+		s offset=$f(line,"  ",1)
+		q:'offset
+		s $e(line,offset-2,offset-1)=" "
+	    }
+	    set addr = $p(line," ",2), size = $p(line," ",4) , scope = $p($p(line," ",6),":",1), source = $p(line,":",2)
+	    set routine = $p(line," ",9)
+	    ;
+	    ; Find out what sort of entry we have.
+	    ;
+	    set opcode = $$parseopcode(.p1 , .size , .bytesize)
+	    ;
+	    ; Check what sort of memory operation was performed.
+	    ;
+	    if (((opcode = 2) && analyseBuddy) || 
+	    	((opcode = 3) && analyseMap) ||
+	    	((opcode = 1) && analyseHeap)) {
+	    	; Allocated a space. 
+		; For each possible trace value
+		;
+		for tracesNext=1:1:tracesCount {
+		    ; Check all the regular expressions for this trace value
+		    set usethisline = 0
+		    for expression=1:1:traces(tracesNext,1) {
+		    	if ($locate(line,traces(tracesNext,3,expression))) {
+			    set usethisline = 1 
+			    quit
+			}
+		    }
+		    if (usethisline) {
+		    	; Add this to the trace
+			// (a) Total current allocations this scope
+			set traces(tracesNext,4,scope,1) = $g(traces(tracesNext,4,scope,1),0) + 1
+			// (b) Total current bytes this scope
+			set traces(tracesNext,4,scope,2) = $g(traces(tracesNext,4,scope,2),0) + bytesize
+			// (c) Total current allocations all scopes
+			set traces(tracesNext,5) = $g(traces(tracesNext,5),0) + 1
+			// (d) Total current bytes all scopes
+			set traces(tracesNext,6) = $g(traces(tracesNext,6),0) + bytesize
+			// (e) Accumulative allocations all scopes
+			set traces(tracesNext,7) = $g(traces(tracesNext,7),0) + 1
+			;
+			; Option "F" means this will be freed automatically
+			;
+			if (optionF) { 
+			    set addresses(scope,addr,tracesNext) = ""
+			}
+		    }
+		}
+	    } elseif (((opcode = 5) && analyseBuddy) || 
+	    	((opcode = 6) && analyseMap) ||
+	    	((opcode = 4) && analyseHeap)) {
+	    	; Free a space
+		; Option "F" means this will be freed automatically
+		;
+		if (optionF) {
+		    for tracesNext=1:1:tracesCount {
+			if ($d(addresses(scope,addr,tracesNext))) {		// See if the address exists
+			    ; Remove this from the trace
+			    // (a) Total current allocations this scope
+			    set traces(tracesNext,4,scope,1) = $g(traces(tracesNext,4,scope,1),0) - 1
+			    // (b) Total current bytes this scope
+			    set traces(tracesNext,4,scope,2) = $g(traces(tracesNext,4,scope,2),0) - bytesize
+			    // (c) Total current allocations all scopes
+			    set traces(tracesNext,5) = $g(traces(tracesNext,5),0) - 1
+			    // (d) Total current bytes all scopes
+			    set traces(tracesNext,6) = $g(traces(tracesNext,6),0) - bytesize
+			    // (e) Accumulative frees all scopes
+			    set traces(tracesNext,8) = $g(traces(tracesNext,8),0) + 1
+			}
+			kill addresses(scope,addr,tracesNext)
+		    }
+		} else {
+		    ;
+		    ; For each possible trace value
+		    ;
+		    for tracesNext=1:1:tracesCount {
+			; Check all the regular expressions for this trace value
+			set usethisline = 0
+			for expression=1:1:traces(tracesNext,1) {
+			    if ($locate(line,traces(tracesNext,3,expression))) {
+				set usethisline = 1 
+				quit
+			    }
+			}
+			if (usethisline) {
+			    ; Remove this from the trace
+			    // (a) Total current allocations this scope
+			    set traces(tracesNext,4,scope,1) = $g(traces(tracesNext,4,scope,1),0) - 1
+			    // (b) Total current bytes this scope
+			    set traces(tracesNext,4,scope,2) = $g(traces(tracesNext,4,scope,2),0) - bytesize
+			    // (c) Total current allocations all scopes
+			    set traces(tracesNext,5) = $g(traces(tracesNext,5),0) - 1
+			    // (d) Total current bytes all scopes
+			    set traces(tracesNext,6) = $g(traces(tracesNext,6),0) - bytesize
+			    // (e) Accumulative frees all scopes
+			    set traces(tracesNext,8) = $g(traces(tracesNext,8),0) + 1
+			}
+		    }
+		}
+	    } elseif (opcode = 8) {
+		s scope=$p($p(line," ",3),":")
+		;
+		; Remove all entries for this scope level
+		;
+		for tracesNext=1:1:tracesCount {
+		    set totalAllocations = $g(traces(tracesNext,4,scope,1),0) ,
+			totalBytes       = $g(traces(tracesNext,4,scope,2),0)
+		    set traces(tracesNext,5) = $g(traces(tracesNext,5),0) - totalAllocations ,
+			traces(tracesNext,6) = $g(traces(tracesNext,6),0) - totalBytes ,
+			traces(tracesNext,8) = $g(traces(tracesNext,8),0) + totalAllocations
+		    kill traces(tracesNext,4,scope)
+		}
+		kill addresses(scope)		// In case option "F" in place
+	    } elseif (opcode = 9) {
+		s runtime = $p(line," ",2)+0
+	    }
+	    ;
+	    ; See if time to output another line
+	    ;
+	    set sampledelta = sampledelta + 1
+	    if (sampledelta >= sample) {
+		set sampledelta = 0 , samplecount = samplecount+1
+		for tracesNext=1:1:tracesCount {
+		    if (percent > 0) {
+			set sub3 = percentdone
+			set percentdone = percentdone + percent
+		    } else {
+			set sub3 = lineno
+		    }
+		    for i=5:1:8 { set traces(tracesNext,9,sub3,i) = $g(traces(tracesNext,i)) }
+		}
+	    }
+	}
+    } catch ex {
+	use IO
+	if ($e($ZE,1,11)'="<ENDOFFILE>") {
+	    w "Error reading file "_inputfilename_" , error "_$ZE,!
+	    set err=1
+	}
+    }
+    use IO
+    close inputfilename
+    q:err err
+    ;
+    ; Display simple statistics
+    ;
+    w "Completed: "_$fnumber(lineno,",")_" lines with "_$fn(samplecount,",")_" samples"
+    w " in "_$fnumber(($zh-startTime),",",2)_" seconds. ",!
+    q 0
+}
+csv3(inputfilename,outputfilename,traces,percent,filenext,filecount) [] PRIVATE {
+    w "Analysis complete, writing output to file "_outputfilename,!
+    set IO=$IO
+    set tracesCount=$l(traces,","),err=0
+    try {
+	use outputfilename
+	; Write the headers
+	if (filenext = 1 ) {
+	    set key=$O(traces(1,9,""))
+	    if (percent > 0) {
+		while (key'="") {
+		    write ","_key_"%"
+		    set key=$O(traces(1,9,key))
+		}
+	    } else {
+		while (key'="") {
+		    write ",Line "_key
+		    set key=$O(traces(1,9,key))
+		}
+	    }
+	    write !
+	}
+	; For each sample defined
+	for tracesNext=1:1:tracesCount {
+	    if (filecount = 1 ) {
+		write traces(tracesNext,2)
+	    } else {
+		set ll=$p(inputfilename,"/",$l(inputfilename,"/"))
+		set ll=$p(ll,"\",$l(ll,"\"))
+	    	write ll
+	    }
+	    set key=$O(traces(tracesNext,9,""))
+	    while (key'="") {
+	    	write ","_traces(tracesNext,9,key,6)	// Write total number of bytes in use at this sample
+		set key=$O(traces(tracesNext,9,key))
+	    }
+	    write !
+	}
+	use IO
+    } catch ex {
+    	use IO
+	w "Error writing to file "_outputfilename_" , error "_$ZE,!
+	set err=1
+    }
+    use IO
+    ;
+    ; Finished, go home.
+    ;
+    q
+}
+replay(filename="",options="") [] PUBLIC {
+    set stats=$zu(187,4,1),trace=$p(stats,",",16)
+    if (trace>0) {
+    	w "Warning: Memory tracing is still turned on.",!
+	w "This could affect the operation of this routine if",!
+	w "  you are still udpating the same trace file.",!
+	w "Do you wish to continue [N] ? "
+	r ans,!
+	s ans=$zstrip($zcvt(ans,"U"),"<>W")
+	q:((ans'="Y")&&(ans'="YES"))
+    }
+    set options=$zcvt(options,"U")
+    set optionF=$f(options,"F") 
+    if ('$l(filename)) { w "Error. You must specify a file name as the first parameter",!  q }
+    open filename:"R":0
+    if ('$T) { w "Unable to open input file "_filename,!  q }
+    set IOSAVE=$IO
+    set IOIN=filename
+    use IOIN   set dummp=$zseek(0)  use IOSAVE
+    set lineno = 0, errcount = 0, startTime = $zh , $ZE="", err=0
+    set linesparsed = 0
+    kill lines
+    try {
+    	set userscope = $zu(187,30,1)
+    } catch ex {
+    	w "Error "_$ZE_" attempting to set new scope level",!
+	set userscope = -100
+    }
+    if (userscope < 0) {
+	w "Error number "_userscope_" while trying to create new scope",!
+	q
+    }
+    set scopemax = userscope
+    kill fragmented
+    try {
+    	use IOSAVE
+	w "Analysis started on file "_filename_" at "_$zt($p($h,",",2))_" "_$zd($p($h,","),2),!
+	use IOIN
+	set dummp=$zseek(0) 
+	for {
+	    read line  
+	    s lineno=lineno + 1
+	    s line=$zstrip(line,"<>W")
+	    ; Ignore blank lines and comment lines
+	    continue:('$l(line))||($e(line)="#")
+	    set linesparsed = linesparsed + 1
+	    set p1=$p(line," ",1)
+	    ;
+	    ; Remove redundant spaces
+	    ;
+	    for {
+		s offset=$f(line,"  ",1)
+		q:'offset
+		s $e(line,offset-2,offset-1)=" "
+	    }
+	    set addr = $p(line," ",2), size = $p(line," ",4) , scope = $p($p(line," ",6),":",1), source = $p(line,":",2)
+	    set routine = $p(line," ",9)
+	    ;
+	    ; Find out what sort of entry we have.
+	    ;
+	    set %filename=filename
+	    set opcode = $$parseopcode(.p1 , .size , .bytesize)
+	    ;
+	    ; Check what sort of memory operation was performed.
+	    ;
+	    if (opcode = 2) {
+	    	; Allocated a space. See if it already exists.
+	    	set data = $g(lines(addr),""), thisscope = scope + userscope
+		if (thisscope <= scopemax) {
+		    set ans = $zu(187,30,3,thisscope,size)
+		    set lines(addr) = $lb(ans,thisscope,size)
+		} else {
+		    use IOSAVE   
+		    w "Error: Trying to create operation at exceeded scope level "_scope_" at line "_lineno,!
+		    use IOIN
+		}
+	    } elseif (opcode = 5) {
+	    	set thisscope = scope + userscope 
+		if (thisscope <= scopemax) {
+		    if ($d(lines(addr))) {
+		    	set data = lines(addr), ans = $lg(data,1) , size = $lg(data,3)
+			d $zu(187,30,4,ans,thisscope,size)
+		    	kill lines(addr)
+		    } else {
+			use IOSAVE   
+			w "Error: Unable to find address "_addr_" at line "_lineno,!
+			use IOIN
+		    }
+		    if (optionF) {
+		    	set counter = $g(fragmented(thisscope,1),0)+1,fragmented(thisscope,1) = counter
+			if (counter >= 10) {
+			    set fragmented(thisscope,1) = 0 , currentmax = $g(fragmented(thisscope,2))
+			    set memdata=$zu(187,6,thisscope)	// Get stats about this scope.
+			    set currentfrag = $p(memdata,",",7)	// Current fragmented index
+			    if (currentfrag > currentmax) {	// Time to update the maximum
+				set fragmented(thisscope,2) = currentfrag	// Update maximum fragmentation seen
+				set fragmented(thisscope,3) = memdata		// The memory stats at this point
+				set fragmented(thisscope,4) = lineno		// The line number it occurred
+			    }
+			}
+		    }
+		} else {
+		    use IOSAVE   
+		    w "Error: Trying to create operation at exceeded scope level "_scope_" at line "_lineno,!
+		    use IOIN
+		}
+	    } elseif (opcode = 7) {
+		s scope=$p($p(line," ",3),":") , thisscope = scope + userscope
+		if (scope > 0) {			// Ignore the first scope push
+		    d $zu(187,30,5,thisscope)
+		    set scopemax = thisscope
+		}
+	    } elseif (opcode = 8) {
+		s scope=$p($p(line," ",3),":"), thisscope = scope + userscope
+		d $zu(187,30,6,thisscope)
+		set scopemax = thisscope - 1
+		// Remove all entries in the 'lines' array with the scope level.
+		set key=$O(lines(""),1,data)
+		while (key '= "") {
+		    if ($lg(data,2) = thisscope) {
+			kill lines(key)
+		    }
+		    set key=$O(lines(key))
+		}
+	    } else {
+		continue
+	    }
+	}
+    } catch ex {
+	use IOSAVE
+	if ($e($ZE,1,11)'="<ENDOFFILE>") {
+	    w "Error reading file "_filename_" , error "_$ZE,!
+	    set err=1
+	}
+    }
+    use IOSAVE
+    close filename
+    ;
+    ; If option "F" then we want to display the point at
+    ; which we believe the most fragmentation occurred.
+    ;
+    if (optionF) {
+	for nextscope=userscope:1 {				// For each scope we've seen
+	    set memdata=$g(fragmented(nextscope,3),"")		// Get fragmentation data
+	    q:memdata=""
+	    set fragindex = fragmented(nextscope,2)		// Get fragmentation index
+	    set fraglineno = fragmented(nextscope,4)		// Get fragmentation line number where it occurred
+	    d reportscope("Maximum fragmentation for scope "_(nextscope-userscope)_" occurred at line "_fraglineno,memdata,(nextscope-userscope),"SV")
+	}
+    }
+    ;
+    ; Display the final report.
+    ;
+    for nextscope=userscope:1 {
+	set memdata=$zu(187,6,nextscope)
+	q:memdata=""
+	set originalscope = nextscope - userscope 
+	if (nextscope=userscope) {
+	    d reportscope("Final report at end of analysis" , memdata , originalscope , "MSV")
+	} else {
+	    d reportscope("", memdata , originalscope , "SV")
+	}
+    }
+    ;
+    ; Display termination statistics.
+    ;
+    w "Completed: "_$fnumber(linesparsed,",")_" lines"
+    w:(linesparsed'=lineno) " (out of "_$fn(lineno,",")_")"
+    w " in "_$fnumber(($zh-startTime),",",2)_" seconds. "
+    ;
+    ; Close the map collection.
+    ;
+    try {
+	d $zu(187,30,2,userscope)
+    } catch ex {}
+    ;
+    ; Finished, go home.
+    ;
+    q
+}
+reportscope(message , memdata , origscope, options ) [] PUBLIC {
+    set optionM = $f(options,"M") , optionS = $f(options,"S"), optionV = $f(options,"V")
+    w:message'="" !,message,!
+    if (optionM) {
+    	set mapcollection = $p(memdata,",",2)
+	w "Map collection ",mapcollection,", 2k block count "_$fn($p(memdata,",",5),","),!
+	set bsize = 2048, total = 0
+	for size=9:1:14 {
+	    set blocks=$p(memdata,",",10+size)
+	    w "   Allocation size ",$$left(size,2)," ("_$$left($fn(bsize,","),6),"), block count ",blocks,", total bytes "_$fn(blocks * bsize,","),!
+	    set total = total + (blocks * bsize)
+	    set bsize=bsize*2
+	}
+	w "   Total bytes in free space chains for map collection ",mapcollection,"        ",$fn(total,","),!
+    }
+    if (optionS) {
+	set scope = $p(memdata,",",1)
+	w "Original scope ",origscope," (current ",scope,"), map collection "_$p(memdata,",",2),", 2k block count "_$fn($p(memdata,",",3),","),!
+	set bsize = 8, total = 0
+	for size=1:1:8 {
+	    set blocks=$p(memdata,",",10+size)
+	    w "   Allocation size ",$$left(size,2)," ("_$$left($fn(bsize,","),6),"), block count ",blocks,", total bytes "_$fn(blocks * bsize,","),!
+	    set total = total + (blocks * bsize)
+	    set bsize=bsize*2
+	}
+	w "   Total bytes in free space chains for scope ",origscope,"        ",$fn(total,","),!
+	w "   Fragmentation index "_$p(memdata,",",7),!
+    }
+}
+left(in,len) [] PRIVATE {
+    q in _ $j("",len - $l(in))
+}
+bytesize(size) [] PRIVATE {
+    q $case(size,0:8,1:8,2:16,3:32,4:64,5:128,6:256,7:512,8:1024,9:2048,10:4096,11:8192,12:16384,13:32768,14:65536,:-1)
+}
+CountLines(filename,verbose) {
+    open filename:"R":0
+    if ('$T) { w "Unable to open input file "_filename,!  q 0 }
+    set linecount = 0
+    w:verbose "Counting lines in file "_filename_" ..."
+    set IOSAVE=$IO
+    try {
+	use filename
+	set dummp=$zseek(0) 
+	for {
+	    read line  
+	    s linecount=linecount + 1
+	}
+	set dummp=$zseek(0) 
+    } catch ex {
+    	use IOSAVE
+	if ($e($ZE,1,11)'="<ENDOFFILE>") {
+	    w "Error reading file "_filename_" , error "_$ZE,!
+	    set linecount=0
+	}
+    }
+    use IOSAVE
+    w:verbose $fn(linecount,",")_" lines.",!
+    q linecount
+}
+parseopcode(opcode , size , bytesize) [] PRIVATE {
+    if (opcode = "ALLOCATE") {
+	set bytesize = $$bytesize(size),size=bytesize   q 2
+    } 
+    if (opcode = "FREE") {
+	set bytesize = $$bytesize(size),size=bytesize   q 5
+    }
+    s bytesize=size
+    q $case(opcode,
+    	"BuddyAlloc":2,
+    	"BuddyFree":5,
+    	"HeapAlloc":1,
+    	"HeapFree":4,
+    	"ReallocAlloc":1,
+    	"ReallocFree":4,
+    	"AlignAlloc":1,
+    	"AlignFree":4,
+    	"Mmap":3,
+    	"Munmap":6,
+	"SCOPEPUSH":7,
+	"PushScope":7,
+	"SCOPEPOP":8,
+	"PopScope":8,
+	"RUNTIME_STARTUP":9,
+	:10)
+}
+getNumericArgument(options,index,default,value2,value3) [] PRIVATE {
+    ; Get a numeric argument following an alpha option
+    s rtnvalue=""
+    while ($e(options,index)?1N) {
+	s rtnvalue=rtnvalue_$e(options,index),index=index+1
+    }
+    s:(rtnvalue="") rtnvalue=default
+    ; If we have asked for an optional couple of values, delimited
+    ; by "^", "," or "-", then try to extract them.
+    if ($d(value2)) {
+    	s delim=$e(options,index)
+	if (delim=",")||(delim="^")||(delim="-") {
+	    set value2=$p($e(options,index,*),delim,2)+0,value3=$p($e(options,index,*),delim,3)+0
+	}
+    }
+    q (rtnvalue+0)
+}
+convertLines(lines,ctr,totalBytes,xrefCache,xrefRoutine,createXrefArrays,optionV,optionE) [] PRIVATE {
+    ;
+    ; Convert from one layout to another.
+    ;
+    s addr=$ORDER(lines(""),1,data), ctr = 0 , totalBytes = 0
+    kill xrefCache,xrefRoutine
+    while (addr'="") {
+	s ctr=ctr+1 , size=$lg(data,1), bytes = size, totalBytes=totalBytes+bytes
+	if (createXrefArrays) {
+	    if (optionV) {
+		s xrefCache($lg(data,4))=data
+	    } else {
+		s scope = $lg(data,2) , source = $lg(data,3) , lineno = $lg(data,4), routine = $lg(data,5)
+	    	if (source'="") {
+		    if (optionE) {
+		    	set subscript1 = source _ " " _ routine
+			set subscript2 = routine _ " " _ source
+		    } else {
+		    	set subscript1 = source
+			set subscript2 = routine
+		    }
+		    set id = $i(xrefCache(subscript1)), xrefCache(subscript1,1)=$g(xrefCache(subscript1,1))+1,xrefCache(subscript1,2)=$g(xrefCache(subscript1,2))+bytes
+		    set id = $i(xrefRoutine(subscript2)), xrefRoutine(subscript2,1)=$g(xrefRoutine(subscript2,1))+1,xrefRoutine(subscript2,2)=$g(xrefRoutine(subscript2,2))+bytes
+		}
+	    }
+	}
+	s addr=$ORDER(lines(addr),1,data)
+    }
+}
+sortLines(in,optionV,optionC,msg1,msg2,depth,optionE) [] PRIVATE {
+    kill sorted
+    s source=$O(in("")),ctr=0
+    while (source'="") {
+    	set TotalCalls=in(source,1) , TotalBytes=in(source,2)
+	if (optionC) {
+	    set id=$I(sorted(TotalCalls))
+	    set sorted(TotalCalls,id)=$lb(source,TotalBytes,TotalCalls)
+	} else {
+	    set id=$I(sorted(TotalBytes))
+	    set sorted(TotalBytes,id)=$lb(source,TotalBytes,TotalCalls)
+	}
+    	set ctr=ctr+1,source=$O(in(source))
+    }
+    ;
+    ; Display the heading including the depths of the report.
+    ;
+    if ('optionV) {
+	w !,"Top "_$S(ctr<depth:ctr,1:depth)_" "_msg1
+	s max=depth
+    } else {
+	w !,"All "_msg1
+	set max=999999999
+    }
+    w " sorted by Total "_$S(optionC:"Calls",1:"Bytes"),!
+    set msg=msg2
+    s column1Width=27,column2Width=45
+    if (optionE>0) {
+    	s column1Width=column1Width+20,column2Width=column2Width+20
+    }
+    set $e(msg,column1Width) = "Total Bytes"
+    set $e(msg,column2Width) = "Total Calls"
+    write !,msg,!,!
+    set key=$O(sorted(""),-1) , done = 0, TotalTotalBytes = 0 , TotalTotalCalls = 0
+    while (key'="")&&(done<=max) {
+	s id=$O(sorted(key,""),1,data)
+	while (id'="")&&(done<=max) {
+	    s msg=$zstrip($lg(data,1),"<>W"),TotalBytes=$lg(data,2),TotalCalls=$lg(data,3)
+	    set $e(msg,column1Width)=" "_$fn(TotalBytes,",")
+	    set $e(msg,column2Width)=" "_$fn(TotalCalls,",")
+	    w msg,!
+	    set done=done+1
+	    set TotalTotalBytes=TotalTotalBytes+TotalBytes, TotalTotalCalls=TotalTotalCalls+TotalCalls
+	    set id=$O(sorted(key,id),1,data)
+	}
+	set key=$O(sorted(key),-1) 
+    }
+    s msg="Totals ------",$e(msg,column1Width)=$fn(TotalTotalBytes,","),$e(msg,column2Width)=$fn(TotalTotalCalls,",")
+    w msg,!
+}
+general() [] PUBLIC {
+    d mem
+    q
+}
+memory() [] PUBLIC {
+    s stats = $zu(187,3)
+    s text=$lb( 
+	"Total data space allocated",			// Field <1>
+	"Total data space committed memory",		// Field <2>
+	"'C' Stack currently in use",			// Field <3>
+	"'C' Stack peak usage",				// Field <4>
+	"'C' Stack committed memory",			// Field <5>
+	"Anonymous memory region peak",			// Field <6>
+	"Anonymous memory region vm in use",		// Field <7>
+	"Anonymous memory region committed memory",	// Field <8>
+    	"Total bytes malloc in use",			// Field <9>
+	"Total bytes malloc free space",		// Field <10>
+	"Partition maps allocated",			// Field <11>
+	"Partition maps committed memory",		// Field <12>
+	"String Stack : Total size",			// Field <13>
+	"               Committed memory",		// Field <14>
+	"               Allocation type",		// Field <15>
+	"Frame Stack  : Total size",			// Field <16>
+	"               Committed memory",		// Field <17>
+	"               Allocation type",		// Field <18>
+	"Error Stack  : Total size",			// Field <19>
+	"               Committed memory",		// Field <20>
+	"               Allocation type",		// Field <21>
+	"RESERVED" )
+    s ll=$ll(text),maxl=0,lp=$l(stats,",")
+    for llnext=1:1:ll {
+    	s datal=$l($lg(text,llnext))
+	s:datal>maxl maxl=datal
+    }
+    s l2=$SELECT(lp>ll:lp,1:ll)
+    for l3=1:1:l2 {
+    	s txt=$lg(text,l3),value=$p(stats,",",l3)
+	continue:txt="RESERVED"
+	s:txt="" txt="Unknown value"
+	s:((value+0)=value) value=$fnumber(value,",")
+	s msg=l3,$e(msg,4)=txt,$e(msg,maxl+6)=value
+	w msg,!
+    }
+}
+user(jobid = 0) [] PUBLIC {
+    s stats = $system.Memory.ProcessStats(jobid + 0 )
+    s text=$lb( 
+	"Total heap space allocated", 0,			// Field <1>
+	"Total partition space allocated", 0,			// Field <2>
+	"Total Cache internal stack allocated", 0,		// Field <3>
+	"Total of additional memory maps", 0,			// Field <4>
+	"Private memory overhead of shared memory segments", 0,	// Field<5>
+	"C stack committed memory", 0 , 			// Field <6>
+	"Application memory in use", 0,				// Field <7>
+	"Application memory maximum", 0,			// Field <8>
+	"Application memory in free space", 0,			// Field <9>
+	"Application memory peak", 0,				// Field <10>
+	"Application memory fragmentation index", 0,		// Field <11>
+	"Memory allocated for long strings", 0,			// Field <12>
+	"Shared memory Total", 0,				// Field <13>
+	"Shared memory used for globals" , 0,			// Field <14>
+	"Shared memory used for routines" , 0,			// Field <15>
+	"Shared memory used for heap" , 0,			// Field <16>
+	"Shared memory other" , 0,				// Field <17>
+	"Shared memory page size", 0 , 				// Field <18>
+	"String stack: total allocated" , 0,			// Field <19>
+	"String stack: committed" , 0,				// Field <20>
+	"String stack: source" , 0,				// Field <21>
+	"Frame stack: total allocated" , 0,			// Field <22>
+	"Frame stack: committed" , 0,				// Field <23>
+	"Frame stack: source" , 0,				// Field <24>
+	"Error stack: total allocated" , 0,			// Field <25>
+	"Error stack: committed" , 0,				// Field <26>
+	"Error stack: source" , 0,				// Field <27>
+	"Number of <STORE> errors thrown" , 0,			// Field <28>
+	"Reason for last <STORE> error", 6,			// Field <29>
+	"Buddy code size that caused last <STORE> error", 0,	// Field <30>
+	"Scope in use at the last <STORE> error", 0,		// Field <31>
+	"Number of memory cleanup attempts", 0,			// Field <32>
+	"Number of array defragmentations", 0)			// Field <33>
+    ;
+    ; Display in a common routine.
+    ;
+    d displayStatsLIST(.text,.stats)
+    q
+}
+displayStatsLIST(text,stats) [] PRIVATE {
+    ;
+    ; Display to terminate the stats.
+    ;
+    s ll=$ll(text),maxl=0,lp=$ll(stats)
+    for llnext=1:2:ll {
+    	s datal=$l($lg(text,llnext))
+	s:datal>maxl maxl=datal
+    }
+    s textno = 1
+    for l3=1:1:lp {
+    	s txt=$lg(text,textno),special=$lg(text,textno+1),textno=textno+2
+	s value=$lg(stats,l3)
+	continue:txt="RESERVED"
+	s:txt="" txt="Unknown value"
+	;
+	; Handle special formatting of the data
+	;
+	if (special > 0) {
+	    s value=$$mapoptions(special,value,stats)
+	    if (special = 3) {
+		s msg=l3,$e(msg,4)=txt,$e(msg,maxl+6)=$lg(value,1)
+		w msg,!
+		for i1=2:1:$ll(value) {
+		    s msg=$j("",maxl+5)_$lg(value,i1)
+		    w msg,!
+		}
+		continue
+	    }
+	} else {
+	    s:((value+0)=value) value=$fnumber(value,",")
+	}
+	;
+	; Format the output and display it.
+	;
+	s msg=l3,$e(msg,4)=txt,$e(msg,maxl+6)=value
+	w msg,!
+    }
+}
+displayStats(text,stats) [] PRIVATE {
+    ;
+    ; Display to terminate the stats.
+    ;
+    s ll=$ll(text),maxl=0,lp=$l(stats,",")
+    for llnext=1:2:ll {
+    	s datal=$l($lg(text,llnext))
+	s:datal>maxl maxl=datal
+    }
+    s textno = 1
+    for l3=1:1:lp {
+    	s txt=$lg(text,textno),special=$lg(text,textno+1),textno=textno+2
+	s value=$p(stats,",",l3)
+	continue:txt="RESERVED"
+	s:txt="" txt="Unknown value"
+	;
+	; Handle special formatting of the data
+	;
+	if (special > 0) {
+	    s value=$$mapoptions(special,value,stats)
+	    if (special = 3) {
+		s msg=l3,$e(msg,4)=txt,$e(msg,maxl+6)=$lg(value,1)
+		w msg,!
+		for i1=2:1:$ll(value) {
+		    s msg=$j("",maxl+5)_$lg(value,i1)
+		    w msg,!
+		}
+		continue
+	    }
+	} else {
+	    s:((value+0)=value) value=$fnumber(value,",")
+	}
+	;
+	; Format the output and display it.
+	;
+	s msg=l3,$e(msg,4)=txt,$e(msg,maxl+6)=value
+	w msg,!
+    }
+}
+vars(jobnumber = 0 ) [] PUBLIC {
+    s ans = $system.Memory.VariableStats(jobnumber)
+    s (totMemory , totLong , totOref , totSubscripts) = 0
+    w "Var name       PROC  Scope Total     Long      OREF    Subs",!
+    w "--------       ----  ----- -----     ----      ----    ----",!
+    for next=1:1:ans.Count() {
+    	s var = ans.Data(next)				// Get next variable
+    	s msg = $lg(var,1)				// Name of variable
+	s $e(msg,16) = $lg(var,2)			// The PROC level
+	s $e(msg,22) = $lg(var,3)			// Scope level of memory allocation
+	s thisMemory = $lg(var,5) 			// Extract total memory used
+	s thisLong = $lg(var,6) 			// Extract memory used for long strings
+	s thisOref = $lg(var,10) 			// Extract number of orefs
+	s thisSubscripts = $lg(var,11) 			// Extract number of subscripts
+	s $e(msg,28) = $$makeMB(thisMemory)		// Total memory used
+	s $e(msg,38) = $$makeMB(thisLong)		// Long string memory
+	s $e(msg,48) = $fn(thisOref,",")		// Number of object references
+	s $e(msg,56) = $fn(thisSubscripts,",")		// Number of subscripts
+	s totMemory = totMemory + thisMemory
+	s totLong = totLong + thisLong
+	s totOref = totOref + thisOref
+	s totSubscripts = totSubscripts + thisSubscripts
+	w msg,!
+    }
+    w "--------       ----  ----- -----     ----      ----    ----",!
+    s msg = "Totals"
+    s $e(msg,28) = $$makeMB(totMemory)
+    s $e(msg,38) = $$makeMB(totLong)
+    s $e(msg,48) = $fn(totOref,",")
+    s $e(msg,56) = $fn(totSubscripts,",")
+    w msg,!
+}
+makeMB(totbytes) PUBLIC {
+    s suffix=""
+    if (totbytes>10485760) {
+	set totbytes=(totbytes*10/1048576\1/10),suffix="Mb"
+    } elseif (totbytes > 10240) {
+	set totbytes=(totbytes/1024*10)\1/10,suffix="Kb"
+    }
+    q $fnumber(totbytes,",")_suffix
+}
+mem() [] PUBLIC {
+    s stats = $zu(187,4,1)
+    s text=$lb( "Buddy block total memory maps", 0,		// Field <1>
+	"Buddy block total memory unmaps", 0,			// Field <2>
+	"Buddy block total bytes mapped", 0,			// Field <3>
+	"Buddy block total bytes unmapped", 0,			// Field <4>
+	"Buddy block bytes currently in use", 0,		// Field <5>
+	"Buddy block peak value bytes in use", 0,		// Field <6>
+	"Buddy block total bytes including overheads", 0,	// Field <7>
+	"System-wide extended memory flag", 1,			// Field <8>
+	"System-wide allocation type", 2,			// Field <9>
+	"System-wide diagnostic flags", 3,			// Field <10>
+	"System-wide memory map size", 0,			// Field <11>
+	"System-wide maximum string size", 0,			// Field <12>
+	"Process-specific extended memory flag", 1,		// Field <13>
+	"Process-specific memory limit", 0,			// Field <14>
+	"Process-specific number of STORE errors" , 0,		// Field <15>
+	"Process-specific diagnostic flags" , 3,		// Field <16>
+	"Buddy block allocations" , 0,				// Field <17>
+	"Buddy block releases" , 0,				// Field <18>
+	"Buddy blocks in use" , 0,				// Field <19>
+	"Buddy blocks bytes in use" , 0,			// Field <20>
+	"Heap space allocations" , 0,				// Field <21>
+	"Heap space releases" , 0,				// Field <22>
+	"Heap space in use" , 0,				// Field <23>
+	"Heap space bytes in use" , 0,				// Field <24>
+	"Memory map allocations" , 0,				// Field <25>
+	"Memory map releases" , 0,				// Field <26>
+	"Memory map in use" , 0,				// Field <27>
+	"Memory map bytes in use" , 0,				// Field <28>
+	"OS reported heap space used", 0,			// Field <29>
+	"OS reported heap space free", 0,			// Field <30>
+	"OS reported Size", 0,					// Field <31>
+	"OS reported Resident Set Size", 0,			// Field <32>
+	"OS reported Process Actual Size", 0,			// Field <33>
+	"Memory defragmentation operations", 0,			// Field <34>
+	"Reason for last <STORE> error", 6,			// Field <35>
+	"The scope in effect at last <STORE> error", 0,		// Field <36>
+	"The size attempted at last <STORE> error", 0,		// Field <37>
+	"Current status of <STORE> error handling", 4,		// Field <38>
+	"Number of recoveries before <STORE> error", 0,		// Field <39>
+	"Extended Memory Function type", 5)			// Field <40>
+    ;
+    ; Display in a common routine.
+    ;
+    d displayStats(.text,.stats)
+    q
+}
+diag(flags) [] PUBLIC
+{
+    ;
+    ; Dump extended information about the maps.
+    ;
+    s:'$d(flags) flags=0
+    d $zu(187,10,flags)
+}
+mapoptions(type,value,stats) [] PUBLIC {
+    s rtn = "",value=value+0
+    if (type =1) {
+	s rtn=$S(value<=0:"Off",1:"On")
+    } elseif (type=2) {
+	s stats = $p(stats,",",10)+0
+	if ($zb(stats,2048,1)) {
+	    s text="2048 - Each block uses a unique mmap() call"
+	} elseif ($zb(stats,4096,1)) {
+	    s text="4096 - Each block uses a unique malloc() call"
+	} else {
+	    s:(value=0) value=1
+	     s text = value_" - "_$CASE( value,1:"Anonymous memory maps",2:"File based memory maps",:"Unknown")
+	}
+	d mapadd(text,.rtn)
+    } elseif (type=3) {
+	set rtn = $lb(value)
+	s:($zb(value,1,1)) rtn = rtn _ $lb("0x0001 Major ops")
+	s:($zb(value,2,1)) rtn = rtn _ $lb("0x0002 Minor ops")
+	s:($zb(value,4,1)) rtn = rtn _ $lb("0x0004 Runtime diagnostics")
+	s:($zb(value,8,1)) rtn = rtn _ $lb("0x0008 Checks and display on exit")
+	s:($zb(value,16,1)) rtn = rtn _ $lb("0x0010 Suppress terminal")
+	s:($zb(value,32,1)) rtn = rtn _ $lb("0x0020 File output")
+	s:($zb(value,128,1)) rtn = rtn _ $lb("0x0080 Throw <SYSTEM> on error")
+	s:($zb(value,256,1)) rtn = rtn _ $lb("0x0100 Process hang on error")
+	s:($zb(value,512,1)) rtn = rtn _ $lb("0x0200 Log <STORE> errors to cconsole.log")
+	s:($zb(value,1024,1)) rtn = rtn _ $lb("0x0400 Double buddy checks")
+	s:($zb(value,2048,1)) rtn = rtn _ $lb("0x0800 Minor sanity check for each operation")
+	s:($zb(value,4096,1)) rtn = rtn _ $lb("0x1000 Major sanity check for each operation")
+	s:($zb(value,32768,1)) rtn = rtn _ $lb("0x8000 Never reuse same memory map")
+	s:($zb(value,65536,1)) rtn = rtn _ $lb("0x10000 Output to stdout not current device")
+	s:(rtn="") rtn = rtn _ $lb("Off")
+    } elseif (type=4) {
+    	; Low memory status
+	s rtn = value _ " - " _ $CASE(value,
+		0:"NORMAL",
+		1:"LOW MEMORY",
+		2:"EXTRA 1M",
+		3:"EXHAUSTED",
+		:"UNKNOWN")
+    } elseif (type=5) {
+    	; Extended memory function type
+	s rtn = value _ " - " _ $CASE(value,
+		0:"NORMAL",
+		1:"DIAGNOSTIC",
+		2:"LOW MEMORY",
+		:"UNKNOWN")
+    } elseif (type=6) {
+    	; Reason for last store error
+	s rtn = value _ " - " _ $CASE(value,
+		0:"NONE",
+		1:"LOW MEMORY",
+		2:"COMPLETE EXHAUSTION",
+		3:"SYSTEM RESOURCES",
+		:"UNKNOWN")
+    } else  {
+    	d mapadd("Unknown",.rtn)
+    }
+    q rtn
+}
+mapadd(txt,rtn) [] PRIVATE {
+    s:(rtn'="") rtn=rtn_","
+    s rtn=rtn_txt
+    q
+}
+purge(pid,depth,verbose) [] PUBLIC {
+    set ourpid=$J
+    set:'$D(pid) pid=ourpid
+    set:pid="" pid=ourpid
+    set:'$D(depth) depth=2
+    set:'$d(verbose) verbose=1
+    write:verbose>=1 "Purging XM trace files for process id '"_pid_"' to a depth of "_depth,!
+    set mgrdirectory=##class(%Library.File).ManagerDirectory()
+    do ##class(%Library.File).FileSetExecute(.qhandle,mgrdirectory,"xmtrace*")
+    set ctr=0
+    kill pidlist
+    for {
+    	do ##class(%Library.File).FileSetFetch(.qhandle,.row,.atend)
+	q:$ll(row)<6
+	set ctr = ctr + 1
+	set fullpath=$lg(row,1),filename=$lg(row,6)
+	set thispid=$p(filename,"_",2),index=$p(filename,"_",3)
+	if (pid="*")||(thispid=pid) {
+	    if (index="") {
+	    	set pidlist(thispid)=fullpath
+	    } else {
+	    	set pidlist(thispid,index)=fullpath
+	    }
+	}
+	quit:atend
+    }
+    do ##class(%Library.File).FileSetClose(.qhandle)
+    write:verbose>=1 "Found "_$fn(ctr,",")_" trace files in directory "_mgrdirectory,!
+    set thispid=$O(pidlist(""),1,pathname)
+    set purgecount = 0
+    while (thispid'="") {
+	set d1=$d(pidlist(thispid))
+	if (d1=1)||(d1=11) {
+	    if (depth=0)&&($d(pathname)) {
+		set purgecount=purgecount+1
+		do ##class(%Library.File).Delete(pathname)
+		write:verbose>=2 "Trace file "_pathname_" deleted.",!
+	    }
+	}
+	if (d1=10)||(d1=11) {
+	    set thisindex=$O(pidlist(thispid,""),-1,pathname)
+	    set indexcount=0
+	    while (thisindex'="") {
+		set indexcount=indexcount+1
+		if (indexcount > depth) {
+		    set purgecount=purgecount+1
+		    do ##class(%Library.File).Delete(pathname)
+		    write:verbose>=2 "Trace file "_pathname_" deleted.",!
+		}
+		set thisindex=$O(pidlist(thispid,thisindex),-1,pathname)
+	    }
+	}
+	set thispid=$O(pidlist(thispid),1,pathname)
+    }
+    if (verbose>=1) {
+    	if (purgecount=0) {
+	    w "No files found to be purged",!
+	} else {
+	    w "Purged "_$fn(purgecount,",")_" files.",!
+	}
+    }
+    q purgecount
+}

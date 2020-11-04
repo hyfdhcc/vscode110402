@@ -1,0 +1,16 @@
+ROUTINE funcexample
+funcexample ; example of extrinsic function
+ read !, "Enter a number: ", num
+ set fact = $$fact( num )
+ write !, "The factorial of ", num, " is ", fact
+ quit
+fact(number) PUBLIC
+ ; compute factorial
+ {
+ if number < 1 {quit "Error!"}
+ if (number = 1) || (number = 2) {quit number}
+ set x = number * $$fact( number - 1 )
+ quit x
+ }
+ 
+ 

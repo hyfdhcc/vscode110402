@@ -1,0 +1,107 @@
+ROUTINE BLKDUMP [Type=INT]
+BLKDUMP ;Display Block Contents;  $Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/diagnostic/blkdump.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+    New DIR,BLK,DIRNAM,GD,IO,OI,IOBS,IOF,IOM,IOPAR,IOSL,IOST,IOT,%A,%ANS,
+	DEND,POP,RMSDF,MSYS,mtemp1,IOMS
+    Set IOMS=$System.Device.GetRightMargin()
+    Set OI=$I,POP=0
+    Do OUT^%IS
+    Quit:POP
+    Set $ZT="EXIT",$ZE=""
+    Do ASK^%SYS.FILE
+    Set DIR=DIRNAM
+    Goto:DIRNAM="" EXIT2 ;JFP063
+    O 63:"^^"_DIR
+BLK For {
+	Use 0
+	Write !,"Block number :"
+	Read BLK
+	Goto EXIT2:BLK=""
+	If BLK>0,BLK\1=BLK {
+	    View BLK
+	    Do SHOW
+	} Else {
+	    Write *7," Only positive integer block numbers, please.",!
+	}
+    }
+INT(DIR,BLK) ;
+    New IO,OI
+    Set (IO,OI)=$I
+    O 63:"^^"_DIR
+    If BLK>0,BLK\1=BLK {
+        View BLK
+	Do SHOW
+    } Else {
+	Write !,"Bad Block number"
+    }
+    Quit
+EXIT ;
+    Set $ZT=""
+    If $P($ZE,">",2)="BLK^BLKDUMP",$P($ZE,">")'="<INTERRUPT" {
+	Write !,"Invalid block number.",!
+	Set $ZT="EXIT"
+	Goto BLK     ; JCS009
+    }
+    If $ZE]"" {
+	Use 0 Write !,$ZE,!
+    }
+EXIT2 ;
+    Close 63
+    Use:IO=OI IO:/MAR=IOMS
+    Close:IO'=OI IO
+    Quit
+SHOW ;
+    New dirinfo,blksiz,bytes,ans,chunk
+    Set bytes=0,chunk=256
+    Set dirinfo=$zu(49,DIR)
+    If dirinfo<0 {
+	Use IO
+	Write:IO'=OI @IOF,!,"Directory ",DIR," is not mounted"
+    } Else {
+	Use IO
+	Write:IO'=OI @IOF,!,"Directory ",DIR,!,"Block ",BLK
+	Set blksiz=$p(dirinfo,",",2)
+	If IO'=OI {zzdump $v(0,0,-blksiz)}
+	Else {
+          Do {
+             Do zzdumpmore($v(bytes,0,-chunk),bytes)
+             Set bytes=bytes+chunk
+             If bytes<blksiz { Read !,"--more--",ans }
+             Quit:$zcvt(ans,"U")="Q"
+          } While bytes<blksiz
+       }
+    }
+    Quit  
+zzdumpmore(x,start) n c,d,i,j,n,s,ze
+ s ze=""
+ ZT:'$d(x) ZZDerr
+ ; c is number of characters per line
+ ; d is number of hexadecimal digits per character code
+ S:$ZISWIDE(x) c=8,d=4 ;   Display Unicode characters
+ S:'$ZISWIDE(x) c=16,d=2 ; Display Unicode characters
+ F i=0:c:$L(x)-1 S s=$E(x,i+1,i+c) S n=$L(s) D
+ .W !,$TR($J($ZHEX(start+i),4)," ","0")_": "
+ .F j=1:1:n W $TR($J($ZHEX($A(s,j)),d)," ","0")_" " S:$E(s,j)?1C $E(s,j)="."
+ .W ?62 I '$ZISWIDE(s) W s Q
+ .S j=0,ze=$ZE,$ZT="ZZDerr"
+ZZDnext .S j=j+1 W $E(s,j) G:j<n ZZDnext Q
+ q  
+ZZDerr i $ze'["<WIDE CHAR>" g EXIT
+ S $ZE=ze,$ZT="ZZDerr" W "." G:j<n ZZDnext Q
+ Q

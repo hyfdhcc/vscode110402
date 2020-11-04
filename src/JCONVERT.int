@@ -1,0 +1,131 @@
+ROUTINE JCONVERT [Type=INT]
+JCONVERT ; Convert journal file to common format ; LRS1058 07/24/06
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;This routine will read a Cache journal file and convert it
+ ;to a common format which can be read with the ^JREAD utility
+ ;See the documentation in the ^JREAD utility for the output
+ ;file format.
+main new
+INT ;
+ s POP=0,notresto=0,IOSAVE=$I
+ s $ZT="errloop"
+ s vmode="Yes"
+ s dirref="Yes"
+ w !,"Journal Conversion Utility  [ Cache Format --> Common Format ]"
+loop w !
+ w !
+ w !,"The converted file will be in variable record format."
+ W !,"The default character translation UTF8 is compatible with current ^%JREAD"
+ W !,"on all platforms and can be moved among platforms with binary FTP."
+ W !,"If you answer NO, no character translation will be applied."
+ W !
+loop0 w !,"Use UTF8 character translation? <Yes> "
+ r x g:x="^" loop
+ i $zcvt($e(x),"U")="N" { ;no translation
+   s xlate="RAW"
+ } elseif x["/" {
+   s x=$p(x,"/",2) 
+   i x'="" s xlate=x
+ } else {
+   s xlate="UTF8"
+ }
+ s recsep=1
+ i ($zversion(1)=1) s fmode1="U"
+ e  s fmode1="V"
+ s fmode="WN"_fmode1_"K\RAW\"
+ w !
+ w !,"Globals in the journal file are stored with a specific directory reference"
+ w !,"appended to the global reference. You can choose either to include"
+ w !,"the directory reference in the converted file, or exclude it. Note that"
+ w !,"if you include it, you can always filter it out or change it later during"
+ w !,"the JREAD procedure.  The directory reference determines where ^JREAD sets"
+ w !,"the global on the target system.  If the directory reference is not included,"
+ w !,"all sets are made to the current directory.  If the directory reference is"
+ w !,"included, sets will be made to the same directory as on the source system"
+ w !,"unless translated by a ^%ZJREAD program you supply.  If the target system"
+ w !,"is on a different operating system or the databases reside in different"
+ w !,"directories on the target system, the ^%ZJREAD program must be used to"
+ w !,"translate the directory reference."
+ w !
+loop05 w !,"Include the directory reference? <",dirref,"> "
+ r x
+ i x="" s x=dirref
+ g:x="^" loop0
+ i $zcvt($e(x),"u")="Y" s includedir=1,dirref="Yes"
+ e  s includedir=0,dirref="No"
+ w !     
+loop1 w !,"Enter common journal file name:  "
+ r x i x="" g loop1
+ g:x="^" loop05
+ s file2=x
+ ;Don't allow overwriting of existing file
+ s x=$zu(140,4,file2)
+ i x=0 w !,"File "_file2_" already exists",! g loop1
+ ; Now see if the device and directory are good
+ o file2:(fmode):1  
+ i '$t w !,"Unable to open file ",file2,! g loop1
+ w !
+ w !,"Common journal file: ",file2
+ w !,"Record separator: "
+ d
+ . i recsep=1 w "Variable" q
+ . i recsep=2 w "OpenVMS" q
+ . w "$CHAR(" f i=1:1:$l(recsep) w:i>1 "," w $a(recsep,i)
+ . w ")"
+ w !,"Character translation: ",xlate
+ w !,"Directory reference: ",dirref
+ w !
+ ; Write the header out
+ s recsep=$zcvt(recsep,"O",xlate)
+ u file2
+ d wvar^JRNRESTB("JCONVERT")
+ d wvar^JRNRESTB(xlate)
+ d wvar^JRNRESTB($h)
+ d wvar^JRNRESTB(includedir)
+ u $p
+ d convert
+ c file2
+ u 0
+ d:($zversion(1)=1)
+ . i recsep=2 d $zf(-1,"SET FILE/ATTRIB=(RFM:VAR,RAT:CR) "_file2) q
+ . i recsep=$c(10) d $zf(-1,"SET FILE/ATTRIB=(RFM:STMLF,RAT:CR) "_file2) q
+ . i recsep=$c(13) d $zf(-1,"SET FILE/ATTRIB=(RFM:STMCR,RAT:CR) "_file2) q
+ . i recsep=$c(13,10) d $zf(-1,"SET FILE/ATTRIB=(RFM:STM,RAT:CR) "_file2) q
+ if POP!notresto d  I POP g loop
+ . ; POP means the user wants to back up to the prior prompt and
+ . ; notresto means we hit a problem and aborted. In both cases
+ . ; delete the output file
+ . s x=$zu(140,5,file2)
+ . i notresto w !,"Conversion did not complete."
+ q
+ ;
+convert ;
+  s fromrest=8 ;tell restore^JRNRESTB to create common format jrn file
+  s reccnt=0  ;incremented in restore^JRNRESTB
+  s POP=0  ; set if the user wants to return to the prior prompt
+  D INT^JRNRESTO
+  q:POP!notresto
+  w !,"Converted "_reccnt_" journal records"
+  q
+errloop s $ZT=""
+ u 0
+ i $d(file2) c file2
+ i $ZE["INTERRUPT" q
+ w !!,"Error:  ",$ze
+ d BACK^%ETN
+ q    

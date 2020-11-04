@@ -1,0 +1,164 @@
+ROUTINE REPAIR1 [Type=INT]
+REPAIR1 ;PTR REPAIR CONT'D ; 01 JUL 82  2:51 PM ; LFT1480 3/29/06
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+mapEDIT ;
+ New func,option
+mapLoop Read !,"Map Edit Option: ",func Quit:func=""
+ If 'BLK Write !,"No block" Quit  
+ If func>0,func<6 Set option=$Text(FUNMAPEDIT+func) Write " ",$Piece(option,";;",2) Do @$Piece(option,";;",3) Goto mapLoop
+ If func="?" {
+    Write ! 
+    For func=1:1:5 {
+       Set option=$Text(FUNMAPEDIT+func)
+       Write ?5,func,")  ",$Piece(option,";;",2),!
+    }
+    Goto mapLoop
+ }
+ Set func=$$UC(func)
+ F I=1:1:5 S LA=$T(FUNMAPEDIT+I),UA=$$UC(LA) I $E($P(UA,";;",2),1,$L(func))=func W $E($P(LA,";;",2),$L(func)+1,99),! D @$P(LA,";;",3) Goto mapLoop
+ Write " ???" Goto mapLoop
+FUNMAPEDIT ; ;
+ ;;Change Free Count ;;changeFREECOUNT
+ ;;Allocate one Block ;;allocateBLOCK
+ ;;Free (Deallocate) one Block ;;deallocateBLOCK
+ ;;Dump Map Block ;;dumpBLOCK^REPAIR
+ ;;Allocate Entire Map ;;mapOUT
+changeFREECOUNT 
+ Write !,"Current free count in map block ",BLK," is ",FREECOUNT
+ Read !,"New free count? ",ans
+ If ans=FREECOUNT || ((ans\1)'=ans) Write !,"No change" Quit  
+ Set rc=$$ChangeFreeCount^DMREPAIR(DIRNAM,BLK,ans,0,.newblock)
+ i ('rc) d ShowMessage^REPAIR(rc,0)
+ Set FREECOUNT=ans
+ Write !,"Map block # "_BLK_" modified"
+ Write !,"Change will be written to disk if you choose"
+ Write !,?10,"""4)  Write Current Block to Disk"""
+ Write !,"from the Block Repair menu."
+ Write !,"To retain this change you must write this block to disk before"
+ Write !," making additional edits to this block."
+ Quit  
+allocateBLOCK
+deallocateBLOCK
+ ;Use number of Map Edit Option for Allocate
+ Set op=$Case(func,2:1,:0) 
+ Write !,"Block to "_$Case(op,1:"Allocate",:"Deallocate")_"? :"
+ Read allocblk
+ Write !,$Case(op,1:"Allocate",:"Deallocate")_" block "_allocblk_" in map? " Read ans
+ If $TR(ans,"yn","YN")?1"Y".E {
+    Set rc=$$IsBlockAllocated^DMREPAIR(DIRNAM,allocblk,.ans,BLK)
+    If ('rc) { Do ShowMessage^REPAIR(rc,0) Quit }
+    If ans,op=1 Write !,"Block ",allocblk," is already allocated" Quit  
+    If 'ans,'op Write !,"Block ",allocblk," is already deallocated" Quit  
+    Set already=0
+    Set rc=$$AllocateBlockInMap^DMREPAIR(DIRNAM,allocblk,op,,,.newblock)
+    If ('rc) { Do ShowMessage^REPAIR(rc,0) Quit }
+    Write !,"Map block # "_BLK_" modified"
+    Write !,"Change will be written to disk if you choose"
+    Write !,?10,"""4)  Write Current Block to Disk"""
+    Write !,"from the Block Repair menu."
+    Write !,"To retain this change you must write this block to disk before"
+    Write !," making additional edits to this block."
+ }
+ Quit  
+mapOUT
+ Open 63:"^^"_DIRNAM V BLK F I=1:1:%MAPSZ-1 I '$V(I,0) V I:0:1:65535
+ V 2046:0:2:0
+ Write !,"Map block # "_BLK_" modified"
+ Write !,"Change will be written to disk if you choose"
+ Write !,?10,"""4)  Write Current Block to Disk"""
+ Write !,"from the Block Repair menu."
+ Write !,"To retain this change you must write this block to disk before"
+ Write !," making additional edits to this block."
+ Quit  
+EDIT ;
+ If TYPE=170 Goto mapEDIT
+B R !,"Edit Option: ",F Q:F=""
+ I F>0,F<7 S A=$T(FUN+F) W " ",$P(A,";;",2),! D @$P(A,";;",3) G B
+ I F="?" W ! F I=1:1:5 S A=$T(FUN+I) W ?5,I,")  ",$P(A,";;",2),!
+ I  G B
+ S F=$$UC(F)
+ F I=1:1:5 S LA=$T(FUN+I) S UA=$$UC(LA) I $E($P(UA,";;",2),1,$L(F))=F W $E($P(LA,";;",2),$L(F)+1,99),! D @$P(LA,";;",3) G B
+ W " ???" G B
+FUN ; ;
+ ;;Delete Node ;;DENODE^REPAIR2
+ ;;Insert Node ;;INNODE
+ ;;Value (Data or Down pointer) - Change ;;VALUE^REPAIR2
+ ;;Link - Change ;;LINK^REPAIR2
+ ;;Type - Change ;;TYPE^REPAIR2
+INNODE R "Insert Global Node: ^",G I G?1"^".E S G=$E(G,2,99)
+ Q:G=""  G IN10:TYPE=1 S X=$P(G,"(",1),B=$L(X)
+ I $D(REPPRINT(2)),$P($E(REPPRINT(2),2,99),"(")'=X DO  G INNODE
+ . W "** Must be same global **",!
+ S NCOL=1
+ S colrule=$ZU(70,1,$v(2044,0,1))
+ S L=B,D=$P(G,"(",2,99),D=$E(D,1,$L(D)-1)
+IN6 G IN8:D="",IN7:D'?1"""".E S D=$E(D,2,*)
+ F I=1:1 Q:$E(D,I)=""  I $E(D,I)="""" Q:$E(D,I+1)'=""""  DO
+ . S D=$E(D,1,I)_$E(D,I+2,*)
+ S A=$E(D,1,I-1),D=$E(D,I+2,*) D INA S L=L+B G IN6
+IN7 S A=$P(D,",",1),D=$P(D,",",2,99) D INA S L=L+B G IN6
+IN8 I TYPE=8!(TYPE=12) R !,"Data Value (String only): ",VAL,!
+ E  R !,"Down Pointer: ",VAL,!
+ i $l(VAL)>756 w !,"Cannot insert a long string node" q  
+ S Y=0,Z=0,POP=0 F I=1:1:N S A=REPAIR(I) G IN9:A=X D IN5 G IN3:POP
+ I 'N S I=0
+ S I=I+1,CON=0
+IN3 S L=L-Z+2 I TYPE=8!(TYPE=12) d   ;Add correct prefix byte now
+ . n cmplen s cmplen=$zu(153,VAL)
+ . i cmplen,cmplen<($l(VAL)*2) s VAL=$c(8)_VAL  ;compact unicode
+ . e  i 'cmplen s VAL=$c(0)_VAL  ; 8bit
+ . e  s VAL=$c(4)_VAL   ; unicode
+ . s L=L+2+$s('$A(VAL):$l(VAL),$A(VAL)=4:$l(VAL)*2,$A(VAL)=8:cmplen)
+ E  S L=L+3
+ I TYPE=2!(TYPE=6) {
+    R !,"Does that block contain any big sring nodes? ",ans
+    If $TR(ans,"yn","YN")'?1"Y".E W " No big string nodes",! Set VAL="0,"_VAL
+    Else  Set VAL="1,"_VAL
+ }
+ I OFF+L-CON>2036 W "*** Not enough room in block ***",! Q
+ S OFF=OFF+L-CON
+ F J=N:-1:I S REPAIR(J+1)=REPAIR(J),REPVAL(J+1)=REPVAL(J),REPPRINT(J+1)=REPPRINT(J)
+ S N=N+1,REPAIR(I)=X,REPVAL(I)=VAL,REPPRINT(I)="^"_G
+ I N=I DO  Q
+ . W "Inserted at end of block, new node ",I
+ . W !,"Consider if this node should be in this block",!
+ I I=1 DO
+ . W "Inserted at beginning of block - new node 1"
+ . W !,"Consider changes that may need to be made in higher pointer"
+ . W !,"blocks & also whether this node should be in this block",!
+ E  W "Inserted as new node ",I,!
+ W "(Old node "_I_" and subsequent nodes have been shuffled up)",!
+ Q
+INA S X=X_$C(0)_$ZU(70,2,A,colrule),B=$L(A)+2 Q    
+IN5 F Z=1:1 Q:$E(A,Z)'=$E(X,Z)
+ S Z=Z-1,CON=0 I Z-Y>0 S CON=Z-Y
+ I Z<Y S POP=1,Z=Y Q
+ S Y=Z I $E(A,Z+1)]$E(X,Z+1) S POP=1
+ Q
+IN9 W "***Node already exists (Node ",I,")",! Q
+IN10 I G'?1A.AN&(G'?1"%".AN)!($L(G)>8) DO  Q
+ . W " Incorrect syntax - No insertion",!
+ I OFF+$L(G)+10>2036 W "Not enough room - No insertion",! Q
+ D INGET S OFF=OFF+$L(G)+10
+ S N=N+1,REPAIR(N)=G_$C(0),REPVAL(N)=VAL,REPPRINT="^"_G Q
+INGET R !,"Global type (Decimal #): 0 => ",VAL S VAL=+VAL
+ R !,"Protection code (Decimal #): ",A S VAL=VAL_"^"_+A
+ R !,"New growth area: ",A S VAL=VAL_"^"_+A
+ R !,"Pointer: ",A S VAL=VAL_"^"_+A
+ Q
+UC(x) q $zcvt(x,"u")

@@ -1,0 +1,140 @@
+ROUTINE ECPClient [Type=INT]
+ECPClient ; ECP NETWORK INIT. MODULE AFTER START-UP ; JO2141 2/04/09
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ x "*" ; No direct entry to this routine.
+Server()[] PUBLIC {
+ If '$$StartTranDaemons() Goto Fail
+ Quit 1
+Fail Set $ZT="" If $ZE'="" Do $zu(9,"",$ZE_$C(13,10)_$ZU(56,2),(1>0),1)
+ Quit 0
+ }
+Init(Host,Port,Name,CliTO,SvrTO,mirrorcon) [] PUBLIC {
+ Set $ZT="FailInit",$ZE=""
+ Set EthAddr=$$ENCUDP^NETWORK("0.0.0.0",Port) ; GK139
+ Set hostport=$ZCVT(Host,"L")_"|"_Port  ;JO2141 change : to |
+ If ($g(^%SYS("SERVICE","ECPCLU",Name),"")'=hostport) {
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecpcli: "_"Update cluster conn("_Name_") cache - new host|port("_hostport_")") }
+	Kill ^%SYS("SERVICE","ECPCLU",Name)
+	Set ^%SYS("SERVICE","ECPCLU",Name)=hostport
+ }
+ if mirrorcon {
+    s mirhost=$G(^%SYS("SERVICE","ECPMIRc",Name))  ;old Host|Port
+    if (mirhost'=hostport) {
+	   ;If the contact info for the mirror member has changed
+ 	   ; then kill off any info we're caching about its peers
+	   if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecpcli: "_"Update mirror conn("_Name_") cache - new host|port("_hostport_")") }
+	   Kill ^%SYS("SERVICE","ECPMIRc",Name)
+	   Set ^%SYS("SERVICE","ECPMIRc",Name)=hostport
+    }
+ }
+ if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecpcli: "_"ECPCLI: Name /"_Name_"/ Host /"_Host_"/ Port /"_Port_"/ mirrcon="_mirrorcon) }
+ If '$SYSTEM.ECP.Init(-1,Name,Host,EthAddr,CliTO,SvrTO,mirrorcon) { ;GK192,JO2141
+ 	Do $zu(9,"","ECP: '"_Name_"' Client Init Failed.",(1>0),1)
+ 	Quit 0
+ }
+ Quit 1
+FailInit Set $ZT="" If $ZE'="" Do $zu(9,"",$ZE_$C(13,10)_$ZU(56,2),(1>0),1)
+ Quit 0
+ }
+Reinit(BigNetSysNo,Host,Port,Name,CliTO,SvrTO) [] PUBLIC {
+ Set $ZT="FailReinit",$ZE=""
+ If BigNetSysNo<0 {
+	Do $zu(9,"","Invalid BigNetSys #.",(1>0),1)
+	Goto FailReinit
+ }
+ Set State=$System.ECP.GetClientState(BigNetSysNo),SysNo=$p(State,"^",2)
+ Do $zu(9,"","State: "_State,(1>0),1)
+ If +State'=4 {
+	Do $zu(9,"","Reinit Failed: Connection was not Disabled.",(1>0),1)
+	Goto FailReinit
+ }
+ If '$System.ECP.SetClientState(BigNetSysNo,4,1) {
+ 	Do $zu(9,"","ECP: '"_Name_"' Detach Failed.",(1>0),1)
+	Quit 0
+ }
+ Set hostport=$ZCVT(Host,"L")_":"_Port
+ If ($g(^%SYS("SERVICE","ECPCLU",Name),"")'=hostport) {
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecpcli: "_"Update cluster conn("_Name_") cache - new host|port("_hostport_")") }
+	Kill ^%SYS("SERVICE","ECPCLU",Name)
+	Set ^%SYS("SERVICE","ECPCLU",Name)=hostport
+ }
+ s Obj=##Class(Config.ECPServers).Open(Name)
+ s mirrorcon=($IsObject(Obj)&&Obj.MirrorConnection)
+ k Obj
+ if mirrorcon {
+    s mirhost=$G(^%SYS("SERVICE","ECPMIRc",Name))  ;old Host|Port
+    if (mirhost'=hostport) {
+	   ;If the contact info for the mirror member has changed
+ 	   ; then kill off any info we're caching about its peers
+	   if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecpcli: "_"Update mirror conn("_Name_") cache - new host|port("_hostport_")") }
+	   Kill ^%SYS("SERVICE","ECPMIRc",Name)
+	   Set ^%SYS("SERVICE","ECPMIRc",Name)=hostport
+    }
+ }
+ Set EthAddr=$$ENCUDP^NETWORK("0.0.0.0",Port) ;GK139
+ If '$SYSTEM.ECP.Init(SysNo,Name,Host,EthAddr,CliTO,SvrTO,mirrorcon) { ;GK139,JO2141
+ 	Do $zu(9,"","ECP: '"_Name_"' Client Renit Failed: "_Host_"["_Port_"].",(1>0),1)
+ 	Quit 0
+ }
+ Quit 1
+FailReinit Set $ZT="" If $ZE'="" Do $zu(9,"",$ZE_$C(13,10)_$ZU(56,2),(1>0),1)
+ Quit 0
+ }
+StartTranDaemons() [QUIETLY] PUBLIC {
+ If ($system.ECP.MaxServerConnections() > 0) {
+  Set NumTranDmn=$G(^NET(0,"NumTranDaemons"),0)
+  if (NumTranDmn = 0) {
+     ; get number of daemons per connection ;; GK672
+     Set NumTranDmn=1
+  }
+  set NumTranDmn=NumTranDmn-$system.ECP.GetProperty("NumBackWorkDmns") ; GK233
+  If (NumTranDmn>0) {  ; GK233
+    if ($p($system.ECP.GetProperty("ServerStats"),",",108)="") {
+	if ($g(^||ECPMsgLogged,0) = 0) {
+	    s ^||ECPMsgLogged=1
+	    Do $zu(9,"","StartTranDmns: Cannot start ECP worker dmn(s).. An old kernel.",(1>0),1) Quit 0
+	}
+	quit 1
+    } // GK929-
+    For i=1:1:NumTranDmn {
+	 d StartTranDmn(i) ; errors are ignored
+    }
+    set NumTranDmn=$system.ECP.GetProperty("NumBackWorkDmns")
+    set i=100 ; wait up to 20 seconds for a worker dmn to start
+    While ((i > 0) & (NumTranDmn = 0)) {
+	h .2
+	set NumTranDmn=$system.ECP.GetProperty("NumBackWorkDmns")
+	set i=i-1
+    }
+    if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecpcli: "_"Started "_NumTranDmn_" ECP worker daemon(s).") } ;; GK351
+    Quit NumTranDmn
+  } 
+ }
+ Quit 1
+ }
+StartTranDmn(i) [] PUBLIC { 
+    if ($p($system.ECP.GetProperty("ServerStats"),",",108)="") {
+	if ($g(^||ECPMsgLogged,0) = 0) {
+	    s ^||ECPMsgLogged=1
+	    Do $zu(9,"","StartTranDmn: Cannot start ECP worker dmn(s).. An old kernel.",(1>0),1) Quit 0
+	}
+	quit 1
+    }  // GK929-
+ Job Run^ECPWork(0):(:2:):20 If  Quit 1
+ Do $zu(9,"","Tran Dmn #"_i_" failed to start.",(1>0),1) Quit 0
+ }

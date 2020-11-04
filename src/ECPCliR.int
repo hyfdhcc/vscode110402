@@ -1,0 +1,258 @@
+ROUTINE ECPCliR [Type=INT]
+ECPCliR(sys,PriHost,PriPort,logical,debug) ; ECP NETWORK CLIENT READ DMN ; SML1106 3/5/10
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ ;ECPCliR -- ECP Client-side Read Daemon
+ ;
+ ; Continually open a new connection to the server, create a write-side daemon 
+ ; for that connection, and use the connection until it returns.  When it returns,
+ ; the system code tells us whether to keep connecting or to give up and stop 
+ ; creating new connections.
+ ;
+ set trycount=0
+ Set resume=$system.ECP.RegisterClient(sys)
+ If (resume = 0) {
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ECPCliR: "_"Dbg: "_"Terminating (RC said to halt)!") }
+ 	Halt
+ }
+ S DspMsg=1  ; start with displaying the message.
+ if logical="$CLUSTER" {
+	  ; Cache' cluster members cannot be failover mirror members
+	 s mirrorcon=0
+ } else {
+    s Obj=##Class(Config.ECPServers).Open(logical)
+    s mirrorcon=($IsObject(Obj)&&Obj.MirrorConnection)
+ }
+ k Obj
+ i mirrorcon s starttime=$zts,x=$SYSTEM.ECP.GetProperty("ReconnectDuration")-60,tryasyncinterval=$s(x>180:180,x<0:0,1:x)
+loop ;
+ Set $ZT="ClientErrTrap" ; GK137
+ Kill hostlist,mirrorhostlist,extramirrorhostlist
+ Set idx=0
+ Set:($d(AltHost)) hostlist($i(idx))=AltHost
+ if mirrorcon {
+    ; This is a connection to a mirror, pick up the list of mirror
+	; members as alternative hosts to connect to.
+    ; Add active backup members first (state = 2). These are added first
+    ; because if the primary is active, its not going to be our 1st choice
+    ; for reconnections.
+    Set x=""
+    do $ZU(9,"","ECPCliR: Forming mirror connection list for: "_logical)
+    For  { ;; add active connections (state = 2)
+       s x=$o(^%SYS("SERVICE","ECPMIRc",logical,"HOST",x),1,data) ;<ecp addr>^<mirror host name>
+       q:(x="")
+   	   if $g(^%SYS("SERVICE","ECPMIRc",logical,"STATE",x),0)=2 {
+	   	   s data=$P(data,"^",1) ; in ip:port form, needs to be in port:ip
+	   	   s hostlist($i(idx))=$P(data,"|",2)_":"_$P(data,"|",1)
+	   	   s mirrorhostlist(idx)=hostlist(idx)
+	   	   do $ZU(9,"","ECPCliR: Added /"_data_" as active")
+   	   }
+    }
+    ; Now add the current (or last known) primary (state = 1)
+ 	Set x=""
+ 	For  { 
+   	   s x=$o(^%SYS("SERVICE","ECPMIRc",logical,"HOST",x),1,data) ;<ecp addr>^<mirror host name>
+   	   q:(x="")
+   	   if $g(^%SYS("SERVICE","ECPMIRc",logical,"STATE",x),0)=1 {
+	   	   s data=$P(data,"^",1) ; in ip:port form, needs to be in port:ip
+	   	   s hostlist($i(idx))=$P(data,"|",2)_":"_$P(data,"|",1)
+	   	   s mirrorhostlist(idx)=hostlist(idx)
+	   	   do $ZU(9,"","ECPCliR: Added /"_data_" as primary")
+   	   }
+    }
+    ; add any mirror members which aren't (or weren't) up
+    For  { 
+       s x=$o(^%SYS("SERVICE","ECPMIRc",logical,"HOST",x),1,data)  ;<ecp addr>^<mirror host name>
+       q:(x="")
+       if '$g(^%SYS("SERVICE","ECPMIRc",logical,"STATE",x),0) {
+	   	   s data=$P(data,"^",1) ; in ip:port form, needs to be in port:ip
+	   	   s hostlist($i(idx))=$P(data,"|",2)_":"_$P(data,"|",1)
+	   	   s mirrorhostlist(idx)=hostlist(idx)
+	   	   do $ZU(9,"","ECPCliR: Added /"_data_" as down")
+       }
+    }
+    ; If we've been trying to connect for more than 3 minutes then include
+    ; the async members (state=4) in the list. The only reason to include the
+    ; async members is so that if this is a DR situation and one of them
+    ; has been promoted to the active failover member, we will connect to it
+    ; and recovery (rebuild our session). We wait 3 minutes because normally 
+    ; this isn't the case and we don't want to waste our time trying to connect
+    ; to them.
+    if $$elapsedSeconds(starttime,$zts)>tryasyncinterval||(+$SYSTEM.ECP.GetClientState(sys-1)<5)||(tryasyncinterval=0) {
+	    s starttime=$zts
+	    if tryasyncinterval>60 s tryasyncinterval=60
+		For  { 
+			s x=$o(^%SYS("SERVICE","ECPMIRc",logical,"HOST",x),1,data)  ;<ecp addr>^<mirror host name>
+			q:(x="")
+			if $g(^%SYS("SERVICE","ECPMIRc",logical,"STATE",x),0)=4 {
+		   	    s data=$P(data,"^",1) ; in ip:port form, needs to be in port:ip
+				s hostlist($i(idx))=$P(data,"|",2)_":"_$P(data,"|",1)
+				s mirrorhostlist(idx)=hostlist(idx)
+				do $ZU(9,"","ECPCliR: Added /"_data_" as async (or relay) member")
+			}
+		}
+    }
+ }
+ Set x=""
+ For  { ;; add active connections
+   s x=$o(^%SYS("SERVICE","ECPCLU",logical,"HOST",x))
+   q:(x="")
+   s:($g(^%SYS("SERVICE","ECPCLU",logical,"STATE",x),0)=1) hostlist($i(idx))=^%SYS("SERVICE","ECPCLU",logical,"HOST",x)
+ }
+ Set x=""
+ For  { ;; add active connections
+   s x=$o(^%SYS("SERVICE","ECPCLU",logical,"HOST",x))
+   q:(x="")
+   s:($g(^%SYS("SERVICE","ECPCLU",logical,"STATE",x),0)>1) hostlist($i(idx))=^%SYS("SERVICE","ECPCLU",logical,"HOST",x)
+ }
+ Set hostlist($i(idx))=PriPort_":"_PriHost
+ For  { ;; add inactive connections
+   s x=$o(^%SYS("SERVICE","ECPCLU",logical,"HOST",x))
+   q:(x="")
+   s:('$g(^%SYS("SERVICE","ECPCLU",logical,"STATE",x),0)) hostlist($i(idx))=^%SYS("SERVICE","ECPCLU",logical,"HOST",x)
+ }
+ Set x=""
+ k duplist
+ For  {
+	s x=$O(hostlist(x),1,val)
+	q:x="" 
+	s val=$ZCVT(val,"L")
+	if $D(duplist(val))=1 {
+		if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ECPCliR: "_"Dbg: "_"Removed duplicate entry ("_x_")- "_val) } ; GK339
+		k hostlist(x)
+	} else {
+		s duplist(val)=1
+	}
+ }
+ k duplist
+ if mirrorcon {
+     s timeout=1  ;short reconnection timeout for mirrors
+     do $ZU(9,"","ECPCliR: Set failover timeout to 1 for mirror server")
+ } else {
+	 s timeout=5  ;GK312
+ }
+ Set ecpnode=""
+contconnect
+ Kill readcomp
+ For  {
+	Set ecpnode=$O(hostlist(ecpnode))
+	Quit:ecpnode=""  
+	Set port=$p(hostlist(ecpnode),":",1)
+	Set host=$p(hostlist(ecpnode),":",2,99)
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ECPCliR: "_"Dbg: "_"Client connecting to conn("_ecpnode_") ("_host_","_port_")") } ; GK339
+	Set TcpDev="|TCP|"_port
+	set rs=$system.ECP.GetProperty("TCPCRcvBufSize") ;; TCPRCVBUF,GK1185+
+	set ws=$system.ECP.GetProperty("TCPCSendBufSize") ;; TCPSNDBUF
+	set to=$system.ECP.GetProperty("Timeout") ;; response duration
+ 	Open TcpDev:(/HOSTNAME=host:/PORT=port:/STREAM=1:/TCPRCVBUF=rs:/TCPSNDBUF=ws):timeout ;GK312,GK1185-
+	Goto:($T'=0) connected
+ }
+ s TcpDev=""
+ Set x="",hosts="",mirrorhosts=""
+ For  { Set x=$O(hostlist(x)) Q:(x="")  Set hosts=hosts_hostlist(x)_"," Set:$d(mirrorhostlist(x)) mirrorhosts=mirrorhosts_hostlist(x)_","}
+ if DspMsg {
+    if mirrorhosts'="" Do $zu(9,"","ECPcliR: Connection to '"_logical_"' on mirror hosts failed: "_mirrorhosts_" hosts.",(1  /* Warning */>0),1  /* Warning */)
+    Do $zu(9,"","ECPcliR: Connection to '"_logical_"' failed: "_hosts_" hosts.",(0  /* Informational message */>0),0  /* Informational message */)
+ }
+ Set DspMsg=0
+ Goto ClientConnectErr
+connected
+ Set DspMsg=1  ;Now we could display connection fail message on next round.
+ Kill AltHost
+ If ((PriPort_":"_$ZCVT(PriHost,"L"))'=$ZCVT(hostlist(ecpnode),"L")) {
+	d $ZU(9,"","ECPCliR: "_"ECP connection "_logical_"@"_PriPort_":"_PriHost_" is redirected to "_hostlist(ecpnode))
+ }
+ ;
+ ; Note: the server will start an ECPSvrR job via the super server when we open the connection.
+ Use TcpDev
+ ; Set up information for ^%SS and JOBEXAM to use.
+ s clientipaddr=$s($zbitget($zversion(0)_$c(0,0,0,0),42):$SYSTEM.TCPDevice.PeerAddr(0),1:$zu(54,2,$zu(111,0)))
+ Do $ZU(67,15,clientipaddr,$J) ; Set pidtab ipname
+ s servername=logical_","_PriHost_","_PriPort
+ Do $ZU(67,12,servername,$J) ;Set pidtab clientname 
+ s session=$system.ECP.StartingWriteDaemon(sys)
+ If (session = 0) {
+	 Close TcpDev
+	 if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ECPCliR: "_"Dbg: "_"Terminating. (StartWD said to halt)!") }
+	 Halt
+ }
+ ; Create the ECP Client Write daemon (ECPCliW).
+ I $zu(66,"NET","ECPCliW",30,0,32768,servername,session,sys)'=-1  ;<- This will pass current device to the child.
+ Else  Do $zu(9,"","ECPcliR: ECPWrite daemon start failed ("_host_","_port_")",(0  /* Informational message */>0),0  /* Informational message */) Goto ClientConnectErr
+ ; Get SuperServer acknowledgement of connection
+ Read x#3:to
+ If x="DD0" {
+    If $G(^NET(0,"DODEMON","LOG")) Do $zu(9,"","Got It '"_x_"' ("_host_","_port_")",(0  /* Informational message */>0),0  /* Informational message */)
+ } else {
+    Do $zu(9,"","ECPcliR: ERROR: Failed to synchronize on initial handshake. Exiting this connection rcvd="_$g(x,"<undef>"),(0  /* Informational message */>0),0  /* Informational message */)
+    Goto ClientConnectErr
+ }
+ ; Invoke ECP read daemon function.
+ ; Note: read daemon will not return until write daemon is gone/exited..
+ if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ECPCliR: "_"Dbg: "_"Calling StartClientReadDmn") }
+ Set readcomp=$System.ECP.StartClientReadDmn(sys,session)
+ ; If read daemon returned 0, exit. Otherwise start all over.
+ If (readcomp = 0) { 
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ECPCliR: "_"Dbg: "_"Terminating. (RD said to halt)!") }
+	Halt
+ }
+ClientConnectErr ;
+ if TcpDev'="" {
+	 Close TcpDev
+ }
+ ; Determine if OK to keep connecting.  Returns 0 when time to shut down this job.
+ Set resume=$system.ECP.ConnectionFailed(sys)
+ If (resume = 0) { ; GK137+ 
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ECPCliR: "_"Dbg: "_"Terminating (CF said to halt)!") }
+ 	Halt
+ } ; GK137-
+ ;; If the connection is refused, try the next host in the list
+ if (($g(readcomp)=2) && $g(ecpnode) && ($O(hostlist(ecpnode)))) {
+	;; restore the error handler
+	Set $ZT="ClientErrTrap"
+  	s TcpDev=""
+	goto contconnect
+ } // else rebuild the host list (if any)
+ if TcpDev'="" {
+  	 i mirrorcon s starttime=$zts,x=$SYSTEM.ECP.GetProperty("ReconnectDuration")-60,tryasyncinterval=$s(x>180:180,x<0:0,1:x)
+  	 s TcpDev=""
+ }
+ ;; try connecting twice before switching to the original host+port
+ if ('$d(AltHost) || (trycount<2)) {
+    s trycount=$i(trycount)
+    set x=$system.ECP.GetProperty("ClientAltHostPort",sys)
+    do $system.ECP.SetProperty("ClientAltHostPort",sys) ;; clear it
+    Set:((x'="")&&($p(x,":",1)'="")&&($p(x,":",2,999)'="")) AltHost=x,trycount=0
+ } else {
+   // back to the original host and port
+   Kill AltHost
+   set trycount=0
+ }
+ GoTo loop
+ClientErrTrap  ; GK137+
+ s $zt=""  ;JO2141 ClientConnectErr will end up at loop which will reset this later
+ If $ZE["<READ>" d $zu(9,"","ECPCliR: Read failed, will try to connect again.") GoTo ClientConnectErr
+ d $zu(9,"","ECPcliR: error @ ("_$zu(56,2)_") $ZE("_$ZE_")")
+ GoTo ClientConnectErr
+ ; GK137-
+elapsedSeconds(starttime,endtime) PUBLIC {
+	s eDays=endtime-starttime
+	s eSec=$P(endtime,",",2)-$P(starttime,",",2)
+	s eSec=eSec+(eDays*86400) ;60*60*24
+	quit eSec
+}

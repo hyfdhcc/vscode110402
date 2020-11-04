@@ -1,0 +1,19 @@
+ROUTINE procexample
+procexample ; examples of procedures
+ read !, "Enter a number: ", x
+ if x = 4  {do proc1()}   ; call a procedure
+ quit    ; end of the main routine
+ 
+proc1() ; a private procedure
+ {
+ write !, "setting a"  set a = 1
+ write !, "setting b"  set b = 2
+ write !, "setting c"  set c = 3
+ write !, "setting d"  set d = 4
+ }
+ 
+proc2(num) PUBLIC
+ ; a public procedure with a parameter
+ { write !, "my favorite number is ",num }
+ 
+ 

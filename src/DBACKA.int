@@ -1,0 +1,686 @@
+ROUTINE DBACKA [Type=INT]
+DBACKA ; Part two of Incremental Backup ; HYY1776 07/12/12
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ; Part II of the Incremental Backup Utility.
+ ;      Subroutines called by DBACK split out to keep the size down.
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ASKSET(prompt,val,backup,help,pattern) ;procedure
+ N x,done,def,enahelp,helpavail,backupavail
+ s done=0
+ s def=$G(val)
+ s backup=$G(backup,0) 
+ s enabackup=$S(backup=-1:0,1:1)
+ s backupavail=$S(backup=1:1,1:0)
+ s help=$G(help)
+ s enahelp=$S(help="*":0,1:1) ;there might not be any help though
+ s helpavail=$s(enahelp&($L(help)!($D(help)>1)):1,1:0)
+ if 'enabackup n POP
+ s POP=0
+ f  d  q:done!POP
+ . W !,$G(prompt)
+ . w:($X+$L(def))>65 !,?5
+ . w:$L(def) " <",def,">"
+ . if helpavail!backupavail do
+ . . w " [" w:helpavail "?" w:backupavail "^" w "]"
+ . w:(($X+$L(def))>75) !,?5
+ . W " => " 
+ . R x,!
+ . if x="^" d  q
+ . . if 'enabackup s done=1 q
+ . . if backupavail s POP=1 q
+ . . w "...backup not available here"
+ . if enabackup,x="""^""" s x="^",done=1 q
+ . ;
+ . if x="?" d  q
+ . . if 'enahelp s done=1 q
+ . . if 'helpavail w "...help not available here" q
+ . . if $D(help)=1 w !?5,help q
+ . . s x="" f  s x=$O(help(x)) q:x=""  w !,?5,help(x)
+ . . w !
+ . if enahelp,x="""?""" s x="?",done=1 q
+ . i x]"",$g(pattern)]"",x'?@pattern w !?5,$s(helpavail:help,1:"[bad format]") q
+ . s:'$L(x) x=val 
+ . s done=1
+ s:'POP val=x
+ q
+ ;
+GETDEV ;
+ I DEV="",BUTYP=FULL S DEV=$G(^SYS("BACKUP","LASTFULL","DEVICE"))
+ I DEV="",LASTHDATE d ConvHistDate^DBACK S DEV=$G(^SYS("BACKUP","HISTORY",(+LASTHDATE*1000000+$p(LASTHDATE,",",2)),"DEVICE"))
+ i ($zversion(1)=1) i $E(DEV,$L(DEV))'=":" s DEV=""                    ;JAO262
+ s DEVMNT=0 ; Gets set if we mount current tape
+ ;
+ s OK=1                                                        ;JAO264+
+ i INTERNAL,outdev'="" s DEV=outdev,outdev="",ANS=""
+ e  i NOINPUT,'$g(gui,0) s OK=0 q  ; If no input device, return failure
+ e  d
+ . d msgout($C(13,10)_"Specify output device (type STOP to exit)",FORCE)
+ . d msgout($C(13,10)_"Device: "_DEV_" => ",FORCE)
+ . i '$g(gui) R ANS
+ . e  d  
+ . . n text
+ . . s text="Enter the device where output should continue."
+ . . s ANS=$$IjcIB^%Wprima(text,"Specify Output Device",DEV)
+ . . s:ANS="" ANS="STOP" ; Cancel button
+ . d msgout(ANS_$C(13,10),LOGONLY)
+ S:ANS]"" DEV=ANS I DEV=""!(DEV="STOP")!(DEV="stop") S OK=0 Q
+ s ISREG=1
+ i '($zversion(1)=1) S DEV=$$FILENORM(DEV) d:'OK  g GETDEV2:OK,GETDEV
+ . d msgout("   "_ERRMSG_$C(13,10),FORCE)
+ i DEV?2N&(DEV>46)&(DEV<55) d
+ . s ISREG=0
+ . s ANS="SYS$MT"_DEV ; Build logical name SYS$MTnn
+ . s DEV=$$ZU(12,ANS,4) ; Translate logical name
+ . i DEV="" d  q
+ . . d msgout($C(13,10)_"Undefined tape device - "_ANS_$C(13,10),FORCE)
+ . s DEV=$P(DEV,":")_":" ; Pick off the device part
+ i DEV="" s OK=0 q:NOINPUT  g GETDEV
+ i $E(DEV,$L(DEV))=":" d
+ . s ANS=$$ZU(148,3,DEV) ; Obtain mount status for tape
+ . i ANS d  s DEV="" q  ; Status failure
+ . . d msgout($C(13,10)_"STATUS check failed for "_DEV,FORCE)
+ . . d msgout($C(13,10)_"Error code = "_ANS_$C(13,10),FORCE)
+ . i ANS]"0" d  q  ; Already mounted by some process, possibly ours
+ . . i $p(ANS,"^",2)-$j d  s DEV=""
+ . . . d msgout($C(13,10)_"Device "_DEV_" is unavailable (mounted)"_$C(13,10),FORCE)
+ . s ANS=$$ZU(148,1,DEV) ; Try to mount the tape  
+ . i ANS d  s DEV="" q
+ . . d msgout($C(13,10)_"MOUNT failed for "_DEV,FORCE)
+ . . d msgout($C(13,10)_"Error code = "_ANS_$C(13,10),FORCE)
+ . s DEVMNT=1
+ e  s DEV=$$ZU(12,DEV) do CheckDir
+ i DEV="" s OK=0 q:NOINPUT  g GETDEV
+GETDEV1 I $G(VOL)>1 D                                                 ;AN012+
+ . I $G(VOL)=2 S FIRSTDEV=PREVDEV
+ . I DEV'=PREVDEV D
+ .. d msgout($C(13,10)_$C(13,10)_"Device used on previous volume was "_PREVDEV,NOFORCE)
+ .. d msgout($C(13,10)_"Device specified now is "_DEV,NOFORCE)
+ . . d msgout($C(13,10)_"Are you sure you want to do this ?",NOFORCE)
+ . . i '$g(gui) s ANS=$$YESNO^DBACK(0)
+ . . e  d
+ . . . n text
+ . . . s text="Are you sure you want to do this?"
+ . . . s ANS=$$IjcIB^%Wprima(text,"Please answer Yes or No","No")
+ . . . s ANS=$tr($e(ANS),"y","Y")="Y"
+ . . d msgout($s(ANS:"Yes",1:"No")_$C(13,10),LOGONLY)
+ . . i 'ANS d:DEVMNT DISMOUNT(DEV,1) s OK=0 q
+ . . d:PREVMNT DISMOUNT(PREVDEV,0)
+ . e  s:'DEVMNT DEVMNT=PREVMNT
+ i 'OK q:NOINPUT  g GETDEV
+ s PREVDEV=DEV,PREVMNT=DEVMNT
+ d msgout($C(13,10)_"Backing up to device: "_DEV,NOFORCE)
+ q:'ISREG
+ i '$zu(140,4,DEV) d   ; if file exists  
+ . i ($zversion(1)=1) s delerr=$zu(140,5,DEV_";*")
+ . e  s delerr=$zu(140,5,DEV)
+ . i delerr d msgout($C(13,10)_"Error "_delerr_" deleting file "_DEV_" before reuse.",NOFORCE) s OK=0
+ Q
+CheckDir  ;Check if the specified directory exist or not, if not create it.
+ ; In put is DEV, if failed to create the directory the DEV will be set to "". 
+ i 'INTERNAL!($g(outdev,"")="") do   ; Not a tape
+ . n dirname,rc
+ . s dirname=##class(%Library.File).GetDirectory(DEV,1)
+ . if '$l(dirname) d msgout($C(13,10)_"Unable to determine base directory for "_DEV,FORCE) S DEV="" Q
+ . if '##class(%Library.File).DirectoryExists(dirname) do
+ . . s rc=##class(%Library.File).CreateDirectoryChain(dirname)
+ . . if 'rc d msgout($C(13,10)_"Unable to create backup output directory: "_dirname,FORCE) S DEV="" Q
+ . e  if ##class(%Library.File).Exists(DEV) f  d  q:'rc
+ . . i NOINPUT s rc=0 q   ;overwrite it when no input for the backup.
+ . . d msgout($C(13,10)_"File exists, do you want to overwrite it <N>?",FORCE)
+ . . R rc i rc="" s DEV="" s rc=0 q
+ . . s rc=$zconvert($e(rc),"u")
+ . . if rc="Y"!(rc="N") s:rc="N" DEV="" s rc=0 q
+ . . d msgout("  Enter 'Y' or 'N'.") s rc=1
+ Q
+GETDEV2 ;
+ I 'ISREG G:'($zversion(1)=2) GETDEV1   ; Don't need to check directory for Tape.
+ I 'ISREG,$ZCVT(DEV,"U")?1"\\.\TAPE"1N G GETDEV1  ;must be Tape for Windows.
+ I 'ISREG,(+$zu(91,DEV))=7 G GETDEV1  ;must be Tape for Windows.
+ do CheckDir G:DEV="" GETDEV
+ G GETDEV1
+GETTYP S TYPE="" ; TR243 fixed
+ i INTERNAL D                                                  ;JAO264+
+ . s a=$TR($E(EXTTYP),"FIC","123")
+ E  D
+ . d msgout($C(13,10)_"What kind of backup:"_$C(13,10),FORCE)              ;JAO266+
+ . d msgout("   1. Full backup of all in-use blocks"_$C(13,10),FORCE)
+ . d msgout("   2. Incremental since last backup"_$C(13,10),FORCE)
+ . d msgout("   3. Cumulative incremental since last full backup"_$C(13,10),FORCE)
+ . d msgout("   4. Exit the backup program"_$C(13,10),FORCE)       ;JAO266
+ . r "1 => ",a i a="" s a=1                                    ;JAO264-
+ . d msgout("1 => "_a,LOGONLY)    ; log the response       ;JAO264
+ quit:a="STOP"!(a="stop")
+ s a=$e(a)
+ i "1234"'[a d  g GETTYP
+ . d msgout($C(13,10)_" ?? Type the number of the function you want"_$C(13,10),FORCE)
+ i a=4 s TYPE="",BUTYP="" q
+ S BUTYP=$S(a=3:CUMINC,a=1:FULL,1:PARTIAL)
+ S TYPE=$S(a=3:"Cumulative Incremental",a=1:"Full",1:"Incremental")
+ s OK=1                                                       ;JAO265+
+ if BUTYP'=FULL {
+    new full set full=0
+    if '$D(^SYS("BACKUP","LASTFULL")) {
+       set full=1
+       do msgout($C(13,10)_$C(13,10)_"You cannot do an Incremental or Cumulative Backup until a Full Backup"_$C(13,10)_"has been performed."_$C(13,10),FORCE)
+    } else {
+       new d,nobup set (d,nobup)=""
+	   new newdirlist,olddirlist,dir,zu49,REASON
+	   merge olddirlist=^SYS("BACKUP","LASTDIRECTORIES")
+       for  {
+	       set d=$o(^SYS("BACKUP","DIRECTORIES",d)) 
+	       quit:d=""  
+	       k olddirlist(d) 
+	       s zu49=+$zu(49,d)
+	       if zu49'=-2&&(zu49'=-3) {
+		       i zu49=-1||(zu49=$zu(40,0,41)) d MNTDIR^DBACKB(d) s zu49=+$ZU(49,d)
+		       i zu49'=-1&&(zu49'=$zu(40,0,41)) {
+			       set:($zu(52,8,d)+$zu(52,9,d)) nobup=nobup_d_", "
+			       if '$D(^SYS("BACKUP","LASTDIRECTORIES",d)) s newdirlist(d)=""
+		       }
+	       }
+       }
+	   if $D(olddirlist) {
+	      do msgout($C(13,10)_"Below is a list directories which were part of the last backup"_$C(13,10)_"     but are not part of the current backup.",FORCE)
+		  s d=""
+          f  s d=$O(olddirlist(d)) q:d=""  do msgout($C(13,10)_"     "_d,FORCE)
+	   }
+	   if $D(newdirlist) {
+	      do msgout($C(13,10)_"Below is a list directories which were NOT part of the last backup"_$C(13,10)_"     but are will be part of the current backup.",FORCE)
+		  s d=""
+          f  s d=$O(newdirlist(d)) q:d=""  do msgout($C(13,10)_"     "_d,FORCE)
+          do msgout($C(13,10)_"Since new databases have been added, a full backup is required.",FORCE)
+          s full=1
+	   }
+       if nobup'="" {
+          set full=1
+          do msgout($C(13,10)_$C(13,10)_"Below is a list of directories for which a Full Backup is mandatory:",FORCE)
+          for i=1:1:$l(nobup,", ")-1 do msgout($C(13,10)_"   "_$p(nobup,", ",i),FORCE)
+          do msgout($C(13,10)_$C(13,10)_"A Full Backup of the entire directory set must be done first.",FORCE)
+       }
+    }
+    quit:'full
+    new text
+    if NOINPUT {
+       set text="Performing a Full Backup of these databases"
+    } else {
+       set text="The Full Backup will take much longer than the "_TYPE_" Backup."_$C(13,10)_$C(13,10)_"Do you wish to do a Full Backup now? "
+    }
+    if '$g(gui) {
+       do msgout($C(13,10)_text,FORCE)
+       if NOINPUT {set ANS=1} else {set ANS=$$YESNO^DBACK(0)}
+       if 'ANS {set OK=0,TYPE=""} else {set BUTYP=FULL,TYPE="Full"}
+    } else {
+       set ANS=$$IjcMB^%Wprima(text,4+256,"Mandatory Full Backup")
+       if ANS="No" {set OK=0,TYPE=""} else {set BUTYP=FULL,TYPE="Full"}
+    }
+    if OK && INTERNAL && $L($G(taskname)) {
+	    new rc,dirname,saveof
+	    s newtask="FullDBList"
+	    if ('(outdev?2N&(outdev>46)&(outdev<55))) {
+		    s rc=$Find(outdev,taskname)
+		    if (rc) {
+			    s dirname=##class(%Library.File).GetDirectory(outdev,1)
+			    s rc=##class(Backup.General).GetFilename(newtask,1,0,dirname)
+			    if '+$list(rc,1) d msgout($C(13,10)_"Failed to switch backup file to Full Backup Task.",FORCE) s OK=0,TYPE="" Q
+			    s outdev=$List(rc,2)
+		    }
+	    }
+	    if $L($G(logfile)) {
+		    s rc=$Find(logfile,taskname)
+		    if (rc) {
+			    s rc=##class(Backup.General).GetFilename(newtask,1,1)
+			    if '+$list(rc,1) d msgout($C(13,10)_"Failed to switch log file to Full Backup Task.",FORCE) s OK=0,TYPE="" Q
+			    s newlog=$List(rc,2)
+			    o newlog:"WNS":5
+			    i '$Test d msgout($C(13,10)_"Failed to open new log file "_newlog_".",FORCE) s OK=0,TYPE="" Q
+			    d msgout($C(13,10)_"Log file switched to "_newlog_" due to switch to Full Backup.",FORCE)
+			    c logfile o logfile
+			    s saveof=$zu(68,40,1)
+			    f  u logfile r rc q:$zeof=-1  u newlog w rc_$C(13,10)
+			    c logfile
+			    d $zu(68,40,saveof)
+			    s logfile=newlog
+		    }
+	    }
+	    s P10=taskname
+	    s return="1,"  ; For Warning
+	    d SetStatus^Wsback
+	    s taskname=newtask
+	    s rc=$$SetLast^Wsback(taskname)
+   }
+ }
+ if 'OK quit:INTERNAL  goto GETTYP
+ if INTERNAL d msgout($C(13,10)_"Performing a "_TYPE_" backup.",FORCE)
+ quit
+ ;
+InitDirList(flg) ;
+ ;Setup ^SYS("BACKUP","DIRECTORIES") from ^SYS("BACKUPDB")
+ ;and warn if any directories backed up last time are missing this
+ ;time. flg=0 means build list from ^SYS("BACKUPDB"). 
+ ;flg=1 means build list of all databases on the system
+ ;
+ ;Returns 0 = failed, 1 = success
+ n list,rc,del1,del2,db,dir,cachetemp,cnt
+ k ^SYS("BACKUP","DIRECTORIES")
+ s del1=$$del1^%Wprim,del2=$$del2^%Wprim
+ s list=""
+ if 'flg && $d(^SYS("BACKUPDB")) {
+    s rc=$$DbList^Wsback(.list)
+    if '+rc do msgout($C(13,10)_$P(rc,del1,2),FORCE) q 0
+    s cnt=$L(list,del1)-1
+    f i=1:1:cnt {
+ 	   s db=$P(list,del1,i)
+	   s dir=$P(db,del2,2)
+	   s:$L(dir) ^SYS("BACKUP","DIRECTORIES",dir)=""
+    }
+ } else {
+	; This is the special "FullAllDatabase" task which includes
+	; all databases except for CacheTemp
+	s context=""
+	do {
+		k list
+		s notdone=$$List^Wsdba(.list,.context) ;returns 0 for the last chunk
+ 	    s cnt=$L(list,del1)
+ 	    f i=1:1:cnt {
+ 	       s db=$p(list,del1,i)
+ 	       s dbname=$p(db,del2)
+ 	       if $L(dbname) {
+	          s dbdir=$p(db,del2,2)
+   	          ; Don't include cachetemp, CACHELIB and DOCBOOK 
+	          if (+$p(db,del2,4)'=$ZU(173))&&(dbname'="CACHELIB")&&(dbname'="DOCBOOK")&&(dbname'="SAMPLES")&&(dbname'="CACHE") {
+		          s:$L(dbdir) ^SYS("BACKUP","DIRECTORIES",dbdir)=""
+	          }
+ 	       }
+ 	    }
+	} while (notdone)
+ }
+ q 1
+GETDIRS ;
+ n NODIR,MVDIR k DIRNAM S (DIRNAM,NODIR,MVDIR)=0
+ n REASON
+ S DIR=""
+ F I=0:0 S DIR=$O(^SYS("BACKUP","DIRECTORIES",DIR)) Q:DIR=""  d
+ . D GD1^DBACKB(DIR)
+ i DIRNAM d
+ . d msgout($C(13,10)_$C(13,10)_"Backing up the following directories:"_$C(13,10),NOFORCE) ;JAO266
+ . s DIR="" f  S DIR=$o(DIRNAM(DIR)) Q:DIR=""  D msgout(" "_DIR_$C(13,10),NOFORCE)    ;JAO266
+ i NODIR d
+ . s BUWARNING="Directory could not be backed up~"_$g(BUWARNING)
+ . d $zu(9,"","Backup Warning - the following directories could not be backed up.",(1>0),1)
+ . d msgout($C(13,10)_"WARNING - the following directories could not be backed up"_$C(7)_$C(13,10),NOFORCE)
+ . s DIR=""  
+ . f  s DIR=$O(NODIR(DIR)) Q:DIR=""  d
+ . . d $zu(9,"",DIR_" "_$G(REASON(DIR)),(0>0),0)
+ . . d msgout(" "_DIR_" "_$G(REASON(DIR))_$C(13,10),NOFORCE)
+ d msgout($C(13,10),NOFORCE) Q
+ ;
+ ; Write a volume label
+ ; If VOL = 1, then also output the directories
+VOLLABEL s OK=1,RC=$$ZU(50,0,DEV) I RC'=NoErr G VOL1 ; Open the output file
+ D OUTVOL("Cache"_" BACKUP")
+ if mirrorid="" {
+	D OUTVOL("VERSION")  ;Version[0] does not include mirror support
+ } else {
+    D OUTVOL("VERSION1.1")  ;VERSION1.1 includes mirror support & readonly flag
+ }
+ D OUTVOL($P($ZV,DELIM,1))
+ ; BUFCOUNT is the number of full buffers written on the previous
+ ; volume.  It is parsed out of the return code when a volume is full.
+ I VOL=1 S BUFCOUNT=0
+ FOR I=VOL,DATE,TIME,TYPE,BACKHDATE,LASTDATE,LASTTIME,LASTTYPE,LASTFDATE,LASTFTIME,DESCRIPTION,BUFCOUNT d OUTVOL(I) G VOL1:'OK
+ ; Add Mirror name and mirror guid
+ if mirrorid'="" {
+	 do OUTVOL(mirrorid)  ;<mirname>:<mirror guid>:<system name>: etc....
+ }
+ G VOL1:'OK  ;OUTVOL() failed.
+ ; If this is the first volume label, output the directory names
+ i VOL=1 n A s A="" d  G VOL1:'OK
+ . for  s A=$o(DIRNAM(A)) Q:A=""  D  q:'OK
+ . . D OUTVOL(A_"^"_CLSTATE(A)_"^"_MIRDBINFO(A)) q:'OK   ;JO2313
+ . . D OUTVOL($P($$ZU(49,A),",",1,12)) q:'OK
+ d OUTVOL("") G VOL1:'OK ; indicate end of logical label
+ S RC=$$ZU(50,2,DELIM) 
+ I RC=NoErr s OK=1 q  ; write the label
+VOL1 s OK=0  d msgout($C(13,10)_" [",FORCE)
+ I RC=ibEOT d msgout("End of Volume",FORCE)
+ I RC=ibOfflin d msgout("Device "_DEV_" Offline",FORCE) 
+ I RC=ibDevFul d msgout("Device "_DEV_" Full",FORCE)
+ I RC=ibOutErr d msgout("Output I/O",FORCE)
+ I RC=ibInErr d msgout("Input I/O",FORCE)
+ d msgout(" Error has occurred]"_$C(13,10),FORCE)
+ i NOINPUT d msgout("No input device - Terminating backup",FORCE) q
+ s A="Y"
+ d ASKSET(DEV_": Retry? ",.A)
+ I A'?1"N".E,A'?1"n".E G VOLLABEL
+ Q
+OUTVOL(a) s RC=$$ZU(50,1,a_DELIM) i RC'=1 s OK=0
+ q
+ ;
+PASS ;
+ N I
+ d msgout($C(13,10)_$C(13,10)_"Starting backup pass "_PASS,FORCE)
+ ; If last pass took longer than 1/3 of previous pass, or last pass
+ ; was less than 30 seconds, then make this the last pass
+ I PASS>2,(PASS(PASS-1)>(PASS(PASS-2)/3)&(PASS(PASS-1)<600))!(PASS(PASS-1)<30) S LastPass=1
+ I PASS=MaxPASS s LastPass=1                                 ;JAO217+
+ i LastPass d
+ . n rc s rc=##class(%SYS.Journal.File).RequiredForRecovery(.RequiredFile)
+ . i $g(RequiredFile)'="" d msgout($C(13,10)_$C(13,10)_"Journal file '"_RequiredFile_"' and the subsequent ones are required for recovery purpose if the backup were to be restored",NOFORCE)
+ . i USEENQ d ENQ13,msgout(" - This is the last pass - Suspending sets and kills",NOFORCE) q
+ . d msgout($C(13,10)),MARKJRN^DBACK,HOLDWD(.DIRNAM)
+ . d msgout($C(13,10)_" - This is the last pass - Suspending write daemon",NOFORCE)
+ S BEGTIME=$H,LOST=0 ; keep track of pass time
+ n SUCCESSDIR  ; Record success backup in last pass.
+ S DIR="" F I=0:0 S DIR=$O(DIRNAM(DIR)) Q:DIR=""  D DIRPASS^DBACKC Q:'OK
+ d msgout($C(13,10)_"Backup pass "_PASS_" complete at "_$ZDATETIME($H),FORCE)
+ I LastPass d msgout($C(13,10),FORCE)
+ s PASS(PASS)=$$TIME($H,BEGTIME)-LOST
+ ; D DEQ:LastPass  ; TR242 removed
+ i LastPass,'USEENQ d FREEWD s I="" f  s I=$o(SUCCESSDIR(I)) q:I=""  d $zu(52,9,I,0) 
+ Q
+ ;
+DIRPASS ;
+ D SetNames(DIR) S RC=NoErr
+ n zu49 s zu49=+$$ZU(49,DIR)  ;KMK106
+ i zu49=-1!(zu49=-2)!(zu49=-3) d  q
+ . d msgout($C(13,10)_"Directory "_DIR_" *** Isn't Present and Can't Be Backed Up ***"_$C(13,10)_$C(13,10),NOFORCE) 
+ . s OK=1 K DIRNAM(DIR)
+ ;
+ I 'LastPass S A=$H D ENQ13 S LOST=LOST+$$TIME($H,A)
+ i PASS=1 DO
+ .; If this is first pass of a full backup, mark all in-use
+ .; blocks in .IND file and delete .INE file
+ . I BUTYP=FULL s RC=$$INLOGOR(DIR,3,2,2) Q:RC=-2
+ . i BUTYP=FULL,(RC'<0) s I=$$INLOGOR(DIR,1,1,1)
+ .; If first pass of a partial or cumulative backup,
+ .; OR .INE file into .IND and delete the .INE file
+ .; so that we can recover from a previously interrupted backup,
+ . i BUTYP'=FULL s RC=$$INLOGOR(DIR,1,2,1)
+ .; If first pass of a cumulative incremental backup,
+ .; OR .INF into .IND and leave .INF alone
+ . i BUTYP=CUMINC s I=$$INLOGOR(DIR,0,2,0) D
+ ..   s:(RC=-2)!(RC'<0) RC=I
+ .; OR .INC into .IND and clear the .INC file
+ . s I=$$INLOGOR(DIR,3,2,1) D
+ ..    ; If the first pass during Full Backup.  Ignore the fact
+ ..    ;   that the .INC file does not exist.
+ ..   I (BUTYP=FULL)&(PASS=1)&(I=-2) Q
+ ..   E  S:(RC=-2)!(RC'<0) RC=I
+ ; If not 1st pass, OR .INC into .IND and clear the .INC file
+ I PASS'=1 s RC=$$INLOGOR(DIR,3,2,1)
+ ; If RC=-2, There was nothing to backup because an input file for
+ ;     one of the above INLOGOR calls did not exist.
+ I RC=-2 Q   ;Continue backup, but do not process this directory
+ ;  Otherwise, if RC<0, then there was an I/O error or configuration error
+ E  I RC<0 D  Q  ;If RC<0, it is a bad error.  Abort BACKUP.
+ . D msgout($C(13,10)_"["_$s(RC=+RC:"I/O Error",1:"Error "_$p(RC,",",2,*))_" occurred while processing directory '"_DIR_"']"_$C(13,10),FORCE)
+ . S OK=0
+ D DEQ13:'LastPass
+ ; Backup this directory for this pass
+ d msgout($C(13,10)_"Backing up "_DIR_" at "_$ZDATETIME($H),NOFORCE)
+ S VOLDIR=DIR,RC=$$ZU(IBUPass,PARTIAL,DIR)
+ d msgout(" - Done",NOFORCE)
+ ;
+RC ; Handle return code from ZU(IBUPass...) which does one pass of 
+ ; backup.  Only the last three conditions are absolutely fatal.
+ I +RC=NoErr G DPX
+ I +RC=ibEOT D NEXTVOL("End of Volume.") Q:'OK  G CNT
+ I +RC=ibOfflin D FATAL("Device "_DEV_" Offline.") Q
+ I +RC=ibDevFul D NEXTVOL("Device "_DEV_" Full.") Q:'OK  G CNT
+ I +RC=ibOutErr D FATAL("Output I/O") Q
+ I +RC=ibInErr D FATAL("Input I/O") Q
+ I +RC=ibNoIND D FATAL("CACHE"_".IND not present") Q
+ I +RC=ibNoDAT D FATAL("CACHE"_".DAT has disappeared.") Q
+ D FATAL(+RC_" has occurred.")
+ Q
+CNT ;
+ S VOLDIR=DIR
+ S RC=$$ZU(IBUPass,CNTINU,DEV) G RC
+DPX  
+ S OK=1 S RC=$$INLOGOR(DIR,2,1,1) I (RC'=-2)&(RC<0) D 
+ . D msgout($C(13,10)_"["_$s(RC=+RC:"I/O Error",1:"Error "_$p(RC,",",2,*))_" occurred while processing directory '"_DIR_"' - Check the log]"_$C(13,10),FORCE)
+ . S OK=0
+ Q
+ ; end of DIRPASS
+ ;------------------------------------------------------------------
+FATAL(msg) ;
+ S OK=0 d msgout($C(7)_$C(13,10)_"["_msg_" Fatal Error]"_$C(13,10),FORCE)
+ Q
+ ;
+NEXTVOL(prompt) ;
+ n BEG s BEG=$H,VOL=VOL+1
+ S BUFCOUNT=$P(RC,",",2)
+ i NOINPUT d   s OK=0 q                                       ;JAO264+
+ . d msgout($C(13,10)_"End of volume detected",FORCE)
+ . d msgout($C(13,10)_"Terminal input not enabled-Terminating backup",FORCE)
+ d msgout($C(13,10)_prompt,FORCE)                                   ;JAO266
+NXTVOL1 d msgout($C(13,10)_" Where should output continue?",FORCE)         ;JAO266
+ D GETDEV Q:'OK  D VOLLABEL G NXTVOL1:'OK
+ S LOST=LOST+$$TIME($H,BEG) ; count the lost time
+ Q
+DISMOUNT(dev,nounload) ; Dismount a tape volume
+ i $$ZU(148,2,dev,nounload) ; Unload can be inhibited
+ q
+SetNames(D) N M
+ S M=D_"CACHE"_".",INC=M_"INC",IND=M_"IND",INE=M_"INE",INF=M_"INF"
+ Q
+ ; subtract two times in $H format, and return the diff in # seconds
+TIME(a,b) q (a-b*24*3600)+$p(a,",",2)-$p(b,",",2)
+INLOGOR(DIR,SOURCE,TARGET,DISPOSE) ;Adapter, present same i'face for VAX & UX
+ n rc
+ try {
+   s rc=$ZU(31,DIR,SOURCE,TARGET,DISPOSE)
+ } catch {
+   s rc=-1_","_$ze
+   s $ze=""
+ }
+ q rc
+FILENORM(NAME) ;Return normalized version of NAME
+ S OK=1,$ZT="FNERR"
+ i ($zversion(1)=1) N MTDEV S MTDEV=$$OSDEVICE(NAME) I MTDEV'="" D  Q MTDEV
+ . s ISREG=0
+ . W !,"Cache device numbers are not legal here.  Substituting ",MTDEV
+ i '($zversion(1)=1) N MTDEV,DIR S MTDEV=$$OSDEVICE(NAME) I MTDEV'="" S ISREG=0 Q NAME
+ i ($zversion(1)=1) S DIR=NAME
+ i ($zversion(1)=1) q $ZU(12,DIR)
+ i ($zversion(1)=2),$E(NAME,1,2)="\\" S L=$$CheckForTape(NAME) I L'="" S ISREG=0 Q L
+ i ($zversion(1)=2) S L=$L(NAME,"\"),DIR=$P(NAME,"\",1,L-1)
+ i ($zversion(1)=2) IF L>1 S DIR=DIR_"\"
+ i ($zversion(1)=2) S NAME=$ZU(12,DIR)_$P(NAME,"\",L,L),ISREG=$ZU(140,7,NAME),ISREG=$S(ISREG>0:1,ISREG=-2:1,1:0) Q NAME
+ i ($zversion(1)=3) S L=$L(NAME,"/"),DIR=$P(NAME,"/",1,L-1)
+ i ($zversion(1)=3) IF L>1 S DIR=DIR_"/"
+ i ($zversion(1)=3) S NAME=$ZU(12,DIR)_$P(NAME,"/",L,L),ISREG=$ZU(140,7,NAME),ISREG=$S(ISREG=-2:1,ISREG/32768#2:1,1:0) Q NAME
+FNERR S OK=0,ERRMSG="Not a valid device name." Q
+CheckForTape(NAME)
+ S NAME=$ZCVT(NAME,"U")
+ N I,TAPE
+ For I=47:1:62 s TAPE=$$OSDEVICE(I) I NAME=$ZCVT(TAPE,"U") S NAME=I Q
+ I NAME?2N Q NAME
+ I NAME?1"\\.\TAPE"1N Q NAME
+ Q ""
+TQUIWRITE(verbose) q $$QUIESCE(1,"buffer activity",10,verbose)
+TQUIGC(verbose) q $$QUIESCE(2,"garbage collection",10,verbose)
+TQUIDB(verbose) q $$QUIESCE(4,"database expansion",10,verbose)
+TQUIGLO(verbose) q $$QUIESCE(8,"global activity",10,verbose)
+TQUIGLOUPD(verbose) q $$QUIESCE(16,"global updates",10,verbose)
+TQUINET(verbose) q $$QUIESCE(32,"network activity",10,verbose)
+TQUIDISK(verbose) q $$QUIESCE(1+2,"disk activity",10,verbose)
+TQUIUPD(verbose) q $$QUIESCE(1+2+4+16,"update activity",10,verbose)
+TQUISYS(verbose) q $$QUIESCE(1+2+4+8,"system activity",10,verbose)
+QUIESCE(bits,text,retries,verbose,intv) ;
+ s verbose=+$g(verbose),retries=+$g(retries,-1),intv=+$g(intv,1)
+ q ($$Quiesce(bits,text,retries,verbose,intv)>0)
+Quiesce(bits,text,retries,verbose,intv) ;
+ n noWDbits  ;JO1988
+ s $zt="QUIESCEE"
+ q:$zu(51,bits) 1 ;double checking $ZU(51) is no longer necessary
+ s verbose=+$g(verbose),retries=+$g(retries,-1),intv=+$g(intv,1)
+ d msgout($c(13,10)_"WARNING: Switch is set and may affect production for up to "_(retries*intv)_" seconds."_$c(13,10)_"Waiting for "_text_" to finish...",NOFORCE)
+ f  q:'retries  h intv q:$zu(51,bits)  s retries=retries-1 i retries#5=0 d msgout(".",NOFORCE)
+ s noWDbits=1
+ s:$s($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0):''$zu(59,0),1:0) noWDbits=noWDbits+2
+ s noWDbits=$zboolean(bits,noWDbits,2)  ;2 = x & ~ y
+ if '$ZU(51,bits),bits'=1,$zboolean(bits,1,1),$zu(51,noWDbits) {
+	 d msgout($c(13,10)_"System is idle except WD is still running."_$c(13,10)_"     Waiting up to 2 minutes for WD to finish",NOFORCE)
+	 f i=1:1:120 q:$ZU(51,bits)  h 1 if i#5=0 d msgout(".",NOFORCE)
+	 if $ZU(51,bits) s retries=1 ;signal success
+ }
+ d msgout($s(retries:" ready.",1:" abort. "_$$quiescefailmsg(bits))_$c(13,10),NOFORCE)
+ q retries
+quiescefailmsg(bits)
+ N ret,clu,clumsg s ret="",clu=$zb(bits,512+256+128,1),clumsg=""
+ if $zb(clu,128,1)||($zb(clu,(256+512),1)=(256+512)) s clu=128,clumsg=" (cluster wide)"
+ if $zb(clu,512,1) s clumsg=" (cluster master only)"
+ if $zb(clu,256,1) s clumsg=" (cluster slaves only)"
+ if $zb(bits,1,1)&&('$ZU(51,clu+1)) S ret=ret_"write daemon"_clumsg_","
+ if $zb(bits,2,1)&&('$ZU(51,clu+2)) S ret=ret_"garbage collector"_clumsg_"," 
+ if $zb(bits,4,1)&&('$ZU(51,clu+4)) S ret=ret_"file expander"_clumsg_","
+ if $zb(bits,8,1)&&('$ZU(51,clu+8)) S ret=ret_"global reference"_clumsg_","
+ if $zb(bits,16,1)&&('$ZU(51,clu+16)) S ret=ret_"global update"_clumsg_","
+ if $zb(bits,32,1)&&('$ZU(51,clu+32)) S ret=ret_"client-side network connections"_clumsg_","
+ if $zb(bits,64,1)&&('$ZU(51,clu+64)) S ret=ret_"network server activity"_clumsg_","
+ if ret'="" s ret="Quiesce failed reason: "_$e(ret,1,*-1) d $zu(9,"",ret,1,2) i $d(^rOBJ("ZQuiesceFail")) d ^ZQuiesceFail
+ Q ret
+QUIESCEE s $zt="" d $zu(9,"","QUIESCE: "_$ze,(1>0),1) q -1 ;0
+CluQuiet(switch,target,timeout)
+ n flags,rc
+ i $g(switch)-10,$g(switch)-13 ztrap "SWITCH"
+ n targetmsg s target=$g(target)
+ i target=1 s target=256,targetmsg=" on cluster slave members"
+ e  i target=2 s target=512,targetmsg=" on cluster master"
+ e  s target=512+256,targetmsg=" cluster wide"
+ s flags=1+2+4+$s(switch=10:8,1:16)
+ s rc=$$Quiesce(flags+target,$s(switch=10:"system activity",1:"update activity")_targetmsg,$g(timeout,10),'$g(QUIET,$g(QUIETLY)))
+ i rc<0 ztrap "Abort"
+ q rc
+quietsw(switch,timeout) ;quiesce activities w/ timeout after setting switch 10 or 13
+ n flags,rc
+ i $g(switch)-10,$g(switch)-13 ztrap "SWITCH"
+ s flags=1+2+4+$s(switch=10:8,1:16)
+ i CLUBACKUP s flags=flags+128
+ s rc=$$Quiesce(flags,"disk cleanup",$s($g(timeout)="":30,1:timeout),'$g(QUIET))
+ i rc<0 ztrap "Abort"
+ q rc
+hibernate(switch,released,timeo) ;
+ i +$g(released) d msgout($c(13,10)_"Switch "_switch_" is released.",NOFORCE)
+ n hibtime s hibtime=$s(timeo>3:10,timeo>2:1,timeo>1:.1,timeo>0:.01,1:10)
+ d msgout($c(13,10)_"Backup will hibernate for "_hibtime_" second(s) and try again."_$c(13,10)_"You may abort Backup via Ctrl-C. ",NOFORCE) 
+ i hibtime<1 h hibtime
+ e  n i f i=1:1:hibtime h 1 d msgout(".",NOFORCE)
+ d msgout($c(13,10),NOFORCE)
+ q
+ENQ10 ;
+ n t s t=$g(quietimeout,60) s:t>0 t=(t+9)\10 ;rounded up to 10 sec
+ s $zt="ENQ10e"
+ i CLUBACKUP d  q
+ . f  q:$$CLU^SWSET(10,1,ALRDY10,$g(QUIETMASTERONLY))  s t=t-1 zt:'t "Abort" d hibernate(10,'ALRDY10,t)
+ i ALRDY10 q:$$quietsw(10)  zt "Abort"
+ f  S %SW=10,%VAL=1 D INT^SWSET  q:$$quietsw(10)  s t=t-1 zt:'t "Abort" d DEQ10,hibernate(10,1,t)
+ Q
+ENQ10e s $zt="" d DEQ10 ztrap $ze
+DEQ10 ;
+ i CLUBACKUP,$ZU(95,10,0)  ; Clear SW10 clusterwide
+ i 'ALRDY10 s %SW=10,%VAL=0 D INT^SWSET
+ Q
+ENQ13 ;
+ n t s t=$g(quietimeout,60) s:t>0 t=(t+9)\10 ;rounded up to 10 sec
+ s $zt="ENQ13e"
+ i CLUBACKUP d  q
+ . f  q:$$CLU^SWSET(13,1,ALRDY13)  s t=t-1 zt:'t "Abort" d DEQ13,hibernate(13,'ALRDY13,t)
+ i ALRDY13 q:$$quietsw(13)  zt "Abort"
+ f  S %SW=13,%VAL=1 D INT^SWSET  q:$$quietsw(13)  s t=t-1 zt:'t "Abort" d DEQ13,hibernate(13,1,t)
+ Q
+ENQ13e s $zt="" d DEQ13 zq 1 g:$zt'="" @$zt q
+DEQ13 ;
+ i CLUBACKUP,$ZU(95,13,0)  ; Clear SW13 clusterwide
+ i 'ALRDY13 s %SW=13,%VAL=0 D INT^SWSET
+ Q
+HOLDWD(dir) ;suspend write daemon (dir may be passed as an array)
+ n n
+ i $zu(182,1,0) ;clear any remaining backup request
+ f  q:'$zu(182,0)  h 1  ;wait until write daemon runs again
+ i $d(dir)<10 d $zu(52,9,dir,1) d $zu(182,2,0,+$zu(49,dir)) s n=1 i 1
+ e  s dir="" f n=0:1 s dir=$o(dir(dir)) q:dir=""  d $zu(52,9,dir,1) d $zu(182,2,n,+$zu(49,dir))
+ i $zu(182,1,n)  ;set number of databases to back up
+ f  q:$zu(182,0)  h 1  ;wait until write daemon suspends
+ q
+FREEWD ;unsuspend write daemon
+ i $zu(182,1,0)
+ q
+msgout(aaamess,flag) ;
+         s flag=$g(flag,1) ; default to FORCE
+         W *-1            ;Flush the input buffer                     ;SSG012
+         q:'$L(aaamess)   ; Avoid argumentless writes...
+         i $g(logfile)'="" u logfile w aaamess
+         u 0
+         q:flag=3  ; 1 = FORCE, FORCE, 2 = NOFORCE, 3 = LOGONLY
+         i '$G(INTERNAL,0)!('$G(NOINPUT,0)&(flag=1!'$G(QUIET,0))) w aaamess
+         i $g(gui) D  
+         . s return=$$IjcMsg^%Wprima("DI"_aaamess) ; Retval might =  cancel msg
+         . i return="CANCEL" d  
+         . . i $$IjcMsg^%Wprima("DI"_$c(13,10)_"Abort received!"_$c(13,10))
+         . . zt "Abort"
+         u 0 
+         q
+timestmp(flag) 
+         n msg,%TS,%TN
+         s msg="TIMESTAMP: "
+         s %DN=+$H d INT^%DO
+         s msg=msg_%DS
+         s %TN=$P($h,",",2) d ^%TO
+         s msg=msg_" "_%TS
+         d msgout($c(13,10)_msg_$c(13,10))
+         q
+OSDEVICE(mdevice,new) ;osdevice + range check, pad input, strip output.
+ s mdevice=+mdevice q:mdevice<47 ""  q:mdevice>62 ""
+ i $d(new) s new=$$zpad(new,32)
+ q $$zstrip($$osdevice(mdevice,.new))
+osdevice(mdevice,new) ;"Raw" osdevice
+ n adr,old,size,where,charsize
+ s $ZT="osdeverr"
+ s charsize=$$charsize^%Wprim() ; check size one char
+ s size=32,adr=(mdevice-47)*(size*charsize)+$ZU(40,2,28),where=-2
+ s old=$v(adr,where,-size_"w")
+ i $d(new) v adr:where:-size_"w":new
+ q old
+osdeverr q ""
+zstrip(x) ;Return x with ASCII NUL's removed
+ q $tr(x,$c(0),"")
+zpad(x,len) ;x, maybe truncated, NUL-padded to length len, one NUL guaranteed
+ n zeroes
+ s zeroes=$j("",len),zeroes=$tr(zeroes," ",$c(0)) ;String of len NUL's
+ s x=$e(x,1,len-1) ;Silently truncate x if necessary
+ s $e(zeroes,1,$l(x))=x
+ q zeroes
+ZU(A,B,C,D,E,F,G,H,I,J,K,L,M,N,P) ;so needn't change $$ZU's to $ZU's
+ IF '$D(B) Q $ZU(A)
+ IF '$D(C) Q $ZU(A,B)
+ IF '$D(D) Q $ZU(A,B,C)
+ IF '$D(E) Q $ZU(A,B,C,D)
+ IF '$D(F) Q $ZU(A,B,C,D,E)
+ IF '$D(G) Q $ZU(A,B,C,D,E,F)
+ IF '$D(H) Q $ZU(A,B,C,D,E,F,G)
+ IF '$D(I) Q $ZU(A,B,C,D,E,F,G,H)
+ IF '$D(J) Q $ZU(A,B,C,D,E,F,G,H,I)
+ IF '$D(K) Q $ZU(A,B,C,D,E,F,G,H,I,J)
+ IF '$D(L) Q $ZU(A,B,C,D,E,F,G,H,I,J,K)
+ IF '$D(M) Q $ZU(A,B,C,D,E,F,G,H,I,J,K,L)
+ IF '$D(N) Q $ZU(A,B,C,D,E,F,G,H,I,J,K,L,M)
+ IF '$D(P) Q $ZU(A,B,C,D,E,F,G,H,I,J,K,L,M,N)
+           Q $ZU(A,B,C,D,E,F,G,H,I,J,K,L,M,N,P)
+MORE Q      ;JAO580 added 

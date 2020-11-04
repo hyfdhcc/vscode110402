@@ -1,0 +1,438 @@
+ROUTINE mgstat [Type=INT]
+mgstat(dly,cnt,reqname,pagesz)
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /*   Utility documentation
+ Performance monitoring routine.  Filename is now generated, and follows the form
+ hostname_configname_yyyymmdd_hhmm.mgst. On VMS due to filename length restrictions
+ the configname may be truncated and the hostname may be missing or truncated.
+ File output is csv format and set for a companion Excel analyser program.
+ Column names must therefore be strictly alphanumeric characters only. %ages use "p"
+ Columns must be single figures, most data is output in per second rates
+ (wdqsiz, wdphase are obvious exceptions).
+ This routine can be imported and run unchanged on any version of Cache from 5.0.1 upwards.
+ Columns:
+ Date, Time, Local Global References, Remote Global References, Ratio of Local to Global refs,
+ Physical Reads, Ratio of logical to physical reads, 
+ Global Updates, Remote Updates, Routine calls, Remote Routine Calls, Routine loads&saves, Remote Routine loads&saves,
+ Physical writes, Write Daemon Queue Size, 5.1 and up - Cachetemp wd queue size,
+ Write Daemon Phase, WIJ writes - 5.2 and up, Routine Cache Misses - 2007.1 and up, 
+ Journal writes,  5.1 and up Write Daemon pass, IJUCnt, IJULock
+ Seize columns: are in sets of 3, the seizes, Nseizes and Aseizes.
+ For 5.x the default seizes are Global, Routine and Object
+ For 2007+ the default seizes are Global, Object and Per-BDB.
+ For 2010+ the default product setting is that no seize statistics are collected at all, 
+ so if you need these you will need to re-enable them before running mgstat.  Call WRC Performance team for details.
+ However these can be changed
+  - find the line in init section commented "// seize statistics"
+  - two variables sznames and sztag are used, keep these in step
+    sznames is a comma separated list of the actual counters required (from $zu(162,0)
+    sztag is the display name for the columns in the file
+      for column alignment, use only 3 character tagnames.
+ All the resource names are (as of 2013.2): tags on following line.
+ Pid,Routine,Lock,Global,Dirset,SatMap,BlSplit,Journal,Stat,GfileTab,Unused,Misc,LockDev,ObjClass,GmemHeap,IjcDev,TtyHash,Unused,Unused,StrTab,CPT,RCT,ECP_ALL_C,ECP_S_BLK,ECP_S_SES,ECP_S_WORK,ECP_S_JRN,EnqEvt,EnqJrnIO,Mirror,Expand,Volqueue,iKnow,WIJEnc,Unused,Unused,Unused,Unused,Unused,Unused,Unused,Unused,Unused,Unused,Unused,Unused,Unused,Unused,LockHTAB,LockLHB,TransCB,StrTab,Per-BDB,NetBig_C,NetBig_S,NetBig_R,NetBig_L
+ Pid,Rtn,Lck,Gbl,Dir,Sat,Bsp,Jrn,Stt,Gft,Unu,Msc,Lck,Obj,GmH,IJC,TTY,Unu,Unu,Str,CPT,RCT,ECP,ESb,ESs,ESw,ESj,Evt,EJI,Mir,Exp,Vlq,iKw,WIJ,Unu,Unu,Unu,Unu,Unu,Unu,Unu,Unu,Unu,Unu,Unu,Unu,Unu,Unu,LHt,LHB,TCB,Str,BDB,NBC,NBS,NBR,NBL
+ Run using format: %SYS> job ^mgstat([sampletime],[cnt])
+ where sampletime is the interval at which data is recorded, cnt is the number of data points to gather
+ */
+ ;
+ ;
+ n (dly,cnt,reqname,pagesz)
+ d init
+ d loop
+ q
+init
+ s $zt="initerr" ; for class errors mainly??? the vers exist in 4.1
+ d GetVersionInfo(.Majver,.Minver,.OS)
+ s pmode=($zj\1#2),fileok=1
+ i Majver<5 w "Sorry, this won't work on this version of Cache",! q  // not supported on pre-5.0 systems.
+ s reqname=$g(reqname),logdir=$g(^%SYS("PTools","logdir")) i logdir="" s logdir=$g(^pButtons("logdir"))  ; logdir is canonical (prevalidated)
+ i reqname="" { // generate the filename (default use!)
+	s svrname=$p($zu(54,0),"."),config=$p($zu(86),"*",2)
+	s fdate=$zd($h,8),ftime=$tr($zt($p($h,",",2),2),":",""),fname=fdate_"_"_ftime_".mgst"
+	i OS["VMS" { ; VMS has filename length restrictions
+		s cfglen=$l(config)
+		i cfglen>16 { s fname=$e(config,1,18)_"_"_fname }
+		else { s fname=$e(svrname,1,17-cfglen)_"_"_config_"_"_fname }
+	} else {
+		s fname=svrname_"_"_config_"_"_fname
+	}
+	s hfname=fname
+	s fname=logdir_fname
+ } else { // reqname not null
+	s plat=$zversion(1),dirchk=$s(plat=1:"]",plat=2:"\",1:"/")
+	i (reqname[dirchk)||(logdir="") { s (fname,hfname)=reqname }
+	else {
+		if reqname[logdir { s fname=reqname,hfname=$p(reqname,logdir,2) }
+		else { s hfname=reqname,fname=logdir_hfname }
+	}
+ }
+ s (odly,dly)=$g(dly,2),(lcnt,cnt)=$g(cnt,10) i dly>10 s dly=10
+ i cnt=-1 { s lcnt=99999 } else { i odly'=dly { s durn=cnt*odly,lcnt=durn+dly-1\dly } }
+ i pmode { s pagesz=$g(pagesz,0) i pagesz'=0 { i pagesz<5 s pagesz=5 } }
+ ; set common memory offsets
+ s jrnbase=$ZU(40,2,94),maxval4=4294967295
+ s wdwchk=$ZU(40,2,146),wdphaseoff=$ZU(40,2,145)
+ s wdcycle=$ZU(79,1),stilen=$zu(40,0,1),szctrs=1
+ s (globufs,glostr)=$v($ZU(40,2,135),-2,stilen)/512 f i=1:1:5  { s tmp=$v($ZU(40,2,135)+(i*stilen),-2,stilen)*(2**(1+i))/1024,globufs=globufs+tmp,glostr=glostr_"^"_tmp } s globufs=globufs_"MB:"_glostr
+ if Majver>2008||((Majver=2008)&&(Minver>1)) { s roustr=$tr($system.Util.RoutineBuffers(),",","^"),roubufs=0 f i=1:1:$l(roustr,"^") { s roubufs=roubufs+$p(roustr,"^",i) } s roubufs=roubufs_"MB:"_roustr }
+ else {
+	i (Majver=5)&&(Minver<1) { s rbufsiz=32,rbstr=",routinebuffersize=assumed 32K" } else { s rbufsiz=$v($zu(40,2,164),-2,4)+240\1024,rbstr=",routinebuffersize="_rbufsiz_"K" }
+	s roubufs=$fn($V($zu(40,2,26),-2,stilen)*rbufsiz/1024,"",0)_"MB"_rbstr
+ }
+ s ncpus=$system.Util.NumberOfCPUs()
+ if Majver>2000 { // really > 5.2
+ 	s sznames="Global,ObjClass,Per-BDB",sztag="Gbl,Obj,BDB",szstr=$$GetSzctr(sznames)  // seize statistics
+ 	if Majver>2008 { 
+		if Majver>2009 {
+			s szctrs=$zu(69,74) ;0 for off, 1 for on - new in 2010.x - chg for API in 2011
+		}
+		s $zt="initcpuerr"
+		s ncpus=ncpus_":"_$$GetArchChipsCores()  ;Arch^Chips^Cores
+initcpuerr ;
+		k n
+		s $zt=""
+ 	}
+ } else {
+	s szstr="4,2,14",sztag="Gbl,Rou,Obj" // 5.2 and lower - glo,rou,obj
+ }
+ i szstr="" { s nszctrs=0 } else { s nszctrs=szctrs*$l(szstr,",") }
+ s numsz=nszctrs*3 // Sz, Nsz, Asz for each one.
+ ; decide on offsets where they move between versions...
+ i (Majver=5)&&(Minver<1) {
+	;5.0 specific - no zu190!!! - oldstyle gather() and wd info
+	s getwdq="getwdinf50()",maxvalglo=maxval4,glocnt=11,gmethod=0,roubase=$zu(40,2,1)
+	s bdb0off=$ZU(40,2,128),bdbbase=$V($ZU(40,2,21),-2,"P"),bdbsiz=$ZU(40,29,0),wdqsizoff=$ZU(40,29,2),off=$V(bdb0off,-2,4),vwlocn=bdbbase+wdqsizoff
+	s ppgstats=0
+ } else {
+	s getwdq="getwdinfzu()",numbuff=$zu(190,2),ijulock=1,glocnt=$l($zu(190,6,1),","),gmethod=1
+	s ppgstats=glocnt'<20
+ 	i $zu(40,0,76)=4 { s maxvalglo=maxval4 } else { s maxvalglo=18446744073709551610 }
+ 	; wij only appears in >= 5.1... but handled by glocnt
+ 	; routine cache misses appears in >= 2007.1 but handled by glocnt
+ 	i glocnt>14 s glocnt=14
+ }
+ s ecpconncol=glocnt+numsz+2,alen=ecpconncol+5,maxeccon=$system.ECP.MaxClientConnections() i 'maxeccon s alen=ecpconncol-1
+ o fname:"AWS":5
+ i '$T s fileok=0 w "unable to open output file ("_fname_")",!
+ e  d heading(fname)
+ i pmode&&'pagesz d heading(0)
+ q
+initerr
+ ; handle init errs
+ q
+loop
+ d gather(.oldval,gmethod)
+ f ii=1:1:lcnt {
+ 	g:(cnt=-1)&&$d(^zmgstat(reqname,"stop")) End
+ 	h dly
+	d gather(.newval,gmethod)
+	d diffandfix()
+	i fileok u fname d output
+	i pmode { u 0 i pagesz&&(ii-1#pagesz=0) { d heading(0) } d output }
+ }
+End i fileok u fname w ! c fname i (reqname'="")&&($d(^zmgstat(reqname))) k ^zmgstat(reqname)
+ q
+gather(array,usezu)
+ i usezu {
+	s zustats1=$zu(190,6,1) ; glostat
+	For i=1:1:glocnt S array(i)=$P(zustats1,",",i)
+ } else {	; old (5.0) glostat, gloref,glorefclient,logrd,phyrd,phywr,gloset,glosetclient,roulines
+	for i=1:1:glocnt s array(i)=$v((i-1)*4+roubase,-2,4) ;;;incomplete!!???10/22
+ }
+ d @getwdq,getwdp()
+ s i=glocnt,array($i(i))=$v(jrnbase,-2,4) ; jrnwrites
+ for jsz=1:1:nszctrs { s j=$p(szstr,",",jsz),szstat=$zu(162,3,j),array($i(i))=$p(szstat,","),array($i(i))=$p(szstat,",",2),array($i(i))=$p(szstat,",",3) }
+ i maxeccon s estats=$p($system.ECP.GetProperty("ClientStats"),",",1,21),array($i(i))=+$system.ECP.NumClientConnections(),array($i(i))=$p(estats,",",2),array($i(i))=$p(estats,",",6),array($i(i))=$p(estats,",",7),array($i(i))=$p(estats,",",19),array($i(i))=$p(estats,",",20)
+ i ppgstats s array($i(i))=$p(zustats1,",",20),array($i(i))=$p(zustats1,",",21)
+ q
+diffandfix() ; note - this does not work if someone zeroed the counters manually
+ f i=1:1:glocnt {
+	i newval(i)<oldval(i) {
+		s dispval(i)=(maxvalglo-oldval(i)+newval(i))\dly
+		i dispval(i)>1000000000 s dispval(i)=newval(i)\dly
+	} else {
+		s dispval(i)=(newval(i)-oldval(i))\dly
+	}
+	s oldval(i)=newval(i)
+ }
+ s rdratio=$s(dispval(8)=0:0,1:$num(dispval(7)/dispval(8),2))
+ s grratio=$s(dispval(6)=0:0,1:$num(dispval(5)/dispval(6),2))
+ i maxeccon s dispval(ecpconncol)=newval(ecpconncol)
+ f i=glocnt+1:1:ecpconncol-1,ecpconncol+1:1:alen+$s(ppgstats:2,1:0) {
+	i newval(i)<oldval(i) {
+		s dispval(i)=(maxval4-oldval(i)+newval(i))\dly
+		i dispval(i)>1000000000 s dispval(i)=newval(i)\dly
+	} else {
+		s dispval(i)=(newval(i)-oldval(i))\dly
+	}
+	s oldval(i)=newval(i)
+ }
+ if nszctrs>0 {
+	f i=glocnt+2:3:glocnt+numsz-1 {
+		i 'dispval(i) { 
+			s (dispval(i+1),dispval(i+2))="0"
+		} else {
+			s dispval(i+1)=$num(dispval(i+1)/dispval(i)*100,2)
+			s dispval(i+2)=$num(dispval(i+2)/dispval(i)*100,2)
+		}
+	}
+ }
+ q
+output
+ k nodisp
+ if $I=$P merge nodisp=NODisp
+ w !,$zd($h)_", "_$zt($p($h,",",2))
+ w:'$G(nodisp(1)) ","_$j(dispval(5),9)
+ w:'$G(nodisp(2)) ","_$j(dispval(6),9)
+ w:'$G(nodisp(3)) ","_$j(grratio,8)
+ w:'$G(nodisp(4)) ","_$j(dispval(8),8)
+ w:'$G(nodisp(5)) ","_$j(rdratio,8)
+ w:'$G(nodisp(6)) ","_$j(dispval(10),8)
+ w:'$G(nodisp(7)) ","_$j(dispval(11),9)
+ w:'$G(nodisp(8)) ","_$j(dispval(1),8)
+ w:'$G(nodisp(9)) ","_$j(dispval(2),9)
+ w:'$G(nodisp(10)) ","_$j(dispval(3),8)
+ w:'$G(nodisp(11)) ","_$j(dispval(4),8)
+ w:'$G(nodisp(12)) ","_$j(dispval(9),8)
+ w:'$G(nodisp(13)) ","_$j(wdqsz,8)
+ i '$G(nodisp(14)),$d(numbuff) w ","_$j(twdq,8)
+ w:'$G(nodisp(15)) ","_$j(wdphase,8) 
+ i glocnt>12 w:'$G(nodisp(16)) ","_$j(dispval(13),8) 
+ i glocnt>13 w:'$G(nodisp(17)) ","_$j(dispval(14),8)
+ w:'$G(nodisp(18)) ","_$j(dispval(glocnt+1),8) 
+ s icnt=1
+ f i=1:1:numsz {
+     ; global/rou/obj nseize/aseize are nodisp-100+
+     ; and start at dispval(glocnt+2) and go up...
+	 w:'$G(nodisp(100+icnt)) ","_$j(dispval(i+glocnt+1),8) 
+	 s icnt=icnt+1
+ }
+ s icnt=0
+ f i=glocnt+numsz+2:1:alen {
+     ; ECP are nodisp 19-24 and start at glocnt+numsz+1 and go up...
+	 w:'$G(nodisp(19+icnt)) ","_$j(dispval(i),8) 
+	 s icnt=icnt+1
+ }
+ i $d(ijulock) {
+	 w:'$G(nodisp(25)) ","_$j(wdpass,8)
+	 w:'$G(nodisp(26)) ","_$j(ijucnt,8)
+	 w:'$G(nodisp(27)) ","_$j(ijulock,8)
+ }
+ i ppgstats {
+	 ; PPG are nodisp 28,29 and start at alen+1
+	 f i=0,1 w:'$G(nodisp(28+i)) ","_$j(dispval(alen+i+1),8)
+ }
+ q
+   ;External entry point where terminal display is limited to
+   ;132 columns but output file contains full set of stats. You
+   ; can choose which columns you want.
+   ;  0 - display column in output
+   ;  1 - don't display column 
+dsp132(dly,cnt,reqname,pagesz)  ; 
+ n (dly,cnt,reqname,pagesz)
+ s NODisp(1)=0    ; Glorefs
+ s NODisp(2)=1    ; RemGrefs
+ s NODisp(3)=0    ; GRratio
+ s NODisp(4)=0    ; PhyRds
+ s NODisp(5)=1    ; Rdratio
+ s NODisp(6)=0    ; Gloupds
+ s NODisp(7)=1    ; RemGupds
+ s NODisp(8)=0    ; Rourefs
+ s NODisp(9)=1    ; RemRrefs
+ s NODisp(10)=1   ; RouLaS
+ s NODisp(11)=1   ; RemRLaS
+ s NODisp(12)=0   ; PhyWrs
+ s NODisp(13)=0   ; WDQsz 
+ s NODisp(14)=1   ; WDtmpq
+ s NODisp(15)=0   ; WDphase 
+ s NODisp(16)=1   ; WIJwri 
+ s NODisp(17)=1   ; RouCMs
+ s NODisp(18)=0   ; Jrnwrts
+ s NODisp(19)=1   ; ActECP
+ s NODisp(20)=1   ; Addblk
+ s NODisp(21)=1   ; PrgBufL
+ s NODisp(22)=1   ; PrgSrvR
+ s NODisp(23)=1   ; BytSnt
+ s NODisp(24)=1   ; BytRcd
+ s NODisp(25)=0   ; WDpass
+ s NODisp(26)=0   ; IJUcnt
+ s NODisp(27)=0   ; IJULock
+ s NODisp(28)=0   ; PPGrefs
+ s NODisp(29)=0   ; PPGupds
+ ; seizes change w/version now
+ s NODisp(101)=1  ; GblSz
+ s NODisp(102)=1  ; pGblNsz
+ s NODisp(103)=1  ; pGblAsz
+ s NODisp(104)=1  ; RouSz/ObjSz
+ s NODisp(105)=1  ; ''pNsz
+ s NODisp(106)=1  ; ''pAsz
+ s NODisp(107)=1  ; ObjSz/BDBSz
+ s NODisp(108)=1  ; ''pNsz
+ s NODisp(109)=1  ; ''pAsz
+ d init
+ d loop
+ q
+heading(file) 
+ u file
+ i file'=0 w hfname_","_"MGSTATv2.9a"_",wdcycle="_wdcycle_",globalbuffers="_globufs_",routinebuffers="_roubufs_",numberofcpus="_ncpus_",productversion="_$zv
+ k nodisp
+ if file=0 merge nodisp=NODisp
+ w !,"Date,       Time    "
+ w:'$G(nodisp(1)) ",  Glorefs"
+ w:'$G(nodisp(2)) ", RemGrefs"
+ w:'$G(nodisp(3)) ", GRratio"
+ w:'$G(nodisp(4)) ",  PhyRds"
+ w:'$G(nodisp(5)) ", Rdratio"
+ w:'$G(nodisp(6)) ", Gloupds"
+ w:'$G(nodisp(7)) ", RemGupds"
+ w:'$G(nodisp(8)) ", Rourefs"
+ w:'$G(nodisp(9)) ", RemRrefs"
+ w:'$G(nodisp(10)) ",  RouLaS"
+ w:'$G(nodisp(11)) ", RemRLaS"
+ w:'$G(nodisp(12)) ",  PhyWrs"
+ w:'$G(nodisp(13)) ",   WDQsz" 
+ i '$G(nodisp(14)),$d(numbuff) w ",  WDtmpq"
+ w:'$G(nodisp(15)) ", WDphase" 
+ i '$G(nodisp(16)),(glocnt>12) w ",  WIJwri" 
+ i '$G(nodisp(17)),(glocnt>13) w ",  RouCMs"
+ w:'$G(nodisp(18)) ", Jrnwrts"  ;glocnt+1
+ s icnt=100
+ f i=1:1:nszctrs {
+	s rsc=$p(sztag,",",i)
+ 	w:'$G(nodisp(icnt+i)) ",   "_rsc_"Sz"
+ 	w:'$G(nodisp(icnt+i)) ", p"_rsc_"Nsz"
+ 	w:'$G(nodisp(icnt+i)) ", p"_rsc_"Asz"
+ 	s icnt=icnt+3
+ }
+ i maxeccon {
+	 w:'$G(nodisp(19)) ",  ActECP"
+	 w:'$G(nodisp(20)) ",  Addblk"
+	 w:'$G(nodisp(21)) ", PrgBufL"
+	 w:'$G(nodisp(22)) ", PrgSrvR"
+	 w:'$G(nodisp(23)) ",  BytSnt"
+	 w:'$G(nodisp(24)) ",  BytRcd"
+ }
+ i $d(ijulock) {
+	 w:'$G(nodisp(25)) ",  WDpass"
+	 w:'$G(nodisp(26)) ",  IJUcnt"
+	 w:'$G(nodisp(27)) ", IJULock"
+ }
+ i ppgstats {
+	 w:'$G(nodisp(28)) ", PPGrefs"
+	 w:'$G(nodisp(29)) ", PPGupds"
+ }
+ q
+getwdinfzu()
+ s twdq=0 f b=1:1:numbuff { s twdq=twdq+$p($zu(190,2,b),",",10) }
+ s wdinf=$zu(190,13),wdpass=$p(wdinf,","),wdqsz=$p(wdinf,",",2),twdq=twdq-wdqsz i twdq<0 s twdq=0
+ s misc=$zu(190,4),ijulock=$p(misc,",",4),ijucnt=$p(misc,",",5)
+ q
+getwdinf50()
+ s wdqsz=0,last=maxval4
+ f i=0:1:5 d  q:off=maxval4
+ . s off=$V(bdb0off+(i*4),-2,4)
+ . q:(off=last)!(off=maxval4)
+ . s wdqsz=wdqsz+$V(vwlocn+off,-3,4)
+ . s last=off
+ Q
+getwdp()
+ s wdphase=0 q:'$V(wdwchk,-2,4)
+ q:'wdphaseoff
+ s wdphase=$V(wdphaseoff,-2,4)
+ Q
+version()	q "MGSTATv2.9a"
+start(dly,rqname)
+ n (dly,rqname)
+ q:($l(rqname)=0) 0
+ q:dly<1 0
+ s $zt="chkjob"
+ i rqname'["." s rqname=rqname_".mgst"
+ s cj=$g(^zmgstat(rqname),1)
+ s stat=$v(-1,cj)
+ i stat["mgstat" q 0
+ k ^zmgstat(rqname)
+carryon
+ j ^mgstat(dly,-1,rqname)::5
+ i '$T q 0
+ s ^zmgstat(rqname)=$zc
+ q $zc
+chkjob ; error trap for start
+ i $ze["NOJOB" g carryon
+ q 0
+stop(rqname) ;
+ q:($l(rqname)=0) 0
+ i rqname'["." s rqname=rqname_".mgst"
+ i $d(^zmgstat(rqname)) s ^zmgstat(rqname,"stop")=1 q 1
+ q 0
+GetArchChipsCores() private {  ;Returns <Arch>^<# Chips>^<# Cores>
+    if $D(^oddDEF("%SYSTEM.CPU")) {
+	   s n=##class(%SYSTEM.CPU).%New() 
+	   s Arch=n.Arch
+	   s nChips=n.nChips
+	   s nCores=n.nCores
+    } else {
+	   ; These are all here in case we want more later
+ 	   Set Arch=$zu(204,1)
+	   Set Model=$zu(204,2)
+	   Set Vendor=$zu(204,3)
+	   Set nThreads=$zu(204,4)
+	   Set nCores=$zu(204,5)
+	   Set nChips=$zu(204,6)
+	   Set nThreadsPerCore=$zu(204,7)
+	   Set nCoresPerChip=$zu(204,8)
+	   Set MTSupported=$zu(204,9)
+	   Set MTEnabled=$zu(204,10)
+	   Set MHz=$zu(204,11)	
+    }
+	quit Arch_"^"_nChips_"^"_nCores
+}
+GetVersionInfo(majver,minver,os) PRIVATE {
+    if $D(^oddDEF("%SYSTEM.CPU")) {
+ 	   s majver=$System.Version.GetMajor()
+ 	   s minver=$System.Version.GetMinor()
+	   s os=$System.Version.GetCompBuildOS()
+    } else {
+	   s zv=$ZV
+ 	   s majver=$p($p($p(zv,") ",2)," ",1),".",1)
+ 	   s minver=$p($p($p(zv,") ",2)," ",1),".",2)
+	   If zv["Windows" {
+		   Set os="Windows"
+	   } elseif zv["UNIX" {
+		   Set os="UNIX"
+	   } elseif zv["VMS" {
+		   Set os="VMS"
+	   } else {
+ 		   Set os="N/A"
+	   }
+    }
+}
+GetSzctr(Longnames) private {
+	s allsznames=$zu(162,0)_",",zuctr=""
+	f i=1:1:$l(Longnames,",") {
+		s ctr=$p(Longnames,",",i)
+		continue:(ctr="")||(ctr="Unused")
+		s nctr=$l($e(allsznames,1,$find(allsznames,ctr)),",")-1
+		continue:nctr=0
+		i zuctr="" {
+			s zuctr=nctr
+		} else {
+			s zuctr=zuctr_","_nctr
+		}
+	}
+	quit zuctr
+}

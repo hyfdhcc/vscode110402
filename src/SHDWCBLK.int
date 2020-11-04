@@ -1,0 +1,1300 @@
+ROUTINE SHDWCBLK [Type=INT]
+SHDWCBLK ;Client side receiving blocks ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/shdwcblk.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+RCVB(cli) ;
+	Set $ZT="etRCVB"
+	Set d=$$del2^%Wprim 
+ 	New blankblk 
+ 	k blankblk s $p(blankblk,$c(0),16384)=$c(0)
+	Set ip=^SYS("shdwcli",cli,"ip")
+	Set port=^SYS("shdwcli",cli,"port")
+	Set tcp="|TCP|"_port
+	Set intv=^SYS("shdwcli",cli,"intv")
+	If intv="" s intv=1  ;do not allow null interval
+	Merge xmap=^SYS("shdwcli",cli,"dbmap")
+ 	If clushdw {
+		Set fd=^SYS("shdwcli",cli,"jrnfil",^SYS("shdwcli",cli,"jrnfil"))
+	} Else {
+	 	Set fd=^SYS("shdwcli",cli,"remjrn")
+	}        
+	; "exchange name and status of the starting journal file"
+	Use tcp
+	Write (fd)_$$del2^%Wprim_$J("",MsgLenVar-$L((fd)_$$del2^%Wprim)),!
+	If USEGZIP Write *-99,!
+	s status="",%L=MsgLenVar u tcp f  r %X#%L:10 s status=status_%X,%L=%L-$l(%X) q:'%L  d:'$l(%X) ReadNone^SHDWUTIL(tcp,$name(status),MsgLenVar) i $g(^SYS("shdwcli",cli,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",cli,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" } 
+	; "status returned"
+	Set status=$P(status,d,1)
+	If +status {
+		Set portip=$p(status,",",2,3)
+		If +portip {
+			s ^SYS("shdwcli",cli,"port")=+portip,^SYS("shdwcli",cli,"ip")=$p(portip,",",2),^SYS("shdwcli",^SYS("shdwcli",cli,"clu"),"servers",$p(portip,",",1,2))="" ztrap "CURJ"
+		}
+	}
+	If 'status {
+		Quit:clushdw 
+		s shdwzerr=$$Error^%apiOBJ(1033,fd) ztrap $$traperr^SHDWUTIL(shdwzerr)
+ 	}
+	If 'clushdw {
+		Set fd=^SYS("shdwcli",cli,"locdir")_$$GFILE(fd)
+		New idx
+		Set idx=+$g(^SYS("shdwcli",cli,"jrnfil"))
+		If idx,^SYS("shdwcli",cli,"jrnfil",idx)=^SYS("shdwcli",cli,"remjrn"),
+			$g(^SYS("shdwcli",cli,"jrnfil",idx,"shdw"))=fd {
+			  ;we are continuing from last operation
+		} else {
+			Set idx=idx+1
+			Set ^SYS("shdwcli",cli,"jrnfil",idx)=^SYS("shdwcli",cli,"remjrn")
+			Set ^SYS("shdwcli",cli,"jrnfil",idx,"shdw")=fd
+			Set ^SYS("shdwcli",cli,"jrnfil")=idx ;set only after (idx) nodes are complete
+		}
+	} Else {
+		Set fd=$$newlocshd(cli)
+	}
+	Set i=$zu(78,22,fd,5) ;<0: non-journal, 0: nonexistent, >0: journal
+	If i'>0 {	; journal doesn't exist or invalid (to be recreated)
+	  Set jrnencrypt=$zu(69,68)
+	} elseif $zu(140,1,fd)<(2*65536) {
+	  Set i=-1 ;an invalid file, so we will delete it and copy it again
+	  Set jrnencrypt=$zu(69,68)
+	} ElseIf $p(i,",",2) {	; journal file is encrypted
+	  Set chan=$zu(78,5,fd,0) ; test open to verify encryption key
+	  If chan<0 {	; likely due to incompatible encryption key
+	    s shdwzerr=$$Error^%apiOBJ(1100,fd) ztrap $$traperr^SHDWUTIL(shdwzerr)
+	  } Else {	; opened OK, implying db enc key is activated 
+	    Set jrnencrypt=1
+	    If $zu(78,7,chan)
+	    Set chan=-1
+	  }
+	} Else {	; journal file not encrypted
+	  Set jrnencrypt=0 
+	}
+	Set jrnend=0
+	Set begaddr=$s(i>0:$$GEND(fd,0,.jrnend),1:0)
+	Set begblk=$s(begaddr:((begaddr-1)\16384),1:0)
+	Set ^SYS("shdwcli",cli,"jrnend")=jrnend_","_fd
+	If i=-1,$ZU(78,23,fd) ;delete the non-journal file  #;### is this correct ####
+	Set dirver=-1 ;guarantees dir block is updated at first
+	For {
+		If begaddr<0 {
+			s shdwzerr=$$Error^%apiOBJ(1038,begaddr,fd) ztrap $$traperr^SHDWUTIL(shdwzerr)
+		}
+		i '$zu(78,32,fd,2,20,16384) s shdwzerr=$$Error^%apiOBJ(1036,fd,$s($zu(140,12,fd)<0:"no file",$zu(140,12,fd,2)<0:"no access",1:"misc error")) ztrap "FILE"
+		; "check with server if new stuff has arrived"
+		For {
+			i $g(^SYS("shdwcli",cli,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",cli,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+			Use tcp
+			Write (begaddr_d_begblk_d_dirver)_$$del2^%Wprim_$J("",MsgLenVar-$L((begaddr_d_begblk_d_dirver)_$$del2^%Wprim)),!
+			If USEGZIP Write *-99,!
+			s x="",%L=MsgLenVar u tcp f  r %X#%L:10 s x=x_%X,%L=%L-$l(%X) q:'%L  d:'$l(%X) ReadNone^SHDWUTIL(tcp,$name(x),MsgLenVar) i $g(^SYS("shdwcli",cli,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",cli,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+			If $l(x,d)>4,+$p(x,d) = begaddr {
+				Set srcjrnstat=$p(x,d,4)
+				If '$p(srcjrnstat,"^",6) {
+					d ERRLOG^SHDWUTIL($$Error^%apiOBJ(1046),cli)
+				} 
+				Set endblk=+$P(x,d,2)
+				Set x=$P(x,d,1)
+			}  
+			Set:$L(x,d)>2 dirinfo=$P(x,d,3)
+			Set endblk=+$P(x,d,2)
+			Set x=$P(x,d,1)
+			Quit:begaddr<x!(begblk<endblk)!(x'?1.N)
+			Hang intv
+		}  
+		If x'?1.N {
+			; "writes header block of the old file the last time"
+			u tcp i $$SetIO^%SYS.NLS("RAW") 
+			s y="",%L=16384 u tcp f  r %X#%L:10 s y=y_%X,%L=%L-$l(%X) q:'%L  d:'$l(%X) ReadNone^SHDWUTIL(tcp,$name(y),16384) i $g(^SYS("shdwcli",cli,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",cli,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+			u tcp i $$SetIO^%SYS.NLS("UnicodeLittle") 
+			i jrnencrypt s y=$zu(78,89,y) 
+			Use fd:0
+			Write y
+			Close fd
+			Set begaddr=0
+			Set begblk=0
+			Set jrnencrypt=$zu(69,68)
+			Set ^SYS("shdwcli",cli,"jrnfil",^SYS("shdwcli",cli,"jrnfil"),"jrnend")=+^SYS("shdwcli",cli,"jrnend")
+			If 'clushdw {
+				Set remjrn=x
+				Set fd=^SYS("shdwcli",cli,"locdir")_$$GFILE(remjrn)
+				Set rc=$$IsLocDirValid(^SYS("shdwcli",cli,"locdir"),remjrn) 
+				If ('rc) {
+					Set shdwzerr=rc
+					ztrap "JDIR"
+				}
+				Set ^SYS("shdwcli",cli,"jrnend")="0,"_fd
+				Set ^SYS("shdwcli",cli,"remjrn")=remjrn
+				Set idx=$g(^SYS("shdwcli",cli,"jrnfil"))+1
+				Set ^SYS("shdwcli",cli,"jrnfil",idx)=remjrn
+				Set ^SYS("shdwcli",cli,"jrnfil",idx,"shdw")=fd
+		; "Setting idx to "
+				Set ^SYS("shdwcli",cli,"jrnfil")=idx
+				Continue
+			}
+			Set portip=$p(x,",",2,$l(x))
+			Set x=$p(x,",")
+			Set (^SYS("shdwcli",cli,"jrnfil",$i(^SYS("shdwcli",cli,"jrnfil"))),remjrn)=x
+			Set fd=$$newlocshd(cli)
+			Set ^SYS("shdwcli",cli,"jrnend")="0,"_fd
+			If +portip {
+                        	If $p(portip,",",2)="" {
+                                	s shdwzerr=$$Error^%apiOBJ(179,portip) ztrap $$traperr^SHDWUTIL(shdwzerr)                        
+				}
+				s ^SYS("shdwcli",cli,"port")=+portip,^SYS("shdwcli",cli,"ip")=$p(portip,",",2),^SYS("shdwcli",^SYS("shdwcli",cli,"clu"),"servers",$p(portip,",",1,2))="" ztrap "CURJ"
+			}
+			Continue
+		}
+		Set endaddr=x
+		Set ^SYS("shdwcli",cli,"remend")=endaddr 
+		Set begblk=$s(begaddr:((begaddr-1)\16384),1:0)
+		Set x=""  ;endblk is given by the server
+		u tcp i $$SetIO^%SYS.NLS("RAW") 
+		Set dirver=+$P(dirinfo,"^",1)
+		Set dirblk=+$P(dirinfo,"^",2) 
+		If dirblk '< 0 {
+			For i=dirblk:1:(dirblk+$P(dirinfo,"^",3)) {
+				s x="",%L=16384 u tcp f  r %X#%L:10 s x=x_%X,%L=%L-$l(%X) q:'%L  d:'$l(%X) ReadNone^SHDWUTIL(tcp,$name(x),16384) i $g(^SYS("shdwcli",cli,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",cli,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+				i jrnencrypt s x=$zu(78,89,x,i*16384)
+				Use fd:i
+				Write x
+			}
+		}
+		; "get blocks (1-based)"
+		Set jrnend=$g(^SYS("shdwcli",cli,"jrnend"))\16384
+		For i=begblk:1:(endblk-1) {
+			If '(i#(65536/16384)),jrnend < i {
+				Set ^SYS("shdwcli",cli,"jrnend")=(i*16384)_","_fd
+			}
+			s x="",%L=16384 u tcp f  r %X#%L:10 s x=x_%X,%L=%L-$l(%X) q:'%L  d:'$l(%X) ReadNone^SHDWUTIL(tcp,$name(x),16384) i $g(^SYS("shdwcli",cli,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",cli,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+			i jrnencrypt s x=$zu(78,89,x,i*16384)
+			Use fd:i
+			Write x 
+			If i#10=9 {
+				i $g(^SYS("shdwcli",cli,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",cli,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+			}
+		}
+		u tcp i $$SetIO^%SYS.NLS("UnicodeLittle") 
+		If '('(endblk#(65536/16384))) {
+			For i=endblk:1:((((endblk+(65536/16384)-1)\(65536/16384))*(65536/16384))-1) {
+			        i jrnencrypt s x=$zu(78,89,blankblk,i*16384)
+				Use fd:i
+				Write blankblk
+			}
+		}
+		; "update client global nodes remjrn and end"
+		Set x = begaddr
+		Set begblk=endblk-1 ;begblk is 0-based (not used in current algorithm, though)
+		Set begaddr = $$GEND(fd,begaddr,.jrnend)
+		Set ^SYS("shdwcli",cli,"end") = begaddr_","_jrnend_","_fd
+		Set ^SYS("shdwcli",cli,"jrnend") = jrnend_","_fd
+		If endblk < (((endaddr-1)\16384)+1) {
+			Hang 4 ;disk latency  ####;
+		} Elseif begaddr < endaddr {
+			; "begaddr and endaddr mismatch: update header block" 
+			Set:x=begaddr sleep=1+$G(sleep) ;increment sleep factor
+			For i=1:1:+$G(sleep) {
+				i $g(^SYS("shdwcli",cli,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",cli,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+				Hang 10
+			}
+			Use tcp 
+			Write (-1)_$$del2^%Wprim_$J("",MsgLenVar-$L((-1)_$$del2^%Wprim)),! ;ask server to resend 1st block
+			If USEGZIP Write *-99,!
+			u tcp i $$SetIO^%SYS.NLS("RAW") 
+			s x="",%L=16384 u tcp f  r %X#%L:10 s x=x_%X,%L=%L-$l(%X) q:'%L  d:'$l(%X) ReadNone^SHDWUTIL(tcp,$name(x),16384) i $g(^SYS("shdwcli",cli,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",cli,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+			u tcp i $$SetIO^%SYS.NLS("UnicodeLittle") 
+			i jrnencrypt s x=$zu(78,89,x)
+			Use fd:0
+			Write x
+			s shdwzerr=$$Error^%apiOBJ(1094,begaddr,fd)
+			zt "FILE"
+		}
+		Set sleep=0
+	}
+	Quit
+EXEC(cli) 
+	Set $zt="etEXEC" 
+ 	Do $ZU(67,10,20,$j)
+	Do SAVEDBCOL(cli,.xmap,.dbcol) 
+	Do loadchkpnt(cli,.addr,.fd,.tranopen)	
+	Do InitShare^SHDWCLI(cli,1) ;allow option not to journal updates
+	Set shrid=+$g(^SYS("shdwcli",cli,"share"))
+	Set ^SYS("shdwcli",cli,"timeinih")=$h
+	Set intv=^SYS("shdwcli",cli,"intv")
+	If intv="" s intv=1  ;do not allow null interval
+	Do $zu(78,53,shrid,1,0,addr,fd)
+	New filter 
+	Set filter=$g(^SYS("shdwcli",cli,"filter"))
+ 	Do $ZU(68,1,1)
+ 	Set sleep=0 
+ 	For {
+		Set $ZT="etEXEC"
+		Set h=$H
+		Do EXEC1
+ 		Set sleep=$S(+$H>+h!($P($H,",",2)>($P(h,",",2)+99)):0,1:(sleep+1))
+		For i=0:1:sleep { 
+			Hang 5 
+			i $g(^SYS("shdwcli",cli,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",cli,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+		}
+ 	}
+	Quit
+EXEC1 ; must be called from EXEC(cli)
+	Set $ZT="etEXEC"
+    	For {
+		Quit:fd=""  
+		For {
+		    i $g(^SYS("shdwcli",cli,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",cli,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+			Set remjrn0=^SYS("shdwcli",cli,"remjrn")
+		        If $ZU(78,22,fd)=1,$$GEND1(fd,addr)>addr {
+				Quit
+			}
+			Set remjrn=remjrn0 
+			If remjrn="" {
+				s shdwzerr=$$Error^%apiOBJ(1039) ztrap $$traperr^SHDWUTIL(shdwzerr)
+			}
+			Set diff=$$jfdiff^SHDWUTIL(fd,remjrn,cli)
+			If diff>0 { 
+				Set nfd=$$NEXTJRN1^SHDWUTIL(fd,cli) 
+				If diff>1,nfd="" {
+					s shdwzerr=$$Error^%apiOBJ(1109,fd) ztrap $$traperr^SHDWUTIL(shdwzerr)
+				}
+				If nfd="" {
+					Hang intv  
+					Continue 
+				} 
+				If diff=1,$g(^SYS("shdwcli",cli,"jrnend"))'>(65536*2) {
+					 Hang intv 
+					 continue 
+				}
+				Do ChkJrnEnd^SHDWUTIL(cli,fd) ;could error out
+				Set addr=0,fd=nfd 
+				d $zu(78,92,shrid,fd)
+			} 
+			If diff<0 {
+				s shdwzerr=$$Error^%apiOBJ(1037,fd,remjrn) ztrap $$traperr^SHDWUTIL(shdwzerr)
+			}
+			d $zu(78,97,shrid)
+			Hang intv ;caught up already
+		}
+		Do DejrnMP
+    	}
+	Quit
+DejrnMP ;
+	s dev=$zu(78,5,fd,0,shrid) i dev<0 s shdwzerr=$$Error^%apiOBJ(1100,fd) ztrap "FILE" 
+	Do $zu(78,6,dev)
+	Do INIJRNEND(cli,fd)
+	Do DejrnRedirSetup(cli,.xmap,fd)
+	New begaddr Set begaddr=addr
+	If filter'="" {
+		Do DejrnMPUseFilter
+	} else {
+		for {
+			Set last=$zu(78,47,addr)
+			Set addr=$p(last,",",2)
+			Set stat=+last
+			Quit:stat'>0
+		}
+	}
+	Do $zu(78,7,dev)
+	Set dev=-1
+	If addr>begaddr Do $zu(78,92,shrid,+addr) 
+	Do $zu(78,53,shrid,0,0)
+	i $g(^SYS("shdwcli",cli,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",cli,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+	Quit
+DejrnMPUseFilter ;
+	Set stat=0,cnt=0,prevtime=$zh
+	For {
+		Set nextaddr=$zu(78,17,addr)
+		Quit:nextaddr'>0
+		If $i(cnt) > 1000 {
+			Set cnt=0 
+			If $zh-5>prevtime {
+				Do $zu(78,54,addr)
+				i $g(^SYS("shdwcli",cli,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",cli,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+				d $zu(78,97,shrid)
+				Do $zu(78,92,shrid,addr)
+				Set prevtime=$zh
+			}
+		}
+		Set oldaddr=addr
+		Set addr=nextaddr
+		Set type=$zu(78,8,addr) 
+		If (type=6)||(type=14)||(type=7)||(type=9){
+			Set node=$zu(78,13,addr)
+			Set dir=$g(xmap($p(node,"""",2)))
+			If dir'="",$$Filter() {
+				Set stat=$zu(78,47,addr,addr)
+			}
+		} elseif (type=4)||(type=5) {
+			Set stat=$zu(78,47,addr,addr)
+		}
+		If stat < 0 {
+			Set addr=oldaddr
+		}
+	}
+	Do $zu(78,54,addr)
+	Quit
+DejrnRedirSetup(shdw,redir,jrnf)
+	New dir,info,sfn,cnt,target,source,srcdir
+	Set dir=""
+	Set cnt=0 
+	For {
+		Set dir=$o(redir(dir))
+		Quit:dir=""
+		Set source=$e(dir,3,$l(dir)) ;remove leading "^^"
+		Set sfn=$zu(78,31,source,1)
+		If sfn < 0 {
+			Continue ;skip directory that is not in journal
+		}
+		Set target=$e(redir(dir),3,$l(redir(dir))) ;remove leading "^^"
+		Set info=$zu(49,target)
+		if +info=$zu(40,0,41) {
+			Set rc=$zu(17,target)
+			If rc <  0,$s($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0):''$zu(59,0),1:0) {
+				Set rc=$zu(17,target,1)
+			}
+			Set info=$zu(49,target)
+		}
+		If +info=-1 {
+			Set $p(info,",")=$p(info,",",14)
+		} ElseIf -1 < info ,info < $zu(40,0,41) {
+			Do $zu(78,46,sfn,+info,$p(info,",",13))
+		} Else {
+			d ERRLOG^SHDWUTIL($$Error^%apiOBJ(1080,target,source,jrnf),shdw)
+			Kill redir(dir) ;ignore updates to this database
+		} 
+		If filter'="" {
+			Set srcdir=$zu(78,31,sfn)
+			If ("^^"_srcdir)'=dir Set redir("^^"_srcdir)="^^"_target
+		}
+		Set cnt=cnt+1
+	}
+	Quit cnt
+DejrnSetkill(cli,que) 
+	set $zt="etdejrnsetkill"
+	Do $ZU(67,10,20,$j)
+	Do $zu(68,1,1)
+	Set shrid=^SYS("shdwcli",cli,"share")
+	Do loadchkpnt(cli,.addr,.fd,.tranopen)	
+	i $g(updflg){
+	 	i $g(^SYS("shdwcli",cli,"disjrn")) d DISABLE^%SYS.NOJRN
+		Do $zu(78,53,shrid,32,addr)
+	}
+	for {
+          s rc=$zu(78,51,shrid,0,1)
+	  i rc'>0 q  ;normal exit (0, on STOP request) or error exit (<0)
+	  i '$g(updflg) q
+	  i +rc=1 {	;time to create a new file checkpoint (rc=1,fd)
+	    s fd=$p(rc,",",2)
+	    d savechkpnt(cli,0,fd,.tranopen),RequestPurge(cli)
+	    continue
+	  } 
+	  i +rc=rc {	;time to create a mid-file checkpoint (rc=addr)
+	    d savechkpnt(cli,+rc,,.tranopen),RequestPurge(cli)
+	    continue
+	  } 
+	  s pid=$p(rc,",",2),sys=$p(rc,",",3),addr=$p(rc,",",4)
+	  i +rc=5 {
+	    k tranopen(pid,sys)
+	    i addr d savechkpnt(cli,+addr,,.tranopen),RequestPurge(cli)
+	  } elseif +rc=4 {
+	    s tranopen(pid,sys)=(+addr)_","_fd ;fd is set @ new file checkpoint
+	    s tranopen(pid,sys,"cp")=-1 
+	    i +addr'=addr d savechkpnt(cli,+addr,,.tranopen),RequestPurge(cli)
+	  }
+	}
+	g DejrnSetkillExit
+etdejrnsetkill ;
+	Set $zt="^%ETN"
+	d ERRLOG^SHDWUTIL($ze_";"_$g(shdwzerr),cli) k shdwzerr
+	set ^SYS("shdwcli",cli,"stop")=-1  ;neg value indicates exit upon error
+DejrnSetkillExit s $zt=""
+	i $g(updflg) {
+	  s rc=$zu(78,53,shrid,4)
+	  d savechkpnt(cli,+rc,,.tranopen),RequestPurge(cli)
+	}
+	Kill ^SYS("shdwcli",cli,"setkill",$j)
+	Do $zu(78,53,shrid,0,1)
+	Do $zu(78,51,-1,0,-1)
+	Quit
+DejrnDbfetch(cli,que) ;
+	Set $zt="etdejrn"
+	Do $ZU(67,10,20,$j)
+	Do $zu(68,1,1) ; enable null subscript support
+	Set shrid=^SYS("shdwcli",cli,"share")
+	Do $zu(78,51,shrid,que,2)
+	Quit
+etdejrn ;
+	Set $zt=""
+ 	d ERRLOG^SHDWUTIL($ze_";"_$g(shdwzerr),cli) k shdwzerr
+	Kill ^SYS("shdwcli",cli,"dbfetch",$j)
+	Do $zu(78,51,-1,0,-1)
+	Quit
+etRCVB ;
+ 	Set $ZT=""
+	Trollback
+	Lock
+	i $g(fd)'="" c fd
+	If $ze["<ZSTOP>" zt $ze
+	If $ze["<ZCURJ>" zt $ze ;cannot fetch current journal from non-owner
+	If $ze["<Z",$s($g(shdwzerr)="":0,1:$$GetSeverity^SHDWUTIL(shdwzerr)=3) zt $ze
+	If $ze'["<READ>",$ze'["<WRITE>" {
+		zt:$ze'["<Z" $ze 
+	} elseif $i?1"|TCP|"1.5N.E {
+		Set shdwzerr=$$Error^%apiOBJ(1072,$s($ze["<READ>":"READ",1:"WRITE"))
+	}
+	d ERRLOG^SHDWUTIL($ze_";"_$g(shdwzerr),cli) k shdwzerr
+	Quit  ;exit to the beginning of the loop in CLIENT (the caller)
+etEXEC ;
+	Set $ZT=""
+	Trollback
+	Lock
+	Set ze=$ZE
+	d ERRLOG^SHDWUTIL($ze_";"_$g(shdwzerr),cli) k shdwzerr
+	Do close($G(dev))  
+	If ze'["<ZSTOP>",ze'["<ZABOR>" Quit  ;go retry EXEC later
+	Do FreeShare^SHDWCLI(cli)
+	Do SetStopStatus^SHDWCLI(cli)
+	Halt
+close(dev) ;
+	Set $ZT="etclose"
+	If $G(dev)'="",dev'<0 {
+		Do $zu(78,7,dev)
+	}
+	Quit
+etclose ;
+	Quit
+ROLLBACK(cli,jrnloc) ;
+	New chkpnt,addr,jrnf,tranopen,rc
+	Set $zt="ROLLBACKerr"
+	If ^SYS("shdwcli",cli,"type")'=1 {
+		Quit 0_",wrong type of shadow"
+	}
+	If '($g(^SYS("shdwcli",cli,"stat"))=-2),'($g(^SYS("shdwcli",cli,"stop"),2)=2) {
+		Quit 0_",must stop shadowing before rollback"
+	}
+	Set chkpnt=$$loadchkpnt(cli,.addr,.jrnf,.tranopen)
+	If '$d(tranopen) {
+		Quit 1
+	}
+	Set xacp=$$xachkpnt(chkpnt,.tranopen)
+	Set rc=$$RollBack(cli,$g(jrnloc,addr_","_jrnf),.tranopen)
+	Quit $$CleanTran(cli,chkpnt,.tranopen,xacp)
+ROLLBACKerr 
+	Set $zt=""
+	d ERRLOG^SHDWUTIL($ze,cli)
+	Quit 0_","_$ze
+RollBack(cli,jrnloc,tranopen,clu) ;
+	New filelist,tranerror,pid,sys,dbredir,nullsubstat,addr,i,chan
+	Set $zt="RollBackErr"
+	Quit:'$d(tranopen) 1 ;success
+	Quit:'$$getfilelist(cli,.tranopen,.filelist) 0 ;failure
+	Do getdbredir(cli,.dbredir)
+	Set nullsubstat=$zu(68,1,1)
+	Do $zu(9,"","[SHADOWING] "_$s(cli="":"DATABASE SERVER",1:"SHADOW SERVER ("_cli_")")_": "_"Rolling back open transactions...",(0>0),0)
+	New jrnfil 
+	If $g(jrnloc)]"" {
+		Set jrnfil=$p(jrnloc,",",2)
+		If jrnfil="" {
+			Kill jrnfil
+		}
+	}
+	k ^||ISC.ROLLBACK.bitset
+	Set i=""
+	For {
+		Set i=$o(filelist(i),-1,%jrnfile)
+		Quit:i=""
+		If $g(jrnfil)="" {
+			Set addr=0  ;start from end of file if file is not latest
+		} elseIf %jrnfile'=jrnfil {
+			Do $zu(9,"","[SHADOWING] "_$s(cli="":"DATABASE SERVER",1:"SHADOW SERVER ("_cli_")")_": "_"ROLLBACK skipped "_%jrnfile_", as it hasn't been dejournaled",(0>0),0)
+			continue
+		} else {
+			Kill jrnfil
+			Set addr=+jrnloc
+			If 'addr {
+				Do $zu(9,"","[SHADOWING] "_$s(cli="":"DATABASE SERVER",1:"SHADOW SERVER ("_cli_")")_": "_"ROLLBACK skipped "_%jrnfile_", as it hasn't been dejournaled",(0>0),0)
+				continue
+			}
+		}
+		Set chan=$zu(78,5,%jrnfile,0) 
+		If chan=-1 {
+			Do MSGOUT^SHDWUTIL("<FILE NOT OPEN> ROLLBACK failed to open "_%jrnfile,cli)
+			Quit
+		}
+		Set $zt="RollBackErr1"
+		Do $zu(78,6,chan)
+		If addr < 0 {
+			Set addr=$zu(78,17,-addr)
+		} else {
+			If addr > 0,'$g(clu) {
+				Set addr=$zu(78,17,addr)
+			}
+		}
+		If addr < 0 {
+			Do MSGOUT^SHDWUTIL("<INVALID JOURNAL RECORD> ROLLBACK found invalid record at "_jrnloc,cli)
+			Quit
+		}
+		If 'addr {
+			Set addr=$zu(78,18,0) 
+			If addr '> 0 {
+				Do $zu(9,"","[SHADOWING] "_$s(cli="":"DATABASE SERVER",1:"SHADOW SERVER ("_cli_")")_": "_"ROLLBACK found no valid record in "_%jrnfile,(0>0),0)
+				continue
+			}
+		}
+		Set addr=addr_","_$case($ZBITGET($ZVERSION(0),46),0:$case($f(%jrnfile,";"),0:$e(%jrnfile,*-8-$l($p(%jrnfile,".",$l(%jrnfile,"."))),*),:$e(%jrnfile,*-8-$l($p(%jrnfile,".",$l(%jrnfile,"."))),$f(%jrnfile,";")-2)),:%jrnfile)
+		Do $zu(78,18,0)
+		Do start^ROLLBACK(.tranopen,addr,-1,2,0,.dbredir,"TROLLBACK")
+		Do $zu(78,7,chan)
+		Set $zt="" 
+		Quit:'$d(tranopen)
+	}
+	k ^||ISC.ROLLBACK.bitset
+	If '$d(tranopen),'$d(tranerror){
+		Do $zu(9,"","[SHADOWING] "_$s(cli="":"DATABASE SERVER",1:"SHADOW SERVER ("_cli_")")_": "_"Transaction rollback complete",(0>0),0)
+		Quit 1
+	}
+	Merge tranopen=tranerror
+	Quit 0_",some open transactions failed to roll back"
+RollBackErr 
+	Set $zt=""
+	If $d(nullsubstat),$zu(68,1,nullsubstat)
+	d ERRLOG^SHDWUTIL($ze,cli)
+	k ^||ISC.ROLLBACK.bitset
+	Quit 0_","_$ze
+RollBackErr1 
+	Set $zt=""
+	Do $zu(78,7,chan)
+	ztrap $ze
+CleanTran(cli,chkpnt,tranopen,xacp) public {
+	Set $zt="CleanTranErr"
+	If $d(tranopen) {
+		Do MSGOUT^SHDWUTIL("<ERROR> some open transactions failed to roll back",cli)
+		Set tranname=$name(^SYS("shdwcli",cli,"opentran",chkpnt))
+		Set pid=""
+		For {
+			Set pid=$o(@tranname@(pid))
+			Quit:pid=""
+			Set sys=""
+			For {
+				Set sys=$o(@tranname@(pid,sys))
+				Quit:sys=""
+				If $d(tranopen(pid,sys)) {
+					Do MSGOUT^SHDWUTIL("<NOT ROLLED BACK> PID="_pid_",SYS="_sys_","_$g(tranopen(pid,sys)),cli)
+				}
+			}
+		}
+	}
+	Kill ^SYS("shdwcli",cli,"chkpnt.last") 
+	Merge ^SYS("shdwcli",cli,"chkpnt.last")=^SYS("shdwcli",cli,"chkpnt",chkpnt)
+	If ($g(xacp)="")||'$d(^SYS("shdwcli",cli,"chkpnt",xacp)) {
+		Do MSGOUT^SHDWUTIL("No checkpoint"_$s($g(xacp)="":"",1:" #"_xacp)_" prior to the earliest open transaction that has been rolled back. You won't be able to RESTART the shadow; however, you may START the shadow with a new startpoint later on.",cli)
+		Kill ^SYS("shdwcli",cli,"chkpnt"),^SYS("shdwcli",cli,"opentran")
+	} else {
+		Set ^SYS("shdwcli",cli,"chkpnt")=xacp
+		Set chkpnt="" 
+		For {
+			Set chkpnt=$o(^SYS("shdwcli",cli,"chkpnt",chkpnt),-1)
+			Quit:chkpnt=xacp
+			Kill ^SYS("shdwcli",cli,"chkpnt",chkpnt)
+			Kill ^SYS("shdwcli",cli,"opentran",chkpnt)
+		}
+	}
+	Quit '$d(tranopen)  ;0 (failure) if $d(tranopen)
+CleanTranErr
+	Set $zt=""
+	d ERRLOG^SHDWUTIL($ze,cli)
+	Quit 0_","_$ze
+}
+CheckPointState(ShadowID) ;
+	New lastcp,type,chkpnt,cp
+	Merge lastcp=^SYS("shdwcli",ShadowID,"chkpnt.last") ;checkpoint @ last STOP
+	If '$d(lastcp) {
+		Quit 1 ;STOP without ROLLBACK or no STOP
+	}
+	Set cp=""
+	For {
+		Set cp=$g(^SYS("shdwcli",ShadowID,"chkpnt"))
+		Quit:cp=""
+		Merge chkpnt=^SYS("shdwcli",ShadowID,"chkpnt",cp)
+		Quit:cp=$g(^SYS("shdwcli",ShadowID,"chkpnt"))
+	}
+	Quit:chkpnt="" 0 ;no current checkpoint (shadow just cleared or started?)
+	Set type=$g(^SYS("shdwcli",ShadowID,"type"))
+	If type=1 {  ;non-cluster shadow case
+		Set currjrnf=$p(chkpnt,",",2),curraddr=+chkpnt
+		Set currindex=$$GetShdwFileIndex(ShadowID,currjrnf)
+		Set lastjrnf=$p(lastcp,",",2)
+		Set lastaddr=+lastcp
+		Set lastindex=$$GetShdwFileIndex(ShadowID,lastjrnf)
+   		Quit:lastindex>currindex 0
+		Quit:lastindex<currindex 1
+		Quit (lastaddr<=curraddr)
+	} 
+	Quit:type=21 $$CheckPointState^SHDWX(ShadowID) ;cluster shadow
+	Quit 0 ;wrong shadow type
+CheckPointInfo(ShadowID,cpinfo) ;
+	New chkpnt,type,tranopen,filelist,oldest
+	Set chkpnt=$g(^SYS("shdwcli",ShadowID,"chkpnt"))
+	Quit:chkpnt="" 0
+	Set type=$g(^SYS("shdwcli",ShadowID,"type"))
+	If type=1 {   
+		New jrnloc
+		Set jrnloc=$g(^SYS("shdwcli",ShadowID,"chkpnt",chkpnt))
+		Merge tranopen=^SYS("shdwcli",ShadowID,"opentran",chkpnt)
+		Set cpinfo(0,"JournalLocation")=jrnloc
+		Set cpinfo(0,"JournalLocation","Offset")=+jrnloc
+		Set cpinfo(0,"JournalLocation","File")=$p(jrnloc,",",2)
+		If $d(tranopen) {
+			Do getfilelist(ShadowID,.tranopen,.filelist,.oldest)
+			Set cpinfo(0,"OldestOpenTranLoc")=oldest_","_filelist(1)
+			Set cpinfo(0,"OldestOpenTranLoc","Offset")=oldest
+			Set cpinfo(0,"OldestOpenTranLoc","File")=filelist(1)
+		}
+		Set cpinfo=chkpnt
+		Quit 1
+	}
+	If type=21 { 
+		New que,xa,cst,seq,jrnf,addr,csn
+		Merge que=^SYS("shdwcli",ShadowID,"chkpnt",chkpnt)
+		Merge tranopen=^SYS("shdwcli",ShadowID,"opentran",chkpnt)
+		Do SortOpenTranByNode^SHDWX(.tranopen,.xa)
+		Set q=$name(que(""))
+		For {
+			Set q=$q(@q)
+			Quit:q=""
+			Set cst=$qs(q,1)
+			Set seq=+@q
+			Set jrnf=$p(@q,",",2)
+			Set addr=$p(@q,",",3)
+			Set csn=$p(@q,",",5)
+			Continue:csn=""   ;not a valid checkpoint (could be converted from a startpoint)
+			Set cpinfo(csn,"JournalLocation")=addr_","_jrnf
+			Set cpinfo(csn,"JournalLocation","Offset")=addr
+			Set cpinfo(csn,"JournalLocation","File")=jrnf
+			Set cpinfo(csn,"ClusterSequence")=cst_","_seq
+			Set cpinfo(csn,"ClusterSequence","SessionID")=cst
+			Set cpinfo(csn,"ClusterSequence","Sequence#")=seq
+			New ShadowNode
+			Set ShadowNode=ShadowID_"~"_csn 
+			Kill tranopen 
+			Merge tranopen=xa(ShadowNode)
+			If $d(tranopen) {
+				Do getfilelist(ShadowNode,.tranopen,.filelist,.oldest)
+				Set cpinfo(csn,"OldestOpenTranLoc")=oldest_","_filelist(1)
+				Set cpinfo(csn,"OldestOpenTranLoc","Offset")=oldest
+				Set cpinfo(csn,"OldestOpenTranLoc","File")=filelist(1)
+			}
+		}
+		Set cpinfo=chkpnt
+		Quit 1
+	}
+	Quit 0 ;not the shadow type we are looking for
+UpgradeCheckPoint(ShadowID) [] public {
+	Quit:$g(^SYS("shdwcli",ShadowID,"type"))'=1 0 ;wrong type
+	Quit:$g(^SYS("shdwcli",ShadowID,"locver"))>=4.01 1 
+ 	Lock +^SYS("shdwcli",ShadowID):0
+ 	Quit:'$TEST $$Error^%apiOBJ(1012,ShadowID)
+	Set $zt="UpgradeError"
+	If '('(+$g(^SYS("shdwcli",ShadowID,"stat")))&&'($g(^SYS("shdwcli",ShadowID,"stop"),2)=2)) {
+		Set stopped=($g(^SYS("shdwcli",ShadowID,"stop"),2)=2)
+		Lock -^SYS("shdwcli",ShadowID)
+		Quit stopped 
+	}
+	Set cpinfo=$g(^SYS("shdwcli",ShadowID,"at"))
+	Set chkpnt=+$p(cpinfo,",",3)
+	If 'chkpnt {
+		Lock -^SYS("shdwcli",ShadowID)
+		Quit 1 ;nothing to convert
+	}
+	Set ^SYS("shdwcli",ShadowID,"chkpnt",chkpnt)=cpinfo
+	Set xa=$name(^SYS("shdwcli",ShadowID,"opentran",chkpnt,""))
+	For {
+		Set xa=$q(@xa)
+		Quit:xa=""
+		If $ql(xa)=6 {
+			Set xa("cp")=0 ;6 subscripts, incl. pid and sys, before cp
+		}
+	}
+	Set ^SYS("shdwcli",ShadowID,"chkpnt")=chkpnt
+	Set ^SYS("shdwcli",ShadowID,"locver")=4.01
+	Lock -^SYS("shdwcli",ShadowID)
+	Quit 1
+UpgradeError 
+	Set $zt="" 
+	Lock -^SYS("shdwcli",ShadowID)
+	Do BACK^%ETN 
+	Do $zu(9,"","Error upgrading shadow "_ShadowID_": "_$ze,(0>0),0) 
+	Quit $$Error^%apiOBJ(5002,$ze)
+}
+getfilelist(cli,tranopen,filelist,oldest) ;
+	New addr,jrnf,next,pid,sys,i,jfcli
+	Set $zt="etgetfilelist"
+	Quit:'$d(tranopen) 0
+	Set jfcli=cli
+	Set oldest=""
+	Set addr=""  ;journal file and offset of the oldest open transaction
+	Set pid="" 
+	For {
+		Set pid=$o(tranopen(pid))
+		Quit:pid=""
+		Set sys=""
+		For {
+			Set sys=$o(tranopen(pid,sys))
+			Quit:sys=""
+			Set jrnf=$p(tranopen(pid,sys),",",2)
+			If $d(next(jrnf)) {
+				If jrnf = oldest, tranopen(pid,sys) < addr {
+					Set addr= +tranopen(pid,sys)
+				}
+				Quit
+			}
+			Set addr=+tranopen(pid,sys)
+			Set oldest=jrnf ;the oldest open transaction so far
+			For {
+				Set next=$$NEXTJRN1^SHDWUTIL(jrnf,$g(jfcli))
+				Quit:next=""
+				Set next(jrnf)=next
+				Set jrnf=next 
+				Quit:$d(next(jrnf))
+			}
+			If next="" {
+				Set next(jrnf)=""
+			}
+		}
+	}
+	Set jrnf=oldest f filelist=1:1 s filelist(filelist)=jrnf q:next(jrnf)=""  s jrnf=next(jrnf)
+	Set oldest=addr ;and the oldest file containing open transaction is filelist(1)
+	Quit 1
+etgetfilelist
+	Set $zt=""
+	d ERRLOG^SHDWUTIL($ze,cli)
+	Quit 0
+getdbredir(cli,dbredir) ;
+	New dir,map
+	If ^SYS("shdwcli",cli,"type")<10 {
+		Merge map=^SYS("shdwcli",cli,"dbmap") ;noncluster
+	} else {
+ 		Merge map=^SYS("shdwcli",^SYS("shdwcli",cli,"clu"),"dbmap") ;a clushdw copier
+	}
+	Set dir=""
+	For {
+		Set dir=$o(map(dir))
+		Quit:dir=""
+		Set dbredir($p(dir,"^",3))=$p(map(dir),"^",3)
+		If dir'=map(dir) {
+			Set dbredir=1
+		}
+	}
+	If '$g(dbredir) {
+		Kill dbredir ;all source and shadow databases have same names
+	}
+	Quit
+Filter() ;
+	New pid,remsys,dir,glo
+	Set pid=$zu(78,10,addr)
+	Set remsys=$ZU(78,25,addr)
+	If remsys {
+		Set pid=pid_","_remsys
+	}
+	Set dir=$qs(node,-1)
+	Set glo=$p(node,"]",1+$l(dir,"]"),$l(node))
+	Quit $$^@(filter)(pid,dir,glo,$s(type=6:"S",type=14:"s",type=7:"K",type=9:"k",1:""),addr,$zu(78,24,addr))
+SAVEDBCOL(cli,xmap,dbcol) 
+	New dir
+	Set dir=""
+	For {
+		Set dir=$o(xmap(dir))
+		Quit:dir=""
+		Set:xmap(dir)'="" dbcol(xmap(dir))=$Piece($zu(49,$p(xmap(dir),"^",3)),",",13)
+	}
+	Quit
+GFILE(path) ;
+	New (path)
+	Set path=$G(path)
+	Set vmsfile=$P(path,"]",2)
+	Quit:vmsfile'="" $P(vmsfile,";")
+	Set d=$S($L(path,"/")>1:"/",1:"\")
+	Quit $P(path,d,$L(path,d))
+GETDIR(path) 
+	New (path)
+	Set path=$G(path)
+	Set vmsfile=$P(path,"]")
+	Quit:vmsfile'=path vmsfile_"]"
+	Set d=$S($L(path,"/")>1:"/",1:"\")
+	Quit $P(path,d,1,$L(path,d)-1)_d
+getlocshd(cli,remjrn) 
+	New i
+	Set i=""
+	For {
+		Set i=$o(^SYS("shdwcli",cli,"jrnfil",i),-1)
+		Quit:i=""
+		Quit:^SYS("shdwcli",cli,"jrnfil",i)=remjrn
+	}
+	Quit:i="" ""
+	Quit $g(^SYS("shdwcli",cli,"jrnfil",i,"shdw"))
+newlocshd(cli) ;
+	New idx,locshd,remjrn,locdir,remdir,jrndir
+	Set idx=^SYS("shdwcli",cli,"jrnfil")
+	Set locshd=$g(^SYS("shdwcli",cli,"jrnfil",idx,"shdw")) 
+	Quit:locshd'="" locshd
+	Set remjrn=^SYS("shdwcli",cli,"jrnfil",idx)
+	Set remdir=$$GETDIR(remjrn)
+	Set jrndir=$name(^SYS("shdwcli",^SYS("shdwcli",cli,"clu"),"jrndir"))
+	Lock +@jrndir
+	Set locdir=$g(@jrndir@(remdir)) ;use pre-mapped if any
+	If locdir="" {  ;create new one using default otherwise
+		Set locdir=@jrndir@(0) 
+		Set:($zversion(1)=1) $e(locdir,$l(locdir))="."
+		Set locdir=locdir_$i(@jrndir)_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+		Set @jrndir@(remdir)=locdir
+	}
+	Lock -@jrndir
+	Set rc=$$IsLocDirValid(locdir,remjrn)
+	If ('rc) {
+		Set shdwzerr=rc
+		ztrap "JDIR"
+	}
+	Set (locshd,^SYS("shdwcli",cli,"jrnfil",idx,"shdw"))=locdir_$$GFILE(remjrn)
+	Quit locshd
+INIJRNEND(cli,fd) ;
+	If $g(^SYS("shdwcli",cli,"jrnend"))="" {
+		Set jrnend=$zu(78,18,0)
+	} else {
+		Set jrnend=^SYS("shdwcli",cli,"jrnend")
+		If $p(jrnend,",",2)=fd {
+			Do $zu(78,59,jrnend)
+		}
+	} 
+	Quit
+GEND(f,addr,eof) ;
+	New dev,x,end
+	s dev=$zu(78,5,f,0) i dev<0 s shdwzerr=$$Error^%apiOBJ(1100,f) ztrap "FILE"
+	Set x=$zu(78,6,dev)
+        Do $zu(78,59,1)
+	Set eof=$zu(78,18,0)
+	Set end=$zu(78,18,eof) 
+	If end '< 0 {
+		Set x=$zu(78,7,dev)
+		Quit end
+	}
+	Set end=+$G(addr)
+	For {
+		Set x=$zu(78,17,end)
+		Quit:x'>0
+		Set end=x
+	}
+	Do $zu(78,7,dev)
+	Quit:'x end ;OK
+	Quit addr ;hoping the file will be fixed up later ...
+GEND1(f,addr) ;
+	New dev,x,eof,end
+	Set eof=$g(^SYS("shdwcli",cli,"jrnend"))
+	s dev=$zu(78,5,f,0) i dev<0 s shdwzerr=$$Error^%apiOBJ(1100,f) ztrap "FILE"
+	Do $zu(78,6,dev)
+	If $p(eof,",",2)=f {
+		Set eof=+eof
+        	Do $zu(78,59,1)
+		Set end=$zu(78,18,eof)
+		If end=$g(addr) {
+			Set je=$zu(78,18,0)
+			If eof>je {
+				d ERRLOG^SHDWUTIL("shadow journal ended unexpectedly @"_je_" instead of "_eof,cli)
+				Set shdwzerr=$$Error^%apiOBJ(1035,f)
+				ztrap "ABOR"
+			}
+		}
+	} Else {
+		Set eof=$zu(78,18,0)
+		Set end=$zu(78,18,eof)
+	}
+	If end'<0 {
+		Set x=$zu(78,7,dev)
+		Quit end
+	}
+	If $g(cli)'="" {
+		d ERRLOG^SHDWUTIL($$Error^%apiOBJ(1093,eof,f),cli)
+	}
+	Set end=+$G(addr)
+	For {
+		Set x=$zu(78,17,end)
+		Quit:x'>0
+		Set end=x
+	}
+	Do $zu(78,7,dev)
+	Quit:'x end ;OK
+	If $g(cli)'="" {
+		d ERRLOG^SHDWUTIL("Invalid record at offset "_end_" of journal "_f_" encountered in searching for the end position",cli)
+	}
+	Quit $g(addr) ;hoping the file will be fixed up later ...
+RequestPurge(cli) ;
+	New id,rc
+	Set $zt="RequestPurgeErr"
+	If ^SYS("shdwcli",cli,"type")=1 {
+		Quit:$o(^SYS("shdwcli",cli,"jrnfil",""))=$g(^SYS("shdwcli",cli,"jrnfil"))
+	} else {
+		New sys
+		If ^SYS("shdwcli",cli,"type")=21 {
+			Set sys="" 
+			New jfcli
+			For {
+				Set sys=$o(^SYS("shdwcli",cli,"sys",sys))
+				Quit:sys=""
+				Set jfcli=cli_"~"_sys
+				Quit:$o(^SYS("shdwcli",jfcli,"jrnfil",""))'=$g(^SYS("shdwcli",jfcli,"jrnfil"))
+			}
+		}
+	}
+	Lock +^SYS("shdwpurge",cli):0 
+	If '$Test {	;there exists a purge job
+		i $i(^SYS("shdwcli",cli,"RequestPurge"))
+		Quit   ;success
+	}
+	Lock -^SYS("shdwpurge",cli)
+	Job PURGE(cli):(:2):10 ;do not use job server
+	Quit:$t   ;success
+	d ERRLOG^SHDWUTIL($$Error^%apiOBJ(1074,"PURGE"),cli)
+	Do PURGE(cli)
+	Quit
+RequestPurgeErr s $zt="" 
+	d ERRLOG^SHDWUTIL($ze_";"_$g(shdwzerr),cli) k shdwzerr
+	Quit
+PURGE(shdwid) ;
+	Set $zt="PURGEexit"
+	Set $ze=""
+	Lock +^SYS("shdwpurge",shdwid):0 
+	If '$Test {
+		Do MSGOUT^SHDWUTIL($$Error^%apiOBJ(1075,$g(^SYS("shdwpurge",shdwid),"N/A")),shdwid)
+		Quit
+	}
+	Set ^SYS("shdwpurge",shdwid)=$j
+	For {
+		i $g(^SYS("shdwcli",shdwid,"RequestPurge")) {
+			k ^SYS("shdwcli",shdwid,"RequestPurge")
+			If ^SYS("shdwcli",shdwid,"type")=1 {
+				d Purge(shdwid)
+			} Elseif ^SYS("shdwcli",shdwid,"type")=21 {
+				d PurgeClu(shdwid)
+			} Else {
+ 				Do MSGOUT^SHDWUTIL($$Error^%apiOBJ(1076),shdwid)
+				Quit  ;Exit loop on error
+			}
+		}
+		i $g(^SYS("shdwcli",shdwid,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",shdwid,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+		h 1
+	}
+PURGEexit
+	Set $zt=""
+	Kill ^SYS("shdwpurge",shdwid)
+	Lock -^SYS("shdwpurge",shdwid)
+	If $ze'="" {
+		d ERRLOG^SHDWUTIL($ze_";"_$g(shdwzerr),shdwid) k shdwzerr
+		Set $ze="" ;continue since it is a non-fatal error
+	}
+	Quit
+Purge(shdwid) ;purging on noncluster shadow
+	New addr,jrnf,tranopen,locked,index,q,f,i
+	Set $zt="PurgeE"
+	New keepold
+	Set keepold=$g(^SYS("shdwcli",shdwid,"KeepOld")) 
+	If keepold {
+		Set index=$$GetShdwFileOlder(shdwid,keepold)
+		Quit:'index
+	}
+	; fetch jrnf and tranopen "atomically" (i.e., within one sync point)
+	If $d(^SYS("shdwcli",shdwid,"tranopen")) {
+		Do $zu(9,"","[SHADOWING] "_$s(shdwid="":"DATABASE SERVER",1:"SHADOW SERVER ("_shdwid_")")_": "_"Purging is disabled until old-styled transaction indices "_$name(^SYS("shdwcli",shdwid,"tranopen"))_" are converted (when the shadow runs)",(0>0),0)
+		Quit
+	}
+	New oldest,xacp
+	Set oldest=$o(^SYS("shdwcli",shdwid,"chkpnt",""),1,xacp)
+	Set jrnf=$p(xacp,",",2)
+	Set i=$$GetShdwFileIndex(shdwid,jrnf)
+	If 'keepold ||(i<index) {
+		Set index=i
+	}
+	Do PurgeByIndex(shdwid,index)
+	Quit
+PurgeE 
+	Set $zt=""
+	d ERRLOG^SHDWUTIL($ze_";"_$g(shdwzerr),shdwid) k shdwzerr
+	Set $ze="" ;continue since it is a non-fatal error
+	Quit
+PurgeClu(shdwid) ;purging on cluster shadow
+	New addr,jrnf,tranopen,locked,index
+	Set $zt="PurgeE"
+	If $d(^SYS("shdwcli",shdwid,"tranopen")) {
+		Do $zu(9,"","[SHADOWING] "_$s(shdwid="":"DATABASE SERVER",1:"SHADOW SERVER ("_shdwid_")")_": "_"Purging is disabled until old-styled transaction indices are converted (when shadow runs)",(0>0),0)
+		Quit
+	}
+	New chkpnt
+	For {
+		Set index=^SYS("shdwcli",shdwid,"chkpnt")
+		Merge tranopen=^SYS("shdwcli",shdwid,"opentran",index)
+		Merge chkpnt=^SYS("shdwcli",shdwid,"chkpnt",index)
+		Quit:index=^SYS("shdwcli",shdwid,"chkpnt")
+	}
+	New keepold
+	Set keepold=$g(^SYS("shdwcli",shdwid,"KeepOld"))
+	New oldest,xacp,q,sys
+	For {
+		Set oldest=$o(^SYS("shdwcli",shdwid,"chkpnt",""))
+		Merge xacp=^SYS("shdwcli",shdwid,"chkpnt",oldest)
+		Quit:oldest=$o(^SYS("shdwcli",shdwid,"chkpnt",""))
+	}
+	Set q=$name(xacp(""))
+	For {
+		Set q=$q(@q)
+		Quit:q=""
+		Set sys=$p(@q,",",5)
+		If sys'="" {
+			Set jrnf(sys)=$p(@q,",",2)
+		}
+	} 
+	Set sys=""
+	For {
+		Set sys=$o(^SYS("shdwcli",shdwid,"sys",sys))
+		Quit:sys=""
+		If $g(jrnf(sys))'="" {
+			Do PurgeCluNode(shdwid_"~"_sys,keepold,jrnf(sys))
+		}
+	}
+	Quit
+PurgeCluNode(clushdwid,keepold,xajrnf)
+	New index,i
+	Set $zt="PurgeE"
+	Set index=0
+	If keepold {
+		Set index=$$GetShdwFileOlder(clushdwid,keepold)
+		Quit:'index
+	}
+	If $d(xajrnf) {
+		Set i=$$GetShdwFileIndex(clushdwid,xajrnf)
+		Quit:'i
+		If 'keepold||(i<index) {
+			Set index=i
+		}
+	}
+	Do PurgeByIndex(clushdwid,index)
+	Quit
+PurgeByIndex(shdwid,index) ;purge files up to, but NOT incl., 'index'
+	New i
+	Set $zt="PurgeE"
+	If '$zu(78,29) {
+		Do MSGOUT^SHDWUTIL($$Error^%apiOBJ(1079),shdwid)
+	}
+	Set i=""
+	For {
+		Set i=$o(^SYS("shdwcli",shdwid,"jrnfil",i))
+		Quit:i=""
+		Quit:i'<index
+		Do PurgeFile(shdwid,i) ;s i=i-1
+	}
+	Quit
+PurgeFile(shdwid,index)
+	New jrnf,rc
+	Set $zt="PurgeE"
+	Set jrnf=^SYS("shdwcli",shdwid,"jrnfil",index,"shdw")
+	If ($zversion(1)=1),jrnf'[";" {
+		Set jrnf=jrnf_";*" ;delete all versions of jrnf if on VMS
+	}
+	Set rc=$ZU(140,5,jrnf) 
+	If rc {
+		Do MSGOUT^SHDWUTIL($$Error^%apiOBJ(1106,jrnf,rc),shdwid)
+		Do $zu(9,"","You may need to delete file '"_jrnf_"' if it still exists")
+	} else {
+		Do $zu(9,"","[SHADOWING] "_$s(shdwid="":"DATABASE SERVER",1:"SHADOW SERVER ("_shdwid_")")_": "_"DELETED: "_jrnf,(0>0),0)
+	}
+	Kill ^SYS("shdwcli",shdwid,"jrnfil",index) 
+	Kill ^SYS("shdwcli",shdwid,"jrndel")
+	Quit
+GetShdwFileOlder(shdwid,keepold) 
+	New limit,index,shdwf
+	Set limit=$zdt($h-keepold,8)
+	Set index=""
+	For {
+		Set index=$o(^SYS("shdwcli",shdwid,"jrnfil",index),-1)
+		Quit:index=""
+		Set shdwf=$g(^SYS("shdwcli",shdwid,"jrnfil",index,"shdw"))
+		If shdwf'="" {
+			Set name=$case($ZBITGET($ZVERSION(0),46),0:$case($f(shdwf,";"),0:$e(shdwf,*-8-$l($p(shdwf,".",$l(shdwf,"."))),*),:$e(shdwf,*-8-$l($p(shdwf,".",$l(shdwf,"."))),$f(shdwf,";")-2)),:shdwf)
+			Quit:name<limit
+		}
+	}
+ 	Quit index
+GetShdwFileIndex(shdwid,jrnf) 
+	New index
+	Set $zt="GetShdwFileIndexE"
+	Set index=""
+	For {
+		Set index=$o(^SYS("shdwcli",shdwid,"jrnfil",index),-1)
+		Quit:index=""
+		Quit:$g(^SYS("shdwcli",shdwid,"jrnfil",index,"shdw"))=jrnf
+	}
+	Quit index
+GetShdwFileIndexE 
+	Set $zt=""
+	d ERRLOG^SHDWUTIL($ze_";"_$g(shdwzerr),shdwid) k shdwzerr
+	ztrap "GSFI" ;let caller decide what to do (purging would abort on this)
+xachkpnt(chkpnt,tranopen) [] public {
+	Quit:'$d(tranopen) chkpnt ;no open transaction, so keep only current chkpnt 
+	Set (oldest,lastchkpnt)=chkpnt-1 ;otherwise, keep at least last chkpnt
+	Set pid="" 
+	For {
+		Set pid=$o(tranopen(pid))
+		Quit:pid=""
+		Set sys=""
+		For {
+			Set sys=$o(tranopen(pid,sys))
+			Quit:sys=""
+			Set cp=+$g(tranopen(pid,sys,"cp"))
+			If cp<0 {
+				Set tranopen(pid,sys,"cp")=lastchkpnt
+			} elseif cp<oldest {
+				Set oldest=cp
+			}
+		}
+	}
+ 	Quit oldest
+}
+savechkpnt(ShadowID,addr,jrnf,tranopen) [] public {
+	Set cpnode=$name(^SYS("shdwcli",ShadowID,"chkpnt"))   ;checkpoint node
+	Set xanode=$name(^SYS("shdwcli",ShadowID,"opentran")) ;open transaction node
+	Set chkpnt=$g(@cpnode)+1 ;a new checkpoint # for this time around
+	Set oldest=$$xachkpnt(chkpnt,.tranopen) ;oldest = oldest checkpoint to keep
+	Kill @cpnode@(chkpnt),@xanode@(chkpnt) ;just in case (should be no-op)
+	Merge @xanode@(chkpnt)=tranopen
+	If $g(jrnf)="" {
+		Set jrnf=$g(^SYS("shdwcli",ShadowID,"locshd"))
+	}
+	Set @cpnode@(chkpnt)=addr_","_jrnf
+	Set @cpnode=chkpnt ;the new checkpoint is now complete
+	Set ^SYS("shdwcli",ShadowID,"at")=addr_","_jrnf_","_chkpnt
+	Set ^SYS("shdwcli",ShadowID,"locshd")=jrnf
+	Set cp=oldest
+	For {
+		Set cp=$o(@cpnode@(cp),-1)
+		Quit:cp=""
+		Kill @cpnode@(cp)
+		Kill @xanode@(cp)
+	}
+}
+loadchkpnt(shdw,addr,jrnf,tranopen) ;
+	Set chkpnt=+$g(^SYS("shdwcli",shdw,"chkpnt"))
+	Set jrnloc=$g(^SYS("shdwcli",shdw,"chkpnt",chkpnt))
+	Set addr=+jrnloc
+	Set jrnf=$p(jrnloc,",",2)
+	Set ^SYS("shdwcli",shdw,"at")=jrnloc_","_chkpnt
+	Set ^SYS("shdwcli",shdw,"locshd")=jrnf
+	Do loadtran(shdw,+chkpnt,.tranopen)
+	Quit chkpnt
+loadtran(shdw,chkpnt,tranopen) ;
+	If $d(^SYS("shdwcli",shdw,"tranopen")) {	// old-styled indices
+		Merge tranopen=^SYS("shdwcli",shdw,"tranopen")
+		Kill ^SYS("shdwcli",shdw,"opentran",chkpnt)
+		Merge ^SYS("shdwcli",shdw,"opentran",chkpnt)=tranopen
+		Kill ^SYS("shdwcli",shdw,"tranopen")
+		Quit
+	} 
+	merge tranopen=^SYS("shdwcli",shdw,"opentran",chkpnt)
+	Quit
+IsLocDirValid(locdir,remjrn,clu) [] public {
+	Set filename=$$GFILE(remjrn)
+	Set prefix=$e(filename,1,$l($p(filename,"."))-8)
+	If $g(clu){
+		Set prefix=".n"_prefix
+	}
+	s rc=##Class(Config.Journal).IsJrnDirValid(locdir,prefix)
+	i '(''rc) q 0
+	q 1
+}
+ ; BITWISE.INC, DPB139 07/09/93
+FIXDIR(dir) ;procedure, dir is passed by reference
+ Q:dir=""
+ i ($zversion(1)=1) d
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ i '($zversion(1)=1) Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))
+ i '($zversion(1)=1) s dir=dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+ Q
+fixdir(dir) ;function
+ Q:dir="" ""
+ i ($zversion(1)=1) d  q dir
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")) dir
+ Q dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+basename(f) ;similar to basename on UNIX
+ Q $P(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),1,$L(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))-1)_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+appdir(d1,d2) ;use $zu(12,d2) to append d2 to canonic dir
+ i ($zversion(1)=1) S $E(d1,$L(d1))="."_d2_"]"
+ i '($zversion(1)=1) S d1=d1_d2
+ Q d1
+VALIDIR(dir) ;validate directory dir and create it if dir doesn't exist
+ new flag
+ s flag=1
+ g vdir2
+validir(dir,flag) ;validate directory dir and optionally create it if it
+vdir2 ; VALIDIR(dir) comes here with flag set to 1
+ quit:$$ChkDirOrSpecEXISTS(dir)'="" 1   ; dir is valid and exists
+ quit:$$ChkDirVALID(dir)="" 0    ; dir is not valid
+ i flag'=1 q 0  ; flag says don't create, return failure
+ new x
+ set x=$$mkdir(dir)  ; returns 0 for success, 1 for failure
+ q:x=1 0  ; failed to create
+ quit:$$ChkDirOrSpecEXISTS(dir)="" 0   ; it doesn't we failed
+ q 1  ; success
+mkdir(dir) ;create a new directory
+ i ($zversion(1)=1) q:$$ChkDirVALID(dir)="" 1  ; dir is invalid, return failure
+ q '##class(%Library.File).CreateDirectoryChain(dir)
+jrnshort(jf,short) ;get/set short form of a journal file name FIXME HYY1999
+         N (jf,short)
+         S len=$L($P(jf,";"))
+         Q:$G(short)="" $E(jf,len-11,len) ;"GET" form
+         S $E(jf,len-11,len)=short ;"SET" form
+         Q jf
+GJrnPrefix(jf) ;extract prefix from the journal file name jf
+         N (jf)
+         S fname=$P(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),$L(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")))       
+         Q $e(fname,1,$l($p(fname,"."))-8)
+GetJrnFileName(path) { 
+	i $f(path,"/") q $p(path,"/",$l(path,"/")) ;presumably a Unix path
+	if $f(path,"\") q $p(path,"\",$l(path,"\")) ;presumably a Windows path
+	s vmsfile=$p(path,"]",2) i vmsfile="" q path ;a name only, not a path
+	q $p(vmsfile,";") ;return name from a VMS path without trailing ";"
+}
+dirinvalidmsg(dir1,dir2) 
+ n valid1,valid2,cnt,msg
+ s valid1=$$VALIDIR(dir1),valid2=$$VALIDIR(dir2)
+ s cnt=valid1+valid2 ; cnt = 0 if both invalid, 1 if one is valid
+ s msg="The following journaling "
+ s:cnt msg=msg_"directory is" 
+ s:'cnt msg=msg_"directories are"
+ s msg=msg_" not valid"_$C(13,10)
+ s:'valid1 msg=msg_"     "_dir1_$C(13,10)
+ s:'valid2 msg=msg_"     "_dir2_$C(13,10)
+ q msg
+ChkDirVALID(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,1)
+ChkDirEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkDirOrSpecEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,3)
+ChkDir(R) N N S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkBad S $ZT="" W !,"<"_$P($P($ZE,"<",2),">")_"> error -- invalid directory"
+ Q ""

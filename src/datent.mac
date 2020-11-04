@@ -1,0 +1,120 @@
+ROUTINE datent
+datent ; second data entry routine
+ 
+main ; main loop section
+ do {
+     do prompt()
+     quit:(name = "")
+     do display()
+     do store()
+    }
+ while name'=""
+ quit
+ 
+prompt() [name, phone, intdob]   
+ ; procedure for prompting
+ {
+ do {
+     read !, "Name: ", name
+     quit:(name = "")  ; user entered nothing
+     set name = $$validName( name )
+    }
+ while name = 0
+ quit:(name = "")  ; exit procedure
+         
+ do {
+     read !, "Phone (617): ", phone
+     set phone = $$validPhone( phone )
+    }
+ while phone = 0
+ 
+ do {
+     read !, "DOB: ", dob
+     set intdob = $$validDOB( dob )
+    }
+ while intdob = 0
+ write !!
+ }
+ 
+display() [name, phone, intdob] PUBLIC
+ ; display the data
+ {
+ write !, "Name:", ?20, name
+ write !, "Phone:", ?20, phone
+ write !, "DOB:", ?20, $zdate(intdob, 2)
+ write !!
+ }
+ 
+store()  [name, phone, intdob]
+ ; store the data
+ {
+ read !, "Store? (y/n): ", yn                 ; see if user wants to store
+ if ( yn '= "y" ) {                           ; only go on if user says yes
+     write "...not stored."
+     quit
+    }
+ 
+ set id = $increment( ^PersonD )              ; use $i to generate a new id
+ set rec = name _ "^" _ phone _ "^" _ intdob  ; concatenate the data into a record
+ set ^PersonD( id ) = rec                     ; store the record
+ 
+ set ln = $piece(name, ",", 1), 
+     fn = $piece(name, ",", 2)                ; break name for storage in index
+ 
+ /* the next three statements store data in subscripts
+    because of the automatic sorting of subscripts,
+    this has the effect of building 3 indexes: name, phone, and DOB */
+ set ^PersonI( "Name", ln, fn, id) = ""       ; store the name
+ set ^PersonI( "Phone", phone) = id           ; store the UNIQUE phone
+ set ^PersonI( "DOB", intdob, id) = ""        ; store the DOB
+ write "...stored"                            ; done
+ }
+ 
+validName(name)  PUBLIC ; validate a Name
+ /* returns 0 for an invalid name and writes error message
+    returns the unchanged name otherwise */
+ {
+ if ( name?1u.l1","1u.l) {
+     quit name }
+ else {
+     write !,"Last,First"
+     quit 0
+    }
+ }
+        
+validPhone(phone) PUBLIC ; validate a phone number
+ /* returns 0 for invalid phone numbers and writes error message
+    returns the valid phone number with default area code added if necessary */
+ {
+ if ( phone?.1(3n1"-")3n1"-"4n ) {
+     set:(phone?3n1"-"4n) phone = "617-" _ phone ; add default area code
+     if $data( ^PersonI( "Phone", phone)) {
+         write !, "Phone number in use"
+         quit 0 
+        }
+     else {
+         quit phone }
+    }
+ else {
+     write !, "###-###-#### or ###-####"
+     quit 0
+    }
+ }
+ 
+validDOB(date) PUBLIC ; validate a Date of Birth
+ /* returns 0 for invalid dates and writes error message
+    returns internal format for valid dates */
+ {
+ set convdate = $zdateh(date, 5,,,,,,, -1)
+ if (convdate = -1) {
+     write !,"Date in the past"
+     quit 0 ; invalid date
+    }
+ elseif ( convdate > $piece( $horolog, ",", 1)) {
+     write !,"Date in the past"
+     quit 0 ; invalid because it's in the future
+    }
+ else {
+     quit convdate ; valid date
+    }
+ }

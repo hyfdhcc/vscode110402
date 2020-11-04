@@ -1,0 +1,919 @@
+ROUTINE EncryptionKey [Type=INT]
+EncryptionKey ; Manage Encryption Key ; RJW2209 4/24/14
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ d MENU()
+ q
+MENU() PUBLIC { 
+ s $zt="ERROR"
+ s List(1)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"4033334221"),"Create new encryption key and key file")
+ s List(2)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"279627488"),"Manage existing encryption key file")
+ s List(3)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"2221543131"),"Database encryption")
+ s List(4)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"3447742509"),"Data element encryption for applications")
+ f  {
+ 	s Value=""
+	s Status=##Class(%Library.Prompt).GetMenu("Select option:",.Value,.List,,8+128+4)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+ 	i Value=1 d CreateInt() Continue
+ 	i Value=2 d ManageInt() Continue
+ 	i Value=3 d MenuDB() Continue
+ 	i Value=4 d MenuMK() Continue
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ze
+}
+MenuDB() PUBLIC { 
+ s $zt="ERROR"
+ s List(1)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"607949000"),"Activate database encryption keys from key file")
+ s List(2)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"2494226691"),"List activated database encryption key identifiers")
+ s List(3)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"4275907466"),"Deactivate database encryption key")
+ s List(4)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"247612224"),"Configure Cache startup options")
+ s List(5)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"2290653314"),"Set default database encryption key")
+ s List(6)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"2853849312"),"Set journal file encryption key")
+ f  {
+ 	s Value=""
+	s Status=##Class(%Library.Prompt).GetMenu("Select option:",.Value,.List,,8+128+4)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+ 	i Value=1 d ActivateInt(1) Continue
+ 	i Value=2 d ShowKeyInt^DATABASE1() Continue
+ 	i Value=3 d DeleteKeyInt^DATABASE1() Continue
+ 	i Value=4 d ConfigStartInt^DATABASE1() Continue
+ 	i Value=5 d SetDefaultKeyInt^DATABASE1() Continue
+ 	i Value=6 d SetJournalKeyInt^DATABASE1() Continue
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ze
+}
+MenuMK() PUBLIC { 
+ s $zt="ERROR"
+ s List(1)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"422571474"),"Activate data element encryption key from key file")
+ s List(2)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"2348174652"),"List activated data element encryption key identifiers")
+ s List(3)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"1422728880"),"Deactivate data element encryption key")
+ f  {
+ 	s Value=""
+	s Status=##Class(%Library.Prompt).GetMenu("Select option:",.Value,.List,,8+128+4)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+ 	i Value=1 d ActivateInt(2) Continue
+ 	i Value=2 d ListInt() Continue
+ 	i Value=3 d DeactivateInt() Continue
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ze
+}
+CreateInt() public {
+	Set $zt="Error"
+ 	i '$SYSTEM.Security.Check("%Admin_Secure","USE") w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2529476099"),"Operation requires %Admin_Secure:Use privilege") q
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"941264945"),"Encryption key file: ")
+	Read file Quit:file=""
+	If +file Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3021680386"),"File name '"),file,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3958104867"),"' is invalid.") Quit
+	If ##class(%Library.File).Exists(file) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4085484887"),"File '"),file,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1394507093"),"' already exists.") Quit
+	Set sc=$$CreateFile(file)
+	if ('sc) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1843569575"),"Error creating key file: "),file Goto Error
+	Write !,"Key file format:"
+	Set List(1)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1441572650"),"Single key only")
+	Set List(2)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2899143842"),"Single or multiple keys")
+ 	Set Value=""
+ver	Set Status=##Class(%Library.Prompt).GetMenu("Select:",.Value,.List,,8+128+4)
+ 	If (+Status=0)||(Status=2)||(Value<1)||(Value>2) Goto ver
+ 	Set version=Value
+	Set MKEncKeyID=$System.Util.CreateGUID()
+	Set data("KEY",MKEncKeyID,"EncAlg")=sys.DBEncAlgorithm
+	If (version=1) {
+		Set data("Version")="1.0"
+	} ElseIf (version=2) {
+		Set data("Version")="2.0"
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"974741573"),"Key description: ")
+		Read desc
+		Set data("KEY",MKEncKeyID,"Description")=desc
+		Set data("KEY",MKEncKeyID,"Startup")="11"
+	}
+	Set Username=$Username
+un	Set Username=$$AskUsername(.Username) If Username="" Write !,$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"2019941609"),"Aborting.") Goto Error
+	Set Password=$$AskNewPW(Username) If Password="" Set Username="" Goto un
+	Set Salt=$System.Encryption.GenCryptRand(sys.KeyEncKeySaltLength)
+	Write !,"Available cipher security levels:"
+	Set List(1)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"2982619423"),"128-bit")
+	Set List(2)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"2444280189"),"192-bit")
+	Set List(3)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"572177755"),"256-bit")
+ 	Set Value=""
+kl	Set Status=##Class(%Library.Prompt).GetMenu("Select:",.Value,.List,,8+128+4)
+ 	If (+Status=0)||(Status=2)||(Value<1)||(Value>3) Goto kl
+ 	If Value=1 Set KeyLength=16
+ 	If Value=2 Set KeyLength=24
+ 	If Value=3 Set KeyLength=32
+	Set KeyEncKey=$System.Encryption.PBKDF2(Password,sys.KeyEncKeyIterations,Salt,KeyLength)
+	Set data("ADM",Username,"Iterations")=sys.KeyEncKeyIterations
+	Set data("ADM",Username,"Salt")=Salt
+	Set data("ADM",Username,"KEKLen")=KeyLength
+	If (version=1) {
+		Set EncMKEncKey=$System.Security.System.CreateEncryptedMKEncKey(KeyLength,KeyEncKey)
+		Set data("ADM",Username,"EncKey")=EncMKEncKey
+	} ElseIf (version=2) {
+		Set EncMasterKEK=$System.Security.System.CreateEncryptedMKEncKey(KeyLength,KeyEncKey)
+		Set data("ADM",Username,"EncKey")=EncMasterKEK
+		Set EncMKEncKey=$System.Security.System.CreateEncryptedMKEncKey(KeyLength,EncMasterKEK,KeyEncKey)
+		Set data("KEY",MKEncKeyID,"EncKey")=EncMKEncKey
+	}
+	Set sc=$$WriteFile(file,.data)
+	If ('sc) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2615057322"),"Error writing key file: "),file Goto Error
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"697604464"),"Encryption key created: "),MKEncKeyID
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2195911628"),"Encryption key file created: "),file
+	Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^CacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")))_MKEncKeyID_$C(13,10)
+	Set Eventdata=Eventdata_$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^CacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")))_file
+	Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncKeyfileCreated"))
+	Do AdminListInt(.data)
+	Write !!,$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"3685481439"),"This key is NOT activated.")
+	Quit
+Error Set $zt=""
+	Write !,$ze
+	If $d(file) Do ##class(%Library.File).Delete(file)
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"852624112"),"Encryption key creation failed.")
+	Quit
+}
+Create(file,Username,Password,KeyLength,st,version,desc) public {
+	Set $zt="Error"
+	i '$SYSTEM.Security.Check("%Admin_Secure","USE") s st=$$Error^%apiOBJ(921,"%Admin_Secure"_":"_"USE") q ""
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	If (file="")||(Username="")||(Password="") Set st=$$Error^%apiOBJ(5022) Quit ""
+	If $ZISWIDE(Username)||$ZISWIDE(Password) Set st=$$Error^%apiOBJ(1211) Quit ""
+	If +file Set st=$$Error^%apiOBJ(5006,file) Quit ""
+	If (KeyLength="") Set KeyLength=16
+	Set Username=$ZCVT(Username,"U")
+	Set LoginRules=##class(Security.LoginRules).%OpenId("SYSTEM")
+	Set pattern=LoginRules.PasswordPattern
+	Set minlen=$p(pattern,".")
+	If $l(Password)<minlen Set st=$$Error^%apiOBJ(1209,minlen) Quit ""
+	If ##class(%Library.File).Exists(file) Set st=$$Error^%apiOBJ(5027,file) Quit ""
+	Set sc=$$CreateFile(file)
+	if ('sc) Set st=sc Quit ""
+	Set data("Version")=$G(version,"1.0")
+	Set MKEncKeyID=$System.Util.CreateGUID()
+	Set data("KEY",MKEncKeyID,"EncAlg")=sys.DBEncAlgorithm
+	If (data("Version")="2.0") {
+		If '$d(desc) Set desc="Key description"
+		Set data("KEY",MKEncKeyID,"Description")=desc
+		Set data("KEY",MKEncKeyID,"Startup")="11"
+	}
+	Set Salt=$System.Encryption.GenCryptRand(sys.KeyEncKeySaltLength)
+	Set KeyEncKey=$System.Encryption.PBKDF2(Password,sys.KeyEncKeyIterations,Salt,KeyLength)
+	Set data("ADM",Username,"Iterations")=sys.KeyEncKeyIterations
+	Set data("ADM",Username,"Salt")=Salt
+	Set data("ADM",Username,"KEKLen")=KeyLength
+	If (data("Version")="1.0") {
+		Set EncMKEncKey=$System.Security.System.CreateEncryptedMKEncKey(KeyLength,KeyEncKey)
+		Set data("ADM",Username,"EncKey")=EncMKEncKey
+	} ElseIf (data("Version")="2.0") {
+		Set EncMasterKEK=$System.Security.System.CreateEncryptedMKEncKey(KeyLength,KeyEncKey)
+		Set data("ADM",Username,"EncKey")=EncMasterKEK
+		Set EncMKEncKey=$System.Security.System.CreateEncryptedMKEncKey(KeyLength,EncMasterKEK,KeyEncKey)
+		Set data("KEY",MKEncKeyID,"EncKey")=EncMKEncKey
+	}
+	Set sc=$$WriteFile(file,.data)
+	If ('sc) Do ##class(%Library.File).Delete(file) Set st=sc Quit ""
+	Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^CacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")))_MKEncKeyID_$C(13,10)
+	Set Eventdata=Eventdata_$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^CacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")))_file
+	Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncKeyfileCreated"))
+	Set st=1 Quit MKEncKeyID
+Error Set $zt=""
+	If $d(file) Do ##class(%Library.File).Delete(file)
+	Set st=$$Error^%apiOBJ(1206)
+	Quit ""
+}
+ActivateInt(use) public {
+ 	i '$SYSTEM.Security.Check("%Admin_Secure","USE") w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2529476099"),"Operation requires %Admin_Secure:Use privilege") q $$Error^%apiOBJ(921,"%Admin_Secure"_":"_"USE")
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"941264945"),"Encryption key file: ")
+	Read file Quit:file="" $$Error^%apiOBJ(5022)
+	If '##class(%Library.File).Exists(file)||##class(%Library.File).DirectoryExists(file) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4085484887"),"File '"),file,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3114949802"),"' does not exist.") Quit $$Error^%apiOBJ(5012,file)
+	Set sc=$$ReadFile(file,.data)
+	If ('sc) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2140544891"),"Error reading key file: "),file Quit sc
+	Set Username=$Username
+	Set Username=$$AskUsername(.Username) If Username="" Quit $$Error^%apiOBJ(5022)
+	If '$d(data("ADM",Username)) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"955287614"),"User '"),Username,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2659605542"),"' not found in key file '"),file,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1204464981"),"'.") Quit $$Error^%apiOBJ(1204,Username,file)
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1941114787"),"Password: ")
+	Set $zt="ERROR"
+	Use:$ZU(96,14)=1 0:(:"+S") Read Password Use:$ZU(96,14)=1 0:(:"-S")
+	Set $zt=""
+	Set KeyEncKey = $System.Encryption.PBKDF2(Password,data("ADM",Username,"Iterations"),data("ADM",Username,"Salt"),data("ADM",Username,"KEKLen"))
+	Set KeyID=""
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	For {
+		Set KeyID=$O(data("KEY",KeyID))
+		If KeyID="" Quit
+		If (use=1) {
+			Set KeyIDList=$System.Security.System.GetDBEncKeyIDList()
+			If $F(KeyIDList,KeyID) Continue
+			If ($L(KeyIDList)&&($L(KeyIDList,",")=4)) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"382572131"),"No space available for encryption key") Quit
+			If (data("Version")="1.0") {
+				Set sc=$System.Security.System.SetDBEncKey(KeyID,data("KEY",KeyID,"EncAlg"),data("ADM",Username,"EncKey"),KeyEncKey)
+				If 'sc Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3128113833"),"Encryption key unwrap failed; possible incorrect password.") Quit
+				If (sys.DBEncDefaultKeyID="") {
+					Set sys.DBEncDefaultKeyID=KeyID
+				}
+				If (sys.DBEncJournalKeyID="") {
+					Set sys.DBEncJournalKeyID=KeyID
+				}
+			} ElseIf (data("Version")="2.0") {
+				Set sc=$System.Security.System.SetDBEncKey(KeyID,data("KEY",KeyID,"EncAlg"),data("KEY",KeyID,"EncKey"),data("ADM",Username,"EncKey"),KeyEncKey)
+				If 'sc Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3128113833"),"Encryption key unwrap failed; possible incorrect password.") Quit
+				If (sys.DBEncDefaultKeyID="")&&($e(data("KEY",KeyID,"Startup"),1)) {
+					Set sys.DBEncDefaultKeyID=KeyID
+				}
+				If (sys.DBEncJournalKeyID="")&&($e(data("KEY",KeyID,"Startup"),2)) {
+					Set sys.DBEncJournalKeyID=KeyID
+				}
+			}
+			If (sys.DBEncDefaultKeyID=KeyID) {
+				Do $System.Security.System.SetDBEncKeyDefault(KeyID)
+			}
+			If (sys.DBEncJournalKeyID=KeyID) {
+				Do $System.Security.System.SetJrnEncKey(KeyID)
+			}
+			Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2311026441"),"Encryption key activated: "),KeyID 
+			Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^CacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")))_KeyID_$C(13,10)
+			Set Eventdata=Eventdata_$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^CacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")))_file
+			Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncKeyActivated"))
+			If 'sys.DBEncStartMode Set sys.DBEncStartMode=1
+		} ElseIf (use=2) {
+			Set KeyIDList=$System.Security.System.GetMKEncKeyIDList()
+			If $F(KeyIDList,KeyID) Continue
+			If ($L(KeyIDList)&&($L(KeyIDList,",")=4)) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"382572131"),"No space available for encryption key") Quit
+			If (data("Version")="1.0") {
+				Set sc=$System.Security.System.SetMKEncKey(KeyID,data("KEY",KeyID,"EncAlg"),data("ADM",Username,"EncKey"),KeyEncKey)
+				If 'sc Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3128113833"),"Encryption key unwrap failed; possible incorrect password.") Quit
+			} ElseIf (data("Version")="2.0") {
+				Set sc=$System.Security.System.SetMKEncKey(KeyID,data("KEY",KeyID,"EncAlg"),data("KEY",KeyID,"EncKey"),data("ADM",Username,"EncKey"),KeyEncKey)
+				If 'sc Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3128113833"),"Encryption key unwrap failed; possible incorrect password.") Quit
+			}
+			Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2311026441"),"Encryption key activated: "),KeyID 
+			Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^CacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")))_KeyID_$C(13,10)
+			Set Eventdata=Eventdata_$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^CacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")))_file
+			Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncKeyActivated"))
+		}
+	}
+	If (''sc) Do sys.%Save()
+	Quit
+ERROR Set $zt=""
+	Write !,$ze
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2618747626"),"Encryption key activation failed.")
+	Quit
+}
+Activate(file,Username,Password,use) public {
+	i '$SYSTEM.Security.Check("%Admin_Secure","USE") q $$Error^%apiOBJ(921,"%Admin_Secure"_":"_"USE")
+	If (file="")||(Username="")||(Password="") Quit $$Error^%apiOBJ(5022)
+	Set Username=$ZCVT(Username,"U")
+	Set $zt="Error"
+	If '##class(%Library.File).Exists(file)||##class(%Library.File).DirectoryExists(file) Quit $$Error^%apiOBJ(5012,file)
+	Set sc=$$ReadFile(file,.data)
+	If ('sc) Quit sc
+	If '$d(data("ADM",Username)) Quit $$Error^%apiOBJ(1204,Username,file)
+	Set KeyEncKey = $System.Encryption.PBKDF2(Password,data("ADM",Username,"Iterations"),data("ADM",Username,"Salt"),data("ADM",Username,"KEKLen"))
+	Set KeyID=""
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	For {
+		Set KeyID=$O(data("KEY",KeyID))
+		If KeyID="" Set sc=1 Quit
+		If (use=1) {
+			Set KeyIDList=$System.Security.System.GetDBEncKeyIDList()
+			If $F(KeyIDList,KeyID) Continue
+			If ($L(KeyIDList)&&($L(KeyIDList,",")=4)) Set sc=$$Error^%apiOBJ(1220) Quit
+			If (data("Version")="1.0") {
+				Set sc=$System.Security.System.SetDBEncKey(KeyID,data("KEY",KeyID,"EncAlg"),data("ADM",Username,"EncKey"),KeyEncKey)
+				If 'sc Set sc=$$Error^%apiOBJ(1219) Quit
+				If (sys.DBEncDefaultKeyID="") {
+					Set sys.DBEncDefaultKeyID=KeyID
+				}
+				If (sys.DBEncJournalKeyID="") {
+					Set sys.DBEncJournalKeyID=KeyID
+				}
+			} ElseIf (data("Version")="2.0") {
+				Set sc=$System.Security.System.SetDBEncKey(KeyID,data("KEY",KeyID,"EncAlg"),data("KEY",KeyID,"EncKey"),data("ADM",Username,"EncKey"),KeyEncKey)
+				If 'sc Set sc=$$Error^%apiOBJ(1219) Quit
+				If (sys.DBEncDefaultKeyID="")&&($e(data("KEY",KeyID,"Startup"),1)) {
+					Set sys.DBEncDefaultKeyID=KeyID
+				}
+				If (sys.DBEncJournalKeyID="")&&($e(data("KEY",KeyID,"Startup"),2)) {
+					Set sys.DBEncJournalKeyID=KeyID
+				}
+			}
+			If (sys.DBEncDefaultKeyID=KeyID) {
+				Do $System.Security.System.SetDBEncKeyDefault(KeyID)
+			}
+			If (sys.DBEncJournalKeyID=KeyID) {
+				Do $System.Security.System.SetJrnEncKey(KeyID)
+			}
+			Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^CacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")))_KeyID_$C(13,10)
+			Set Eventdata=Eventdata_$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^CacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")))_file
+			Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncKeyActivated"))
+			If 'sys.DBEncStartMode Set sys.DBEncStartMode=1
+		} ElseIf (use=2) {
+			Set KeyIDList=$System.Security.System.GetMKEncKeyIDList()
+			If $F(KeyIDList,KeyID) Continue
+			If ($L(KeyIDList)&&($L(KeyIDList,",")=4)) Set sc=$$Error^%apiOBJ(1220) Quit
+			If (data("Version")="1.0") {
+				Set sc=$System.Security.System.SetMKEncKey(KeyID,data("KEY",KeyID,"EncAlg"),data("ADM",Username,"EncKey"),KeyEncKey)
+				If 'sc Set sc=$$Error^%apiOBJ(1219) Quit
+			} ElseIf (data("Version")="2.0") {
+				Set sc=$System.Security.System.SetMKEncKey(KeyID,data("KEY",KeyID,"EncAlg"),data("KEY",KeyID,"EncKey"),data("ADM",Username,"EncKey"),KeyEncKey)
+				If 'sc Set sc=$$Error^%apiOBJ(1219) Quit
+			}
+			Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^CacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")))_KeyID_$C(13,10)
+			Set Eventdata=Eventdata_$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^CacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")))_file
+			Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncKeyActivated"))
+		}
+	}
+	If (''sc) Do sys.%Save()
+	Quit sc
+Error Set $zt=""
+	Quit $$Error^%apiOBJ(1207)
+}
+ActivateDB(file,Username,Password) public {
+	Quit $$Activate(file,Username,Password,1)
+}
+ActivateMK(file,Username,Password) public {
+	Quit $$Activate(file,Username,Password,2)
+}
+ListInt() public {
+	Set MKEncKeyIDList=$System.Security.System.GetMKEncKeyIDList()
+	If MKEncKeyIDList="" Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1288069689"),"No encryption keys are activated.") Quit
+	Write !,$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"2796964326"),"Activated encryption key identifiers:")
+	For i=1:1:$L(MKEncKeyIDList,",") Write !,?5,$P(MKEncKeyIDList,",",i)
+	Quit
+}
+ListMK() public {
+	Quit $SYSTEM.Security.System.GetMKEncKeyIDList()
+}
+ListDB() public {
+	Quit $System.Security.System.GetDBEncKeyIDList()
+}
+DeactivateInt() public {
+ 	i '$SYSTEM.Security.Check("%Admin_Secure","USE") w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2529476099"),"Operation requires %Admin_Secure:Use privilege") q
+	Set MKEncKeyIDList=$System.Security.System.GetMKEncKeyIDList()
+	If MKEncKeyIDList="" Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1288069689"),"No encryption keys are activated.") Quit
+	Set Nkeys=$L(MKEncKeyIDList,",")
+	for i=1:1:Nkeys Set List(i)=$P(MKEncKeyIDList,",",i)
+ 	s Value=""
+	s Status=##Class(%Library.Prompt).GetMenu("Select key:",.Value,.List,,8+128+4)
+ 	i (+Status=0)||(Status=2)||(Value<1)||(Value>Nkeys) q
+ 	Set MKEncKeyID=$P(MKEncKeyIDList,",",Value)
+	Set rc=$System.Security.System.DeleteMKEncKey(MKEncKeyID)
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"961569330"),"Encryption key deactivated.")
+	Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^CacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")))_MKEncKeyID
+	Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncKeyDeactivated"))
+	Quit
+}
+DeactivateMK(MKEncKeyID) public {
+	i '$SYSTEM.Security.Check("%Admin_Secure","USE") q $$Error^%apiOBJ(921,"%Admin_Secure"_":"_"USE")
+	If MKEncKeyID="" Quit $$Error^%apiOBJ(1201)
+	Set MKEncKeyIDList=$System.Security.System.GetMKEncKeyIDList()
+	If '$F(MKEncKeyIDList,MKEncKeyID) Quit $$Error^%apiOBJ(1201)
+	Do $System.Security.System.DeleteMKEncKey(MKEncKeyID)
+	Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^CacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")))_MKEncKeyID
+	Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncKeyDeactivated"))
+	Quit 1
+}
+DeactivateDB(DBEncKeyID) public {
+	If '$D(DBEncKeyID) Set DBEncKeyID=$System.Security.System.GetDBEncKeyID()
+	Quit $$DeleteKey^DATABASE1(DBEncKeyID)
+}
+ReadFile(file,data) public {
+	Set ZEOF=$zu(68,40,1),di=$io
+	Open file:"RVK\RAW\":1 Else  Do $zu(68,40,ZEOF) Quit $$Error^%apiOBJ(5005,file)
+	Use file Read data("Version")
+	If (data("Version")="1.0") {
+		Read KeyID
+		Read data("KEY",KeyID,"EncAlg")
+		Set data("KEY",KeyID,"Description")="",data("KEY",KeyID,"Startup")="11"
+		If ($zeof) Close file Do $zu(68,40,ZEOF) Use di Quit $$Error^%apiOBJ(1202,file)
+		For {
+			Read Username
+			If $ZEOF Quit
+			Set Username=$ZCVT(Username,"U")
+			Read data("ADM",Username,"Iterations"),data("ADM",Username,"Salt")
+			Read data("ADM",Username,"KEKLen"),data("ADM",Username,"EncKey")
+		}
+	} ElseIf (data("Version")="2.0") {
+		For {
+			Read Type,Name
+			If $ZEOF Quit
+			Set Name=$ZCVT(Name,"U")
+			If (Type="KEY") {
+				Read data("KEY",Name,"EncAlg"),data("KEY",Name,"Description")
+				Read data("KEY",Name,"Startup"),data("KEY",Name,"EncKey")
+			} ElseIf Type="ADM" {
+				Read data("ADM",Name,"Iterations"),data("ADM",Name,"Salt")
+				Read data("ADM",Name,"KEKLen"),data("ADM",Name,"EncKey")
+			}
+		}
+	}
+	Close file Do $zu(68,40,ZEOF) Use di
+	Quit 1
+}
+WriteFile(file,data) public {
+	i '$SYSTEM.Security.Check("%Admin_Secure","USE") q $$Error^%apiOBJ(921,"%Admin_Secure"_":"_"USE")
+	Set di=$io
+	Open file:"WVK\RAW\":1 Else  Quit $$Error^%apiOBJ(5005,file)
+	Use file  Write data("Version")
+	If (data("Version")="1.0") {
+		Set Name=$O(data("KEY",""))
+		Write Name
+		Write data("KEY",Name,"EncAlg")
+		Set Name=""
+		For {
+			Set Name=$O(data("ADM",Name))
+			If Name="" Quit
+			Write Name
+			Write data("ADM",Name,"Iterations"),data("ADM",Name,"Salt")
+			Write data("ADM",Name,"KEKLen"),data("ADM",Name,"EncKey")
+		}
+	} ElseIf (data("Version")="2.0") {
+		Set Name=""
+		For {
+			Set Name=$O(data("KEY",Name))
+			If Name="" Quit
+			Write "KEY",Name
+			Write data("KEY",Name,"EncAlg"),data("KEY",Name,"Description")
+			Write data("KEY",Name,"Startup"),data("KEY",Name,"EncKey")
+		}
+		Set Name=""
+		For {
+			Set Name=$O(data("ADM",Name))
+			If Name="" Quit
+			Write "ADM",Name
+			Write data("ADM",Name,"Iterations"),data("ADM",Name,"Salt")
+			Write data("ADM",Name,"KEKLen"),data("ADM",Name,"EncKey")
+		}
+	}
+	If $zversion(1)'=1 Write *-9
+	Close file Use di
+	Quit 1
+}
+CreateFile(file) public {
+	i '$SYSTEM.Security.Check("%Admin_Secure","USE") q $$Error^%apiOBJ(921,"%Admin_Secure"_":"_"USE")
+	Set di=$io
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	Open file:"WNVK\RAW\":1 Else  Quit $$Error^%apiOBJ(5005,file)
+	Close file Use di
+	// VMS, 64000d=FA00h, world group owner system, delete execute write read, bits disable access
+	// S:RWED, O:RWED, G:RE, W:
+	if $zversion(1)=1 set st=##class(%Library.File).SetAttributes(file,64000)
+	// UNIX, 33200d=100660o, owner group others, read write execute, bits enable access
+	if $zversion(1)=3 set st=##class(%Library.File).SetAttributes(file,33200)
+	Quit 1
+}
+AskUsername(Username) {
+un	Set Username=$g(Username)
+	If $ZISWIDE(Username) Set Username=""
+	Set Username=$ZCVT(Username,"U")
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2573098436"),"Username: ")
+	If Username]"" Write "[",Username,"] "
+	Read x
+	If x="" Quit Username
+	if $ZISWIDE(x) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4067274233"),"Wide Unicode characters are not supported in administrator usernames or passwords.") Goto un
+	Quit $ZCVT(x,"U")
+}
+AskNewPW(Username) {
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	Set LoginRules=##class(Security.LoginRules).%OpenId("SYSTEM")
+	Set pattern=LoginRules.PasswordPattern
+	Set minlen=$p(pattern,".")
+pw	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1941114787"),"Password: ")
+	Set $zt="ERROR"
+	Use:$ZU(96,14)=1 0:(:"+S") Read Password Use:$ZU(96,14)=1 0:(:"-S")
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3965113147"),"Confirm password: ")
+	Use:$ZU(96,14)=1 0:(:"+S") Read Conf Use:$ZU(96,14)=1 0:(:"-S")
+	Set $zt=""
+	if $ZISWIDE(Password) {
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4067274233"),"Wide Unicode characters are not supported in administrator usernames or passwords.")
+		Goto pw
+	}
+	If Password'=Conf {
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1294088103"),"Passwords don't match.")
+		Goto pw
+	}
+	If $l(Password)<minlen {
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"810298220"),"Invalid password.  Must contain at least "),minlen,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3778366079")," characters.")
+		Goto pw
+	}
+	Quit Password
+ERROR s $zt=""
+	i $ze["<INTERRUPT>" Use:$ZU(96,14)=1 0:(:"-S") q ""
+	ztrap $ze
+}
+ManageInt() public {
+	Set $zt="ERROR"
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"941264945"),"Encryption key file: ")
+	Read file Quit:file=""
+	If '##class(%Library.File).Exists(file)||##class(%Library.File).DirectoryExists(file) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4085484887"),"File '"),file,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3114949802"),"' does not exist.") Quit
+	Set sc=$$ReadFile(file,.data)
+	If ('sc) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2140544891"),"Error reading key file: "),file Quit
+	Set mod=0
+	Write !,!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2868895111"),"Key ID: ")_$O(data("KEY",""))
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1307801003"),"Changes will be saved on exit.")
+	Set List(1)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"171751874"),"List administrators")
+	Set List(2)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"2901575297"),"Add administrator")
+	Set List(3)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"2208664394"),"Remove administrator")
+	If (data("Version")="1.0") Set List(4)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2555011823"),"Convert key file to multi-key format")
+	If (data("Version")="2.0") {
+		Set List(4)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"952661045"),"List encryption keys")
+		Set List(5)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2499655182"),"Add encryption key")
+		Set List(6)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2556754491"),"Remove encryption key")
+	}
+ 	For  {
+ 		Set Value=""
+		Set Status=##Class(%Library.Prompt).GetMenu("Select option:",.Value,.List,,8+128+4)
+ 		If (+Status=0)||(Status=2)||(Value="") q
+ 		If Value=1 Do AdminListInt(.data) Continue
+ 		If Value=2 Set mod=mod+$$AdminAddInt(.data) Continue
+ 		If Value=3 Set mod=mod+$$AdminRemoveInt(.data) Continue
+ 		If Value=4 {
+	 		If data("Version")="1.0" Set mod=mod+$$KeyfileConvertInt(.data) Quit
+	 		If data("Version")="2.0" Do KeyListInt(.data) Continue
+ 		}
+ 		If Value=5 Set mod=mod+$$KeyAddInt(.data) Continue
+ 		If Value=6 Set mod=mod+$$KeyRemoveInt(.data) Continue
+	}
+	If $g(mod) {
+		Set sc=$$WriteFile(file,.data)
+		If ('sc) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2615057322"),"Error writing key file: "),file Quit
+		Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^CacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")))_file
+		Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncKeyfileModified"))
+	}
+	Quit 1
+ERROR s $zt=""
+	i $ze["<INTERRUPT>" q 0
+	ztrap $ze
+}
+AdminAddInt(data,Username) {
+ 	i '$SYSTEM.Security.Check("%Admin_Secure","USE") w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2529476099"),"Operation requires %Admin_Secure:Use privilege") q 0
+un1	Write !!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"773404228"),"Existing administrator:")
+	Set Username1=$$AskUsername(.Username) If Username1="" Quit 0
+	If '$d(data("ADM",Username1)) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"955287614"),"User '"),Username1,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"169596929"),"' not found in key file.") Quit 0
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1941114787"),"Password: ")
+	Set $zt="ERROR"
+	Use:$ZU(96,14)=1 0:(:"+S") Read Password1 Use:$ZU(96,14)=1 0:(:"-S")
+	Set $zt=""
+	If Password1="" Set Username1="" Goto un1
+	Set Iterations=data("ADM",Username1,"Iterations")
+	Set Salt=data("ADM",Username1,"Salt")
+	Set SaltLength=$L(Salt)
+	Set KeyLength=data("ADM",Username1,"KEKLen")
+	Set KeyEncKey1=$System.Encryption.PBKDF2(Password1,Iterations,Salt,KeyLength)
+	Set EncMKEncKey=data("ADM",Username1,"EncKey")
+un2	Write !!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"808161864"),"New administrator:")
+	Set Username2=$$AskUsername(.Username) If Username2="" Quit 0
+	If $d(data("ADM",Username2)) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"955287614"),"User '"),Username2,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"807175137"),"' already exists in database encryption key file.") Quit 0
+	Set Password2=$$AskNewPW(Username2) If Password2="" Set Username2="" Goto un2
+	Set Salt=$System.Encryption.GenCryptRand(SaltLength)
+	Set KeyEncKey2=$System.Encryption.PBKDF2(Password2,Iterations,Salt,KeyLength)
+	Set EncMKEncKey=$System.Security.System.ReencryptMKEncKey(EncMKEncKey,KeyEncKey1,KeyEncKey2)
+	If EncMKEncKey="" Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3128113833"),"Encryption key unwrap failed; possible incorrect password.") Quit $$Error^%apiOBJ(1219)
+	Set data("ADM",Username2,"Iterations")=Iterations
+	Set data("ADM",Username2,"Salt")=Salt
+	Set data("ADM",Username2,"KEKLen")=KeyLength
+	Set data("ADM",Username2,"EncKey")=EncMKEncKey
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2530197427"),"Administrator added.")
+	Quit 1
+ERROR s $zt=""
+	i $ze["<INTERRUPT>" Use:$ZU(96,14)=1 0:(:"-S") q 0
+	ztrap $ze
+}
+AdminAdd(file,Username1,Password1,Username2,Password2) public {
+	i '$SYSTEM.Security.Check("%Admin_Secure","USE") q $$Error^%apiOBJ(921,"%Admin_Secure"_":"_"USE")
+	If (file="")||(Username1="")||(Password1="")||(Username2="")||(Password2="") Quit $$Error^%apiOBJ(5022)
+	Set Username1=$ZCVT(Username1,"U")
+	If $ZISWIDE(Username1)||$ZISWIDE(Password1) Quit $$Error^%apiOBJ(1211)
+	Set Username2=$ZCVT(Username2,"U")
+	If $ZISWIDE(Username2)||$ZISWIDE(Password2) Quit $$Error^%apiOBJ(1211)
+	Set $zt="Error"
+	Set sc=$$ReadFile(file,.data)
+	if ('sc) Quit sc
+	If '$d(data("ADM",Username1)) Quit $$Error^%apiOBJ(1204,Username1,file)
+	Set Iterations=data("ADM",Username1,"Iterations")
+	Set Salt=data("ADM",Username1,"Salt")
+	Set SaltLength=$L(Salt)
+	Set KeyLength=data("ADM",Username1,"KEKLen")
+	Set KeyEncKey1=$System.Encryption.PBKDF2(Password1,Iterations,Salt,KeyLength)
+	Set EncMKEncKey=data("ADM",Username1,"EncKey")
+	If $d(data("ADM",Username2)) Quit $$Error^%apiOBJ(1205,Username2,file)
+	Set LoginRules=##class(Security.LoginRules).%OpenId("SYSTEM")
+	Set pattern=LoginRules.PasswordPattern
+	Set minlen=$p(pattern,".")
+	If $l(Password2)<minlen Quit $$Error^%apiOBJ(1209,minlen)
+	Set Salt=$System.Encryption.GenCryptRand(SaltLength)
+	Set KeyEncKey2=$System.Encryption.PBKDF2(Password2,Iterations,Salt,KeyLength)
+	Set EncMKEncKey=$System.Security.System.ReencryptMKEncKey(EncMKEncKey,KeyEncKey1,KeyEncKey2)
+	If EncMKEncKey="" Quit $$Error^%apiOBJ(1219)
+	Set data("ADM",Username2,"Iterations")=Iterations
+	Set data("ADM",Username2,"Salt")=Salt
+	Set data("ADM",Username2,"KEKLen")=KeyLength
+	Set data("ADM",Username2,"EncKey")=EncMKEncKey
+	Set sc=$$WriteFile(file,.data)
+	If ('sc) Quit sc
+	Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^CacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")))_file
+	Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncKeyfileModified"))
+	Quit 1
+Error Set $zt="" Quit $$Error^%apiOBJ(5001,"AdminAdd: "_$ze)
+}
+KeyAddInt(data,Username) {
+ 	i '$SYSTEM.Security.Check("%Admin_Secure","USE") w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2529476099"),"Operation requires %Admin_Secure:Use privilege") q 0
+	If (data("Version")'="2.0") Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"848607451"),"Invalid encryption key file format for this operation.") Quit 0
+	Set KeyID="",i=0
+	For {
+		Set KeyID=$O(data("KEY",KeyID)) Quit:KeyID=""
+		Set i=$I(i)
+	}
+	If (i=4) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"382572131"),"No space available for encryption key") Quit 0
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	Write !!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"773404228"),"Existing administrator:")
+un	Set Username=$$AskUsername(.Username) If Username="" Quit 0
+	If '$d(data("ADM",Username)) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"955287614"),"User '"),Username,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"169596929"),"' not found in key file.") Quit 0
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1941114787"),"Password: ")
+	Set $zt="ERROR"
+	Use:$ZU(96,14)=1 0:(:"+S") Read Password Use:$ZU(96,14)=1 0:(:"-S")
+	Set $zt=""
+	If Password="" Set Username="" Goto un
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"974741573"),"Key description: ")
+	Read desc
+	Set Iterations=data("ADM",Username,"Iterations")
+	Set Salt=data("ADM",Username,"Salt")
+	Set SaltLength=$L(Salt)
+	Set KeyLength=data("ADM",Username,"KEKLen")
+	Set KeyEncKey=$System.Encryption.PBKDF2(Password,Iterations,Salt,KeyLength)
+	Set EncMasterKEK=data("ADM",Username,"EncKey")
+	Set KeyID=$System.Util.CreateGUID()
+	Set EncMKEncKey=$System.Security.System.CreateEncryptedMKEncKey(KeyLength,EncMasterKEK,KeyEncKey)
+	If EncMKEncKey="" Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3128113833"),"Encryption key unwrap failed; possible incorrect password.") Quit 0
+	Set data("KEY",KeyID,"EncAlg")=sys.DBEncAlgorithm
+	Set data("KEY",KeyID,"Description")=desc
+	Set data("KEY",KeyID,"Startup")="00"
+	Set data("KEY",KeyID,"EncKey")=EncMKEncKey
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"697604464"),"Encryption key created: "),KeyID
+	Write !!,$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"3685481439"),"This key is NOT activated.")
+	Quit 1
+ERROR s $zt=""
+	i $ze["<INTERRUPT>" Use:$ZU(96,14)=1 0:(:"-S") q 0
+	ztrap $ze
+}
+KeyAdd(file,Username,Password,desc) public {
+	i '$SYSTEM.Security.Check("%Admin_Secure","USE") q $$Error^%apiOBJ(921,"%Admin_Secure"_":"_"USE")
+	If (Username="")||(Password="") Quit $$Error^%apiOBJ(5022)
+	Set $zt="Error"
+	Set sc=$$ReadFile(file,.data)
+	If ('sc) Quit sc
+	If (data("Version")'="2.0") Quit $$Error^%apiOBJ(1202,data("Version"))
+	Set KeyID="",i=0
+	For {
+		Set KeyID=$O(data("KEY",KeyID)) Quit:KeyID=""
+		Set i=$I(i)
+	}
+	If (i=4) Quit $$Error^%apiOBJ(1220)
+	Set Username=$ZCVT(Username,"U")
+	If $ZISWIDE(Username)||$ZISWIDE(Password) Quit $$Error^%apiOBJ(1211)
+	If '$d(data("ADM",Username)) Quit $$Error^%apiOBJ(1204,Username,file)
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	Set Iterations=data("ADM",Username,"Iterations")
+	Set Salt=data("ADM",Username,"Salt")
+	Set SaltLength=$L(Salt)
+	Set KeyLength=data("ADM",Username,"KEKLen")
+	Set KeyEncKey=$System.Encryption.PBKDF2(Password,Iterations,Salt,KeyLength)
+	Set EncMasterKEK=data("ADM",Username,"EncKey")
+	Set KeyID=$System.Util.CreateGUID()
+	Set EncMKEncKey=$System.Security.System.CreateEncryptedMKEncKey(KeyLength,EncMasterKEK,KeyEncKey)
+	If EncMKEncKey="" Quit $$Error^%apiOBJ(1219)
+	Set data("KEY",KeyID,"EncAlg")=sys.DBEncAlgorithm
+	Set data("KEY",KeyID,"Description")=desc
+	Set data("KEY",KeyID,"Startup")="00"
+	Set data("KEY",KeyID,"EncKey")=EncMKEncKey
+	Set sc=$$WriteFile(file,.data)
+	If ('sc) Quit sc
+	Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^CacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")))_file
+	Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncKeyfileModified"))
+	Quit 1
+Error Set $zt="" Quit $$Error^%apiOBJ(5001,"AdminAdd: "_$ze)
+}
+AdminRemoveInt(data) {
+ 	i '$SYSTEM.Security.Check("%Admin_Secure","USE") w !,"Operation requires %Admin_Secure:Use privilege" q 0
+	Set Username=$$AskUsername() If Username="" Quit 0
+	If '$d(data("ADM",Username)) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"955287614"),"User '"),Username,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"169596929"),"' not found in key file.") Quit 0
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	If (sys.DBEncStartMode=2)&&(sys.DBEncStartUsername=Username) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2405409434"),"Cannot remove unattended activation username from key file.") Quit 0
+	Set numadm=0
+	Set adm=$o(data("ADM",""))
+	While (adm'="") {
+		If '(adm?8AN1"-"4AN1"-"4AN1"-"4AN1"-"12AN1"_"1N) Set numadm=numadm+1
+		Set adm=$o(data("ADM",adm))
+	}
+	If (numadm=1)&&('(Username?8AN1"-"4AN1"-"4AN1"-"4AN1"-"12AN1"_"1N)) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2986433462"),"Cannot remove last interactive administrator from key file.") Quit 0
+	Kill data("ADM",Username)
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3079404826"),"Administrator removed.")
+	Quit 1
+}
+AdminRemove(file,Username) public {
+	i '$SYSTEM.Security.Check("%Admin_Secure","USE") q $$Error^%apiOBJ(921,"%Admin_Secure"_":"_"USE")
+	If (file="")||(Username="") Quit $$Error^%apiOBJ(5022)
+	Set Username=$ZCVT(Username,"U")
+	Set $zt="Error"
+	Set sc=$$ReadFile(file,.data)
+	If ('sc) Quit sc
+	If '$d(data("ADM",Username)) Quit $$Error^%apiOBJ(1204,Username,file)
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	If (sys.DBEncStartMode=2)&&(sys.DBEncStartUsername=Username) Quit $$Error^%apiOBJ(1222)
+	Set numadm=0
+	Set adm=$o(data("ADM",""))
+	While (adm'="") {
+		If '(adm?8AN1"-"4AN1"-"4AN1"-"4AN1"-"12AN1"_"1N) Set numadm=numadm+1
+		Set adm=$o(data("ADM",adm))
+	}
+	If (numadm=1)&&('(Username?8AN1"-"4AN1"-"4AN1"-"4AN1"-"12AN1"_"1N)) Quit $$Error^%apiOBJ(1210)
+	Kill data("ADM",Username)
+	Set sc=$$WriteFile(file,.data)
+	If ('sc) Quit sc
+	Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^CacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")))_file
+	Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncKeyfileModified"))
+	Quit 1
+Error Set $zt="" Quit $$Error^%apiOBJ(5001,"AdminRemove: "_$ze)
+}
+KeyRemoveInt(data) {
+ 	i '$SYSTEM.Security.Check("%Admin_Secure","USE") w !,"Operation requires %Admin_Secure:Use privilege" q 0
+	If (data("Version")'="2.0") Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"848607451"),"Invalid encryption key file format for this operation.") Quit 0
+	Set KeyID="",i=0
+	For {
+		Set KeyID=$O(data("KEY",KeyID)) Quit:KeyID=""
+		Set i=$I(i),List(i)=KeyID
+	}
+	Set Value=""
+	Set Status=##Class(%Library.Prompt).GetMenu("Select encryption key:",.Value,.List,,8+128+4)
+	If (+Status=0)||(Status=2)||(Value="") Quit 0
+	Set KeyID=""
+	For i=1:1:Value {
+		Set KeyID=$O(data("KEY",KeyID))
+	}
+	If '$d(data("KEY",KeyID)) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2388089698"),"Key '"),Username,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"169596929"),"' not found in key file.") Quit 0
+	Kill data("KEY",KeyID)
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3606486858"),"Key removed.")
+	Quit 1
+}
+KeyRemove(file,KeyID) public {
+	i '$SYSTEM.Security.Check("%Admin_Secure","USE") q $$Error^%apiOBJ(921,"%Admin_Secure"_":"_"USE")
+	If (file="")||(KeyID="") Quit $$Error^%apiOBJ(5022)
+	Set $zt="Error"
+	Set sc=$$ReadFile(file,.data)
+	If ('sc) Quit sc
+	If (data("Version")'="2.0") Quit $$Error^%apiOBJ(1202,data("Version"))
+	If '$d(data("KEY",KeyID)) Quit $$Error^%apiOBJ(1221,KeyID,file)
+	Kill data("KEY",KeyID)
+	Set sc=$$WriteFile(file,.data)
+	If ('sc) Quit sc
+	Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^CacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")))_file
+	Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncKeyfileModified"))
+	Quit 1
+Error Set $zt="" Quit $$Error^%apiOBJ(5001,"KeyRemove: "_$ze)
+}
+AdminListInt(data) {
+	Write !!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1103187481"),"Administrators:"),!
+	Set Username=""
+	For {
+		Set Username=$o(data("ADM",Username)) Quit:Username=""
+		Write !?5,Username
+	}
+}
+AdminList(file,status) public {
+	If (file="") Set status=$$Error^%apiOBJ(5022) Quit 0
+	Set sc=$$ReadFile(file,.data)
+	If ('sc) Set status=sc Quit 0
+	Set Username=""
+	Set AdminList=""
+	For {
+		Set Username=$o(data("ADM",Username)) Quit:Username=""
+		If $l(AdminList) Set AdminList=AdminList_","
+		Set AdminList=AdminList_Username
+	}
+	Set status=1
+	Quit AdminList
+}
+KeyListInt(data) {
+	Write !!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3685532725"),"Encryption keys:"),!
+	Write !,$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"947093690"),"Identifier")
+	Write ?38,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3950563313"),"Description")
+	Set KeyID=""
+	For {
+		Set KeyID=$o(data("KEY",KeyID)) Quit:KeyID=""
+		Write !,KeyID
+		Write ?38,data("KEY",KeyID,"Description")
+	}
+}
+KeyList(file,status) public {
+	If (file="") Set status=$$Error^%apiOBJ(5022) Quit 0
+	Set sc=$$ReadFile(file,.data)
+	If ('sc) Set status=sc Quit 0
+	Set KeyID="",KeyList=""
+	For {
+		Set KeyID=$o(data("KEY",KeyID)) Quit:KeyID=""
+		If $l(KeyList) Set KeyList=KeyList_","
+		Set KeyList=KeyList_KeyID
+	}
+	Set status=1
+	Quit KeyList
+}
+KeyDescGet(file,KeyID,status) public {
+	If (file="")||(KeyID="") Set status=$$Error^%apiOBJ(5022) Quit 0
+	Set sc=$$ReadFile(file,.data)
+	If ('sc) Set status=sc Quit 0
+	If '$d(data("KEY",KeyID)) Quit $$Error^%apiOBJ(1221,KeyID,file)
+	Set status=1
+	Quit data("KEY",KeyID,"Description")
+}
+KeyfileConvertInt(data,Username) {
+ 	i '$SYSTEM.Security.Check("%Admin_Secure","USE") w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2529476099"),"Operation requires %Admin_Secure:Use privilege") q 0
+	If (data("Version")'="1.0") Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"848607451"),"Invalid encryption key file format for this operation.") Quit 0
+	Write !!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"773404228"),"Existing administrator:")
+un	Set Username=$$AskUsername(.Username) If Username="" Quit 0
+	If '$d(data("ADM",Username)) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"955287614"),"User '"),Username,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"169596929"),"' not found in key file.") Quit 0
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1941114787"),"Password: ")
+	Set $zt="ERROR"
+	Use:$ZU(96,14)=1 0:(:"+S") Read Password Use:$ZU(96,14)=1 0:(:"-S")
+	Set $zt=""
+	If Password="" Set Username="" Goto un
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"974741573"),"Key description: ")
+	Read desc
+	Set Iterations=data("ADM",Username,"Iterations")
+	Set Salt=data("ADM",Username,"Salt")
+	Set SaltLength=$L(Salt)
+	Set KeyLength=data("ADM",Username,"KEKLen")
+	Set KeyEncKey=$System.Encryption.PBKDF2(Password,Iterations,Salt,KeyLength)
+	Set EncMKEncKey=data("ADM",Username,"EncKey")
+	Set out=$System.Security.System.ConvertMKEncKey(EncMKEncKey,KeyEncKey)
+	If out="" Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3128113833"),"Encryption key unwrap failed; possible incorrect password.") Quit 0
+	Set len=$L(out)
+	Set Name=$O(data("KEY",""))
+	Set data("KEY",Name,"Description")=desc
+	Set data("KEY",Name,"Startup")="11"
+	Set data("KEY",Name,"EncKey")=$E(out,1,len/2)
+	Set data("ADM",Username,"EncKey")=$E(out,len/2+1,len)
+	Set data("Version")="2.0"
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"444779168"),"Keyfile converted.")
+	Quit 1
+ERROR s $zt=""
+	i $ze["<INTERRUPT>" Use:$ZU(96,14)=1 0:(:"-S") q 0
+	ztrap $ze
+}
+KeyfileConvert(file,Username,Password,desc) public {
+	i '$SYSTEM.Security.Check("%Admin_Secure","USE") q $$Error^%apiOBJ(921,"%Admin_Secure"_":"_"USE")
+	If (file="")||(Username="")||(Password="") Quit $$Error^%apiOBJ(5022)
+	Set Username=$ZCVT(Username,"U")
+	If $ZISWIDE(Username)||$ZISWIDE(Password) Quit $$Error^%apiOBJ(1211)
+	Set $zt="Error"
+	Set sc=$$ReadFile(file,.data)
+	if ('sc) Quit sc
+	If (data("Version")'="1.0") Quit $$Error^%apiOBJ(1202,data("Version"))
+	If '$d(data("ADM",Username)) Quit $$Error^%apiOBJ(1204,Username,file)
+	Set Iterations=data("ADM",Username,"Iterations")
+	Set Salt=data("ADM",Username,"Salt")
+	Set SaltLength=$L(Salt)
+	Set KeyLength=data("ADM",Username,"KEKLen")
+	Set KeyEncKey=$System.Encryption.PBKDF2(Password,Iterations,Salt,KeyLength)
+	Set EncMKEncKey=data("ADM",Username,"EncKey")
+	Set out=$System.Security.System.ConvertMKEncKey(EncMKEncKey,KeyEncKey)
+	If out="" Quit $$Error^%apiOBJ(1219)
+	Set len=$L(out)
+	Set Name=$O(data("KEY",""))	
+	Set data("KEY",Name,"Description")=desc
+	Set data("KEY",Name,"Startup")="11"
+	Set data("KEY",Name,"EncKey")=$E(out,1,len/2)
+	Set data("ADM",Username,"EncKey")=$E(out,len/2+1,len)
+	Set data("Version")="2.0"
+	Set sc=$$WriteFile(file,.data)
+	If ('sc) Quit sc
+	Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^CacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")))_file
+	Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncKeyfileModified"))
+	Quit 1
+Error Set $zt="" Quit $$Error^%apiOBJ(5001,"KeyfileConvert: "_$ze)
+}
+KeyfileVersion(file) public {
+	If (file="") Set status=$$Error^%apiOBJ(5022) Quit 0
+	Set sc=$$ReadFile(file,.data)
+	If ('sc) Set status=sc Quit 0
+	Set status=1
+	Quit data("Version")
+}

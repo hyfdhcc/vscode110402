@@ -1,0 +1,5565 @@
+ROUTINE MIRROR [Type=INT]
+MIRROR ;GUI user interface and STU initialization code for mirroring, ;$Change: 4521965 $
+ ; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/sysconfig/mirror.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syMirror.inc#1 $ ($Change: 4521965 $) */
+        /* Initializing is the state a member has at startup until it
+           gets to wait^MIRRORMGR for the 1st time. At that point it has 
+           either become the backup or primary or we set the role to null
+           to indicate that it is up and running as opposed to still getting
+           started */
+				    /* Arbiter failover rules are in effect */
+				    /* Agent contact is required */
+					/* IsOtherNodeDown^ZMIRROR */
+				/* The client supports the arbiter */
+			 	/* This system is connected to the arbiter */
+		  		/* The other failover member is connected to the arbiter */
+		  		/* Either the QOSTimeout changed or the arbiter address changed.
+		  		   we should look up the current values and use them */
+				/* Arbiter job shoud close the connection and exit. The
+				   retry routine can restart the arbiter if conditions
+				   warrent. Generally used with clearing ArbiterSupported
+				   when the backup is removed or demoted. Cleared when
+				   the arbiter exits (eg. its a one time flag). */
+ do refreshLoop()
+ quit
+refreshLoop() PUBLIC {
+ do {
+	 if $SYSTEM.Mirror.GetInfo()["NOTINIT"&&('##class(Config.MirrorMember).isAsyncMember()) {
+	    s refresh=$$NotMemberMENU()
+	 } else {
+	 	s refresh=$$MENU()
+	 }
+ } while (refresh)
+ q
+}
+NotMemberMENU() PUBLIC { 
+ s $zt="ERROR"
+ s List(1)="List mirrored databases"
+ s List(2)="Remove one or more mirrored databases"
+ ; List(3)="Remove mirror configuration"
+ s cls=##Class(Config.MirrorMember).Open()
+ if cls.SystemName="" {
+	 s HasMirrorConfig=0
+ } else {
+	 s HasMirrorConfig=1
+	 s isAsyncMember=cls.isAsyncMember()
+ 	 s List(3)="Remove mirror configuration"
+ }
+ s listnum=HasMirrorConfig+2
+ if ##class(SYS.MirrorConfiguration).EnableMirrorMenu(1) {
+	 s List($i(listnum))="Create a Mirror"
+	 s ListRtn(listnum)=4
+ }
+ if ##class(SYS.MirrorConfiguration).EnableMirrorMenu(2) {
+	 s List($i(listnum))="Join Mirror as Failover Member"
+	 s ListRtn(listnum)=5
+ }
+ if ##class(SYS.MirrorConfiguration).EnableMirrorMenu(4) {
+	 s List($i(listnum))="Join Mirror as Async Member"
+	 s ListRtn(listnum)=6
+ }
+ if '$$IsMirrorServiceEnabled^MIRRORCTL() {
+	 s List($i(listnum))="Enable Mirror Service"
+	 s ListRtn(listnum)=7
+ }
+ s cls=""
+ ;
+ if 'HasMirrorConfig {
+    w !,"This instance is not initialized as a mirror member"
+ } else {
+	w !,"This instance is configured as "
+	if isAsyncMember {
+		w "an async member"
+	} else {
+		w " a failover member"
+	}
+	w " but is not currently"
+	w !,?5,"initialized as a mirror member."
+ }
+ f  {
+ 	s Value=""
+	s Status=##class(%Library.Prompt).GetMenu("Option?",.Value,.List,,8+128+4)
+ 	i (+Status=0)||(Status=2)||(Value="") s Status=0 q
+ 	i Value=1 d DBList(),pause() Continue
+ 	i Value=2 d DBRemoveMany(),pause() Continue
+ 	i Value=3&&('$d(ListRtn(Value))) {
+	 	d RemoveMirrorConfig(),pause()
+	 	s Status=1 quit 
+ 	}
+ 	s Value=$G(ListRtn(Value))
+ 	i Value=4 d SetupMirror(0),pause() s Status=1 quit
+ 	i Value=5 d SetupMirror(1),pause() s Status=1 quit
+ 	i Value=6 d SetupMirror(2),pause() s Status=1 quit
+ 	i Value=7 {
+	 	r !,"Are you sure you want to enable Mirror Service <Y>? ",resp
+	 	if '("Nn"[$E(resp_"X")) {
+		 	if '##Class(Security.Services).Exists("%Service_Mirror",.Service,.st) d $SYSTEM.Status.DisplayError(st) continue
+		 	s Service.Enabled=1
+		 	s st=Service.%Save()
+		 	i '(''st) {
+			 	d $SYSTEM.Status.DisplayError(st)
+			} else {
+				w !,"%Service_Mirror is enabled."
+			}
+			s Service=""
+	 	}
+	 	d pause() s Status=1 quit
+ 	}
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ze
+}
+EMSClient()	PRIVATE {
+	Q ##class(EMS.Instance).IsManaged("Config.Mirrors")
+}
+EMSEditText()	PRIVATE {
+	i ##class(EMS.Instance).IsManaged("Config.Mirrors") q " (restricted)"
+	q ""
+}
+MENU() PUBLIC { 
+ s $zt="ERROR"
+  if $SYSTEM.Mirror.GetInfo()["PRIMARY" {
+	 do getTransactionStatus^JRNROLL(.active,.pending)
+	 if active || pending {
+		 w !,"Transaction rollback is active or pending"
+		 r !,"Do you want to run Manage^JRNROLL? <Y> ",resp
+		 if "Nn"'[$E(resp_"X") {
+			 do Manage^JRNROLL()
+			 quit 0
+		 }
+	 }
+ }
+  if (($SYSTEM.Mirror.GetInfo()["PRIMARY") &&
+	($SYSTEM.Mirror.FailoverRule()=1) &&
+	(+$P($SYSTEM.Mirror.GetInfo(2),",",12)=1)) {
+	w !,"This member is the primary and is in a trouble state while in Arbiter" 
+	w !,"Controlled failover mode.  This means that both the connection to the arbiter"
+	w !,"and the other failover member were lost while the other member was an active"
+	w !,"backup.  If the other member's connection to the arbiter remained up, it will"
+	w !,"have tried to become the primary, and if another condition prevented it from"
+	w !,"becoming primary, it may still be retrying."
+	w !
+	w !,"If you can re-establish the network to the other failover member the problem"
+	w !,"should resolve automatically in about a minute.  Otherwise, you can force"
+	w !,"this node to resume as primary if you do ALL of the following:"
+	w !," - Shut down the other failover member or confirm that it is already down"
+	w !," - Confirm that the other failover member did not become primary"
+	w !," - Confirm that, while trying to become primary, the other member did not"
+	w !,"   create a mirror journal file later than #"_$P($SYSTEM.Mirror.GetInfo(2),",",1)_","
+	w !,"     ",$ZU(78,3)
+	w !,"Forcing this node to continue without all of the above may result in both"
+	w !,"members running as primary and/or a member that requires being rebuilt."
+	w !
+	for {
+		w !,"Has the other member become primary or created a mirror journal later than"
+		w !,"the one specified above? "
+		r resp
+		if "YyNn"[$E(resp_"X") { quit } ; break on valid response
+		w !,"You must answer yes or no."
+	}
+	if "Nn"[$E(resp_"X") {
+		r !,"Do you want to force this member to resume as the primary? <No> ",resp
+		if "Yy"[$E(resp_"X") {
+			r !,"Are you sure that all of the conditions above are satisfied? <No> ",resp
+			if "Yy"'[$E(resp_"X") {
+				w !!,"Please verify the state of the other member before continuing."
+			} else {
+				d $zu(9,"","Operator requested primary switch to agent controlled mode",0,0  /* Informational message */)
+				if (($SYSTEM.Mirror.FailoverRule()=1) &&
+				    (+$P($SYSTEM.Mirror.GetInfo(2),",",12)=1)) {
+					do $SYSTEM.Mirror.FailoverRule(2)
+					w !!,"Switched to agent contact required mode, primary should resume."
+				} else {
+					w !!,"The primary is no longer in the trouble state"
+				}
+			}
+		}
+	} else {
+		w !!,"If the other member became primary or created a later mirror journal file then"
+		w !,"this member should be shut down."
+		r !,"Do you want to force this instance down? ",resp
+		if "Yy"[$E(resp_"X") {
+			w !!,"Shutting down"
+			d $zu(9,"","Operator requested shutdown of frozen primary",0,0  /* Informational message */)
+			try {
+			   s mirname=##class(Config.Mirrors).GetMirrorName()
+		       s info=$G(^SYS("MIRRORSET",mirname,"Member",0))
+			   s rc=$$ForceNodeDown^MIRRORCTL(mirname,0)
+			   h 10  ;if we're still running after a few seconds, something went wrong
+			   w !,"Force may have failed. Check console log for details"
+			} catch {
+			   w !,"Caught error forcing ourself down: ",$ZE
+			}
+			halt
+		}
+    } 
+	w !
+ }
+ if ##class(SYS.MirrorConfiguration).EnableMirrorMenu(3) {
+	 s mirname=##class(Config.Mirrors).GetMirrorName()
+	 if mirname'="" {
+		 s rs=##class(%Library.ResultSet).%New("SYS.Mirror:PendingNewMembers")
+		 d rs.Execute()
+		 while rs.Next() {
+			s name=rs.Data("Name")
+			s mlist($i(mlist)) = rs.Data("Name")_" ("_rs.Data("MemberTypeDisplay")_")"
+		}
+		if +$g(mlist)'=0 {
+			w !,"The following member"_$s(mlist>1:"s are ",1:" is ")_"pending to be authorized to join this mirror."
+			w !,"Please go to 'Mirror Configuration' to authorize the expected members"
+			w !,"or reject the unexpected members.",!
+			f i=1:1:mlist w !,?5,mlist(i)
+		}
+	 }
+ }
+ if ##class(SYS.MirrorConfiguration).EnableMirrorMenu(8) {
+	 k mlist
+	 s IsPrimary=$SYSTEM.Mirror.IsPrimary(),total=0
+	 s mirname=##class(Config.Mirrors).GetMirrorName()
+	 while mirname'="" {
+		 s rs=##class(%Library.ResultSet).%New("SYS.Mirror:PendingDNUpdates")
+		 d rs.Execute(mirname)
+		 s mlist=0
+		 while rs.Next() {
+			 s name=rs.Data("Name")
+			 s mlist(mirname,$i(mlist)) = rs.Data("Name")_" ("_rs.Data("MemberType")_")"_$s('IsPrimary:" ("_rs.Data("SSLComputerName")_")",1:"")
+			 s guid(mirname,rs.Data("Name"))=rs.Data("GUID")
+			 s toatl=$i(total)
+		 }
+		 s mirname=##class(Config.Mirrors).GetMirrorName(mirname)
+	 }
+	 if total'=0 {
+		 w !,"The following member"_$s(total>1:"s are ",1:" is ")_"pending to be authroized to update DN names."
+		 if IsPrimary {
+			 w !,"Please go to 'Mirror Configuration' to authorize the expected members' DN"
+			 w !,"or reject the unexpected members' DN.",!
+		 } else {
+			 w !
+		 }
+		 s mirname=$o(mlist(""))
+		 while mirname'="" {
+			 if 'IsPrimary {
+				 d PromptForDNUpdates(mirname,.mlist,.guid)
+			 } else {
+				 w !,"Mirror set name: "_mirname
+				 s idx=$o(mlist(mirname,""),1,info)
+				 while idx'="" {
+					 w !,?5,info
+					 s idx=$o(mlist(mirname,idx),1,info)
+				 }
+			 }
+			 s mirname=$o(mlist(mirname))
+		 }
+	 }
+ }
+ s List(1)="Mirror Status"
+ s List(2)="Mirror Management"
+ s List(3)="Mirror Configuration"
+ f  {
+ 	s Value=""
+	s Status=##class(%Library.Prompt).GetMenu("Option?",.Value,.List,,8+128+4)
+ 	i (+Status=0)||(Status=2)||(Value="") s Status=0 q
+ 	i Value=1 d MIRRORSTATUS() Continue
+ 	i Value=2 d MIRRORMANAGE() Continue
+ 	i Value=3 {
+	 	i '$$EMSClient s Status=$$MIRRORCONFIG() q:Status  Continue
+	 	e  d DisplayConfig() w !,"Managed by Enterprise Manager.",! d pause() continue
+ 	}
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ze
+}
+MIRRORSTATUS() {
+ s $zt="ERROR"
+ s List(1)="List mirrored databases"
+ s List(2)="Display mirror status of this node"
+ s List(3)="Display journal file info"
+ s List(4)="Status Monitor"
+ f  {
+ 	s Value=""
+	s Status=##class(%Library.Prompt).GetMenu("Option?",.Value,.List,,8+128+4)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+ 	i Value=1 d DBList(),pause() Continue
+ 	i Value=2 d LocalMirrorStatus(),pause() continue
+ 	i Value=3 d JrnDisplayx(),pause() Continue
+ 	i Value=4 d Monitor() Continue
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ze
+}
+MIRRORMANAGE() {
+ s $zt="ERROR"
+ s List(1)="Add mirrored database(s)"
+ s List(2)="Remove mirrored database(s)"
+ s List(3)="Activate or Catchup mirrored database(s)"
+ s List(4)="Change No Failover State"
+ s List(5)="Try to make this the primary"
+ s List(6)="Start Mirror On This Member"
+ s List(7)="Stop Mirror On This Member"
+ s List(8)="Modify Database Size Field(s)"
+ s List(9)="Force this node to become the primary"
+ s List(10)="Promote Async DR member to Failover member"_$$EMSEditText
+ s List(11)="Demote Backup member to Async DR member"_$$EMSEditText
+ s List(12)="Mark an inactive database as caught up"
+ Set isReporting = $System.Mirror.IsAsyncMember()
+ s List(13)="Manage mirror dejournaling on async member"
+ if 'isReporting s List(13)=List(13)_" (disabled)"
+ s List(14)="Pause dejournaling for database(s)"
+ f  {
+ 	s Value=""
+	s Status=##class(%Library.Prompt).GetMenu("Option?",.Value,.List,,8+128+4)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+ 	i Value=1 d DBAdd(),pause() Continue
+ 	i Value=2 d DBRemove(1),pause() Continue
+ 	i Value=3 d DBActivate(),pause() Continue
+ 	i Value=4 d ManageNoFailover(),pause() Continue
+ 	i Value=5 d RequestPrimary(),pause() Continue
+ 	i Value=6 d ActivateMirror(),pause() Continue
+ 	i Value=7 d DeactivateMirror(),pause() Continue
+ 	i Value=8 d ModifyDBSize(),pause() Continue
+ 	i Value=9 d ForcePrimary(),pause() Continue
+ 	i Value=10,'$$EMSClient d Promote(),pause() Continue
+ 	i Value=11,'$$EMSClient d Demote(),pause() Continue
+ 	i Value=12 do MarkAsCaughtUp(),pause() continue
+	i isReporting,Value=13 d ManageDejournaling(),pause() continue
+	i Value=14 do DBPause(),pause() Continue
+}
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ze
+}
+MIRRORCONFIG() {
+ s $zt="ERROR"
+ s isMirror=($SYSTEM.Mirror.GetInfo()[",DEFINED,")
+ if 'isMirror {
+	s mm=##class(Config.MirrorMember).Open()
+	s ourname=mm.SystemName
+    Set isMirror=(ourname'="")
+    k mm
+ }
+ if 'isMirror {
+	w !,"System is not configured as a mirror member"
+	quit 0
+ }
+RedisplayMemu ;
+ Set isShadow = ##class(Config.MirrorMember).isAsyncMember()
+ if isShadow {
+ 	s List(1)="Stop tracking a mirror"
+ 	s List(2)="Remove Mirror Configuration"
+ 	s List(3)="Display Mirror Configuration"
+ 	s List(4)="Manage Async Journal File Retention"
+ 	if ##class(Config.MirrorMember).IsDRMember() {
+	 	s List(4)=List(4)_" (disabled)"
+ 	}
+ 	s List(5)="Manage Async Mirror Member Type"
+ 	s List(6)="Clear FailoverDB Flag of Mirrored Databases"
+ 	s List(7)="Display Mirrored Databases"
+ 	s List(8)="Modify Network Address"
+ 	s List(9)="Edit SSL Configuration"
+	s List(10)="Join Another Mirror as Async Member"
+ 	if '##class(Config.MirrorMember).AllowNewMirrorSet() {
+	 	s List(10)=List(10)_" (disabled)"  ;JO2553
+ 	}
+ 	s List(11)="Authorize Pending DN Updates"_$s('##class(SYS.MirrorConfiguration).EnableMirrorMenu(8):" (disabled)",1:"")
+ 	s List(12)="Verify Mirror SSL certificates"_$s('##class(SYS.MirrorConfiguration).EnableMirrorMenu(9):" (disabled)",1:"")
+ 	s List(13)="Change Dejournal Filter Setting"_$s('$SYSTEM.Mirror.AsyncMemberType()||(($zversion(1)=1)):" (disabled)",1:"")
+} else {
+	s List(1)="Edit VIP Address"
+ 	s List(2)="Remove Other Mirror Member"
+ 	s List(3)="Remove This Failover Member"
+ 	s List(4)="Display Mirror Configuration"
+ 	s List(5)="Adjust QOS Timeout parameter"
+	s List(6)="Modify Network Addresses"
+	s List(7)="Refresh other failover member's data via agent"
+ 	s List(8)="n/a"
+ 	s List(9)="Authorize/Reject Pending New Members"_$s('##class(SYS.MirrorConfiguration).EnableMirrorMenu(3):" (disabled)",1:"")
+ 	s List(10)="Authorize"_$s($SYSTEM.Mirror.IsPrimary():"/Reject",1:"")_" Pending DN Updates"_$s('##class(SYS.MirrorConfiguration).EnableMirrorMenu(8):" (disabled)",1:"")
+	s List(11)="Edit SSL Settings"
+	s List(12)="Manage arbiter address"
+	 if '$SYSTEM.Mirror.IsPrimary() s List(12)=List(12)_" (n/a)"
+ 	s List(14)="Add Async Member Not In Pending List"_$s('$SYSTEM.Mirror.IsPrimary():" (disabled)",1:"")
+ 	s List(13)="Verify Mirror SSL certificates"_$s('##class(SYS.MirrorConfiguration).EnableMirrorMenu(9):" (disabled)",1:"")
+	s List(15)="Manage compression modes"
+	if '$SYSTEM.Mirror.IsPrimary() s List(15)=List(15)_" (n/a)"
+ }
+ f  {
+ 	s Value=""
+	s Status=##class(%Library.Prompt).GetMenu("Option?",.Value,.List,,8+128+4)
+ 	i (+Status=0)||(Status=2)||(Value="") s Status=0 q
+	if isShadow {
+		i Value=1 d RemoveAsyncMemberSource(),pause() s Status=2 quit
+		i Value=2 d RemoveMirrorConfig(),pause() s Status=1 quit
+		i Value=3 d DisplayConfig(),pause() continue
+		i Value=4 {
+		 	if ##class(Config.MirrorMember).IsDRMember() w "  disabled " continue
+			d ManageAsyncJournalPurge(),pause() continue
+	 	}
+		i Value=5 d ManageAsyncMemberType(),pause() s Status=2 quit
+		i Value=6 d ClearFailoverDBFlag(),pause() continue
+		i Value=7 d DisplayMirroredDB(),pause() continue
+		i Value=8 d EditNetworkAddresses(),pause() continue
+		i Value=9 {
+			 d EditSSLSettings(1),pause() 
+			 continue
+		}
+		i Value=10 {
+			if '##class(Config.MirrorMember).AllowNewMirrorSet() w "  disabled " continue
+			d SetupMirror(2),pause() s Status=2 quit
+		}
+		i Value=11 {
+			if '##class(SYS.MirrorConfiguration).EnableMirrorMenu(8) w "  disabled " continue
+			d PendingDNUpdates(),pause() continue
+		}
+		i Value=12 {
+			if '##class(SYS.MirrorConfiguration).EnableMirrorMenu(9) w "  disabled " continue
+			d VerifySSLCertificates(1),pause() continue
+		}
+		i Value=13 {
+			if '$SYSTEM.Mirror.AsyncMemberType()||(($zversion(1)=1)) w "  disabled " continue
+			d DejournalFilter(),pause() continue
+		}
+	} else {
+		i Value=1 d EditVIP(),pause() Continue
+		i Value=2 d RemoveMirrorMember(),pause() continue
+		i Value=3 d RemoveMirrorConfig(),pause() s Status=1 quit
+		i Value=4 d DisplayConfig(),pause() continue
+		i Value=5 d AdjustQOSTimeout(),pause() continue
+		i Value=6 d EditNetworkAddresses(),pause() continue
+	    i Value=7 d UpdateOtherFailoverNodeInfo(),pause() continue
+		i Value=8 w !,"Option unavailable" d pause() continue
+		i Value=9 {
+			if '##class(SYS.MirrorConfiguration).EnableMirrorMenu(3) w "  disabled " continue
+			d AddNewMember(),pause() continue
+		}
+		i Value=10 {
+			if '##class(SYS.MirrorConfiguration).EnableMirrorMenu(8) w "  disabled " continue
+			d PendingDNUpdates(),pause() continue
+		}
+		If Value=11 {
+			 d EditSSLSettings(0),pause() 
+			 s Status=2 
+			 quit
+		}
+		if Value=12 do ConfigureArbiter(),pause() continue
+		i Value=14 {
+			if '$SYSTEM.Mirror.IsPrimary() w "  disabled " continue
+			d SetupMirror(4),pause() continue
+		}
+		i Value=13 {
+			if '##class(SYS.MirrorConfiguration).EnableMirrorMenu(9) w "  disabled " continue
+			d VerifySSLCertificates(0),pause() continue
+		}
+		if Value=15 do ConfigureCompressMode(),pause() continue
+	}
+ }
+ if Status=2 {
+	 if $SYSTEM.Mirror.GetInfo()[",NOTINIT," quit 1
+	 k List goto RedisplayMemu
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ze
+}
+EditSSLSettings(isAsync) {
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	; Opens it and returns SSLCOnfig if it exists
+	s exists=##class(Security.SSLConfigs).%ExistsId("%MirrorServer")
+	if exists {
+		r !,"Edit Mirror SSL Configuration? <Y> ",resp
+	} else {
+		r !,"Create Mirror SSL Configuration? <Y> ",resp
+	}
+	if "Nn"'[$E(resp_"X") {
+		do CreateEditMirrorSSL^SECURITY2(exists)
+	}
+	if isAsync quit  ;this isn't a failover member, it can't edit UseSSL
+	;
+	; Now see if they can edit the Mirror's USE SSL option
+	if $SYSTEM.Mirror.IsPrimary() {
+		s mirname=##class(Config.Mirrors).GetMirrorName()
+		if mirname'="" {
+			s JRNEncrypted=##class(%SYS.Journal.System).IsJournalEncryptionEnabled(3)
+			s MirrorsObj=##class(Config.Mirrors).Open(mirname)
+			if '$isobject(MirrorsObj) w !!,"Mirror set '"_mirname_"' does not exist." Quit
+			if JRNEncrypted&&MirrorsObj.UseSSL {
+				w !!,"Mirror wide 'Use SSL' Setting can not be changed when it is"
+				w !,"enabled while journal encryption is also enabled."
+				Quit  ;we're done
+			}
+			s MirrorsObj=""
+		} else {
+			w !!,"Failed to find mirror set name on the primary."
+			Quit  ;we're done
+		}
+	} else {
+		w !!,"Mirror wide 'Use SSL' Setting can only be changed on the primary."
+		Quit  ;we're done
+	}
+	s mirname=##class(Config.Mirrors).GetMirrorName()
+	if mirname="" w !,"Failed to locate mirror name in Config.Mirrors" quit
+	s MirrorsObj=##class(Config.Mirrors).Open(mirname)
+	if '$IsObject(MirrorsObj) w !,"failed to open Config.Mirrors(",mirname,")" quit
+	Set sslc=##class(Security.SSLConfigs).%OpenId("%MirrorClient",,.status)
+	Set ssls=##class(Security.SSLConfigs).%OpenId("%MirrorServer",,.status)
+	s sslconfigured=$isobject(sslc)||$isobject(ssls)
+RetrySSL ;
+	w !!,"Do you want to use SSL for the Mirror? <",$s(MirrorsObj.UseSSL:"Y",1:"N"),"> " r resp
+	if resp="" quit
+	s resp=$zcvt($E(resp),"U")
+	s resp=$case(resp,"Y":1,"N":0,:-1)
+	if resp=-1 w !,"   Enter 'Y' or 'N'." goto RetrySSL
+	if ''MirrorsObj.UseSSL=resp q
+	if resp {
+		if 'sslconfigured {
+			w !,"Mirror SSL is not set up, setting up the mirror SSL now."
+			if '$$SetupSSL() Goto RetrySSL
+		} else {
+			if $isobject(sslc)&&'sslc.Enabled s sslc.Enabled=1 s rc=sslc.%Save()
+			if $isobject(ssls)&&'ssls.Enabled s ssls.Enabled=1 s rc=ssls.%Save()
+			if '$isobject(sslc) w !,"%MirrorClient SSL configuration does not exist, could not use SSL for mirror." G RetrySSL
+			if '$isobject(ssls) w !,"%MirrorServer SSL configuration does not exist, could not use SSL for mirror." G RetrySSL
+        }
+	    s clientcn=$$GetSSLDNField^MIRRORCTL("client")
+	    if '$LG(clientcn) {
+		    w !,"Error getting SSL DN name in %MirrorClient: ",$LG(clientcn,2)
+		    goto RetrySSL
+	    }
+	    s servercn=$$GetSSLDNField^MIRRORCTL("server")
+	    if '$LG(servercn) {
+		    w !,"Error getting SSL DN name in %MirrorServer: ",$LG(servercn,2)
+		    goto RetrySSL
+	    }
+	    s clientcn=$LG(clientcn,2)
+	    s servercn=$LG(servercn,2)
+	    if servercn'=clientcn {
+		    w !,"SSL config error: Names in Server and client configurations are different"
+		    w !,"   server: ",servercn
+		    w !,"   client: ",client
+		    goto RetrySSL
+	    }
+	}
+	s MirrorsObj.UseSSL=resp
+	s rc=MirrorsObj.%Save()
+	if ('rc) {
+		w !,"Failed to save the UseSSL change, error: ",$SYSTEM.Status.GetErrorText(rc)
+	} else {
+		w !,"UseSSL change is saved."
+	}
+}
+ConfigureArbiter() {
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s state=$SYSTEM.Mirror.GetInfo()
+	if state'[",PRIMARY," {
+		w !,"The arbiter address can only be managed on the primary mirror member."
+		if state[",BACKUP," {
+			s primary=$$getPrimary()
+			if primary'="" w !,"The primary is ",primary
+		} else {
+			if state'[",DEFINED," {
+				w !,"This node is not configured as a mirror member"
+			} else {
+				w !,"The mirror has not elected a primary member yet"
+			}
+		}
+		quit
+	}
+	s mirname=##class(Config.Mirrors).GetMirrorName()
+	if mirname="" w !,"Failed to locate mirror name in Config.Mirrors" quit
+	s mir=##class(Config.Mirrors).Open(mirname)
+	if '$IsObject(mir) w !,"failed to open Config.Mirrors(",mirname,")" quit
+	s arbiteraddr=$P(mir.ArbiterNode,"^",1)
+	if arbiteraddr="" {
+		s oldaddr="",oldport="2188"  ;port defaults to the agent port
+		w !,"There is no arbiter address configured."
+		r !,"Do you want to configure one? <N> ",resp
+	} else {
+		s oldaddr=$P(arbiteraddr,"|",1)
+		s oldport=$P(arbiteraddr,"|",2)
+		w !,"The current arbiter address is ",oldaddr," on port #",oldport
+		r !,"Do you want to change this? <N> ",resp
+	}
+	if "Yy"'[$E(resp_"X") quit
+	r !,"Enter new address for the arbiter: ",addr
+	if addr="" {
+		if oldaddr="" w !,"Aborted" quit 
+		r !,"Do you want to remove the arbiter address? <N> ",resp
+		if "Yy"[$E(resp_"X") {
+			s mir.ArbiterNode=""
+			s rc=mir.%Save()
+			i ('rc) {
+				k err
+				d DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+				w !,"Failed to save change to remove arbiter address: ",err(1)
+			} else {
+				w !,"Arbiter address removed."
+			}
+		}
+		q
+	}
+	while '##class(Config.Host).IsValid(addr) {
+		w !,addr," is not a valid network address"
+		r !,"Enter new address for the arbiter: ",addr
+	}
+	if addr="" {  ;A null address now means stop
+		w !,"Aborted"
+		quit
+	}
+	w !,"Enter new port for the arbiter: <",oldport,"> "
+	r port
+	if port="" {
+		s port=oldport
+	}
+	w !,"Confirm change of arbiter address to ",addr," on port #",port," <No> "
+	r resp
+	if "Yy"'[$E(resp_"X") {
+		w !,"Aborted"
+		quit
+	}
+	s mir.ArbiterNode=addr_"|"_port
+	s rc=mir.%Save()
+	i ('rc) {
+		k err
+		d DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+		w !,"Failed to save change to update arbiter address: ",err(1)
+	} else {
+		w !,"Arbiter address updated."
+	}
+}
+ConfigureCompressMode() {
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s state=$SYSTEM.Mirror.GetInfo()
+	if state'[",PRIMARY," {
+		w !,"The compression mode can only be managed on the primary mirror member."
+		if state[",BACKUP," {
+			s primary=$$getPrimary()
+			if primary'="" w !,"The primary is ",primary
+		} else {
+			if state'[",DEFINED," {
+				w !,"This node is not configured as a mirror member"
+			} else {
+				w !,"The mirror has not elected a primary member yet"
+			}
+		}
+		quit
+	}
+	s mirname=##class(Config.Mirrors).GetMirrorName()
+	if mirname="" w !,"Failed to locate mirror name in Config.Mirrors" quit
+	s mir=##class(Config.Mirrors).Open(mirname)
+	if '$IsObject(mir) w !,"failed to open Config.Mirrors(",mirname,")" quit
+	s ModeToText(0)="System Selected"
+	s ModeToText(2)="Compressed"
+	s ModeToText(1)="Uncompressed"
+	s TextToMode("System Selected")=0
+	s TextToMode("Compressed")=2
+	s TextToMode("Uncompressed")=1
+	s (curFOmode,FOCmpMode)=mir.CompressionForFailoverMembers
+	s (curASYNCmode,ASYNCmpMode)=mir.CompressionForAsyncMembers
+again ;
+	w !!,"Current compression mode settings are:",!
+	w !,"1) Compression mode for Failover members : ",ModeToText(curFOmode)
+	w !,"2) Compression mode for Async members    : ",ModeToText(curASYNCmode)
+	r !,"Select item to be changed? ",resp
+	if resp=""||(resp="^") {
+		s count=(curFOmode'=FOCmpMode)+(curASYNCmode'=ASYNCmpMode)
+		if count {
+			w !!,"The following item",$s(count>1:"s are ",1:" is "),"changed:"
+			if curFOmode'=FOCmpMode w !,"Compression mode for Failover members : ",ModeToText(FOCmpMode)," -> ",ModeToText(curFOmode)
+			if curASYNCmode'=ASYNCmpMode w !,"Compression mode for Async members    : ",ModeToText(ASYNCmpMode)," -> ",ModeToText(curASYNCmode)
+			w !,"Do you want to save the change",$s(count>1:"s",1:"")," before exiting, <Y>? "
+			r resp
+			if "Yy"[$E(resp_"Y") {
+				s mir.CompressionForFailoverMembers = curFOmode
+				s mir.CompressionForAsyncMembers = curASYNCmode
+				s rc=mir.%Save()
+				i ('rc) {
+					w !,"Failed to save change to update compression mode: ",$SYSTEM.Status.GetErrorText(rc)
+				} else {
+					w !,"Compression mode updated."
+				}
+			}
+		}
+		quit
+	}
+	if resp'=1&&(resp'=2) w "   invalid selection!!!" g again
+nextmode ;
+	w !!,"Please select one of the following compression modes for ",$s(resp=1:"Failover",1:"Async")," member."
+	w !,"1) System Selected"
+	w !,"2) Uncompressed"
+	w !,"3) Compressed"
+	w !,"Select <",$s(resp=1:curFOmode,1:curASYNCmode)+1,">? "
+	r respx
+	if respx="" g again
+	if respx'=1,respx'=2,respx'=3 w " invalid selection!!!" goto nextmode
+	if resp=1 {
+		s curFOmode = respx - 1
+	} else {
+		s curASYNCmode = respx - 1
+	}
+	g again
+}
+pause() {
+	r !,"Press <enter> to return to the main menu...",resp
+}
+DBAdd() {
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s state=$SYSTEM.Mirror.GetInfo()
+	if state'[",PRIMARY," {
+	   w !,"Mirrored databases can only be added on the Primary mirror member."
+  	   if state[",BACKUP," {
+	      s primary=$$getPrimary()
+          if primary'="" w !,"The primary is ",primary
+	   } else {
+	      if state'[",DEFINED," {
+	         w !,"This node is not configured as a mirror member"
+	      } else {
+	         w !,"The mirror has not elected a primary member yet"
+	      }
+	   }
+	   quit
+	}
+	; Mount all unmounted databases so they appear in the
+	; list of choices from $$getDatabase()
+	s dir=$O(^SYS("UCI",""))
+	while dir'="" {
+		s info=+$ZU(49,dir)
+		if (info<0)!(info=$zu(40,0,41)) {
+		   do $ZU(17,dir)
+		   s info=+$ZU(49,dir)
+		   if (info<0)!(info=$zu(40,0,41)) {
+		      do $ZU(9,"","Mirror: "_"Failed to mount database: "_dir)
+		   }
+		}
+		s dir=$O(^SYS("UCI",dir))
+	}
+	s MustJournal=1
+	s numdb=$$SelectDatabases(.AddDBList,.DBInfo,,.MustJournal,0)
+	i 'numdb q
+	i numdb>1 { ;multiple databases, which must be all journaled
+		w !,"The following databases will be added to the mirror with their"
+		w !,"mirror DB names generated from the configured dataset names:"
+		s i=1 f  {
+			s dbpath=$li(AddDBList,i)
+			s mirdbname=$li(DBInfo(i),1)
+			w !,dbpath," as ",mirdbname
+			i $i(i)>numdb q
+		}
+		i $$YN("Continue","N")="N" {
+			w !,"Aborted"
+			q
+		}
+		s i=1 f  {
+			s dbpath=$li(AddDBList,i)
+			s mirdbname=$li(DBInfo(i),1)
+			s rc=$SYSTEM.Mirror.DBAdd(dbpath,mirdbname)
+			i rc w !,"Added ",dbpath," as ",mirdbname
+			e  w !,"Failed to add ",dbpath," because ",$p(rc,",",2,99)
+			i $i(i)>numdb q
+		}
+		q
+	}
+	s dbpath=$li(AddDBList,1)
+	s Obj=""
+	i MustJournal<0 { ;meaning that journaling must be enabled
+		w !,"Journaling is not currently enabled for this database. Adding the"
+		w !,?5,"database to the mirror will enable journaling of all sets and kills."
+		i $$YN("Continue","N")="N" q
+		s Obj=##class(SYS.Database).%OpenId(dbpath,,.Status)
+		i ('Status) {
+			w ! d $SYSTEM.Status.DisplayError(Status) w !
+			q
+		}
+		d Obj.EnableJournaling(1)
+		s rc=Obj.%Save()
+		i ('rc) {
+			k err
+			d DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+			w !,"Failed to enable journaling on ",dbpath,": ",err(1)
+			q
+		}
+	}
+	s $zt="Exit" ;to restore (disable) journaling state if necessary
+	s dbname=$li(DBInfo(1),1),mirdbname=dbname
+    s prompt="Enter mirror DB name for this database: "
+ 	f  {
+ 		s mirdbname=dbname
+		s Status=##Class(%Library.Prompt).GetString(prompt,.mirdbname,0,62,,8)
+		i (+Status=0)!(+Status=2)!(mirdbname="") zt "EXIT"
+		; Uuppercase the database mirror name
+		s mirdbname=$zconvert(mirdbname,"U")
+		; Run it through the standard validation checks
+		set rc=##class(SYS.MirrorConfiguration).IsMirrorDatabaseNameValid(mirdbname)
+		if (''rc) quit  ;success
+		w !,$System.Status.GetErrorText(rc)
+		continue
+	}
+	s rc=$$CheckDBUniqueName(mirdbname)
+	if '+rc {
+		w !,$P(rc,",",2,99)
+		quit
+	}
+	s rc=$SYSTEM.Mirror.DBAdd(dbpath,mirdbname)
+	i rc w !,"Added ",dbpath," as ",mirdbname q
+	w !,"Failed to add ",dbpath," because ",$p(rc,",",2,99)
+Exit ;
+	s $zt="" i $ze'="",$ze'["ZEXIT" w !,$ze,!
+	i MustJournal<0 {
+		d Obj.DisableJournaling()
+		d Obj.%Save()
+	}
+	q	
+}	
+CheckDBUniqueName(dbname) {
+	; Takes a mirror database name and checks whether its
+	; in use by any nodes in the mirror. 
+	; Returns: 0,<text> = error or name is in use
+	;          1 = name is not in use
+	;
+	s mirname=##class(Config.Mirrors).GetMirrorName()
+	if mirname="" quit "0,Mirror name not found"
+	; Uppercase the database mirror name
+	s dbname=$zconvert(dbname,"U")
+	s mirdbname=":mirror:"_mirname_":"_dbname
+	s rc=$$CheckMirrorDBName^MIRRORCOMM(mirdbname)
+	s status=$LG(rc)
+	if status["ERR" {
+		s msg="0,Failed to check duplicated """_dbname_""" err="_$LG(rc,2)
+		goto done
+	}
+	if status="FOUND" {
+		s dir=$LG(rc,2)  ;directory pagh
+		s msg="0,"""_dbname_""" is already in use on this system by "_dir
+		goto done
+	}
+	;
+	s cnt=$G(^SYS("MIRRORSET",mirname,"Member"),0)
+	for i=1:1:cnt {
+	   s info=$G(^SYS("MIRRORSET",mirname,"Member",i),"")
+	   if $L(info) {
+	      s name=$lg(info,1)
+          if +$lg(info,8)'=0 continue
+	      s rc=$$CheckDBNameInUse^MIRRORCTL(mirname,i,mirdbname)
+	      s status=$LG(rc)
+	      if status="FOUND" {
+		      s dir=$LG(rc,2)  ;directory pagh
+		      s msg="0,"""_dbname_""" is already in use on "_name_" by "_dir
+		      goto done
+	      }
+	      if status["ERR" {
+		      s msg="0,Failed to get DB info for """_dbname_""" on "_name_" err="_$LG(rc,2)
+		      goto done
+	      }
+	   }
+	}
+	quit 1
+done ;
+	quit msg
+}
+DBRemoveMany() {
+	;called when we're not a mirror member to remove one or all
+	; mirrored databases.
+	;Remove all mirrored databases
+	Kill List,ActiveList
+	s Index=0
+	s ActiveCnt=0
+	Set rs=##class(%Library.ResultSet).%New("SYS.Database:List")
+	if '$IsObject(rs) {
+		w !,"Failed to generate list of currently mounted databases"
+		quit
+	}
+	d rs.Execute()
+	While (rs.Next()) {
+		if +rs.Data("Mirrored") {
+			s dir=rs.Data("Directory")
+			s List($i(Index))=dir
+			s dirobj=##class(SYS.Database).%OpenId(dir)
+			if $IsObject(dirobj) && +dirobj.InActiveMirror {
+				s ActiveCnt=ActiveCnt+1
+				s ActiveList(Index)=1
+			}
+			s dirobj=""
+		}
+ 	}
+ 	Kill rs
+ 	; ActiveCnt should be 0 because this entry point is only
+ 	; used on non-mirror members. Its just here in case we decide
+ 	; to extend this to active mirror members as well. On an active
+ 	; mirror member though, the SMP could be used to do this and
+ 	; its pretty easy to click through the databases to remove them.
+ 	; On non-mirror members, that SMP page isn't displayed.
+	if 'Index {
+	 	w !,"There are no mirrored databases to remove"
+	 	quit
+ 	} else {
+	 	if Index=1 {
+		 	w !,"There is one mirrored database on this system"
+		 	if ActiveCnt w !,"     and it is in the active mirror"
+		 	s prompt="Remove it? <No> "
+		 	s anslist="YyNn"
+		 	s default="N"
+	 	} else {
+		 	w !,"There are ",Index," mirrored databases on this system"
+		 	if ActiveCnt w !,"     and ",ActiveCnt," are active in the mirror"
+		 	s prompt="Remove (O)ne mirrored database, (A)ll mirrored databases or (Q)uit? <quit> "
+		 	s anslist="OoAaQq"
+		 	s default="Q"
+	 	}
+ 	}
+ 	w !,prompt
+ 	r resp
+	s x=$E(resp_default)
+	while anslist'[x {
+		w !,"Invalid response - ",resp
+		w !,prompt
+		r resp
+		s x=$E(resp_default)
+	}
+	if "NnQq"[x quit    ;No and Quit both return
+	if "Oo"[x do DBRemove(0) quit   ;Ones go to DBRemove
+	; Yes (which is remove the 1 database) is the same as 
+	; All - remove all the databases 
+	for i=1:1:Index {
+		s dir=List(i)
+		w !,"Removing ",dir
+		if +$ZU(49,dir)<0 {
+			; mount db if its dismounted
+			do $ZU(17,dir)
+		} else {
+		   ; can't be on the active list if it was dismounted
+		   if +$G(ActiveList(i),0) {
+			  w !,"     ...pausing journaling for ",dir
+			  s rc=##class(SYS.MirrorConfiguration).DejournalPauseDatabase(dir)
+			  if ('rc) {
+			     k err
+			     D DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+			     w !,"Failed to pause dejournaling: ",err(1)
+			     quit
+			  }
+			  w !,"     ...dismounting active database "
+			  do $ZU(3,dir)
+			  w !,"     ...remounting "
+			  do $ZU(17,dir)
+		   }
+		}		
+	    try {					 
+		   s rc=$SYSTEM.Mirror.DBRemove(dir)
+	    } catch {
+		   s rc="0,Unexpected error: "_$ze
+		}
+		if '+rc {
+			s err=$P(rc,",",2)
+			w !," ...failed: ",err
+		} else {
+		   w " ...succeeded"
+		}
+	}
+	q
+}
+DBRemove(isMember) {
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s rc=$$SelectDatabases(.RemoveDBList,.DBInfo,"M",/*MustJournal*/,1)
+	i 'rc q
+	s ActiveBits="" ;a bitstring of InActiveMirror flags of selected DBs
+	s i=1 f  {
+		s dbpath=$li(RemoveDBList,i)
+		w !,dbpath
+		i $li(DBInfo(i),3) { ;InActiveMirror flag is on
+			w " is active in the mirror"
+			s $bit(ActiveBits,i)=1 
+		}
+		i $i(i)>$ll(RemoveDBList) q
+	}
+	if +$G(isMember) {
+		w !,"Access to databases being removed may result in <PROTECT> error,"
+		w !,"while this action takes place. Once a mirrored database is removed,"
+		w !,"it is no longer a valid copy; this is irreversible."
+		if $SYSTEM.Mirror.IsPrimary() {
+			w !,"If this database is added back to the mirror later, using"
+			w !,"the same mirror database name, other copies will need to "
+			w !,"be replaced with this version of the database."
+		} else {
+			w !,"If you decide to restore this database later, you will need"
+			w !,"to get a copy from one of the other mirror members."
+		}
+	}
+	i $$YN("Really remove above databases from the mirror","N")="N" {
+		w !,"Aborted" 
+		q
+	}
+	s i=1 f  {
+		s dbpath=$li(RemoveDBList,i)
+		i $bit(ActiveBits,i) {
+			w !,"     ...pausing journaling for ",dbpath
+			s rc=##class(SYS.MirrorConfiguration).DejournalPauseDatabase(dbpath)
+ 			if ('rc) {
+	 			k err
+    			D DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+    			w !,"Failed to pause dejournaling: ",err(1)
+    			quit
+			}
+			w !,"     ...dismounting ",dbpath
+			do $ZU(3,dbpath)
+			w !,"     ...remounting ",dbpath
+			do $ZU(17,dbpath)
+		}
+		w !,"Removing ",dbpath," from the mirror"
+		s rc=$SYSTEM.Mirror.DBRemove(dbpath)
+		if '+rc {
+			s err=$P(rc,",",2)
+			w !,"Failed: ",err
+		} else {
+		   	w " ...Done"
+		}
+		i $i(i)>$ll(RemoveDBList) q
+	}
+	q
+}	
+DBActivate() PUBLIC {
+	s state=$SYSTEM.Mirror.GetInfo()
+	if state'[",DEFINED," {
+		w !,"Must be a mirror member to activate a database"
+		quit
+	}
+	s cls=##class(Config.MirrorMember).Open(,,.rc)
+	if ('rc) {
+		w !,"Can't activate database - failed to read mirror member configuration"
+		quit
+	}
+	s AsyncMember=cls.isAsyncMember()
+	s cls=""
+	s list="",index=0
+	d ActivateDatabases(AsyncMember,.list)
+	if list'="" {
+		r !,"Start catchup for activated database(s)? <Y> ",resp
+		if "Nn"'[$E(resp_"Y") {
+			JOB ##class(SYS.Mirror).CatchupDB(list)::5
+			i $T {
+				w !,"CatchupDB background job is started."
+				w !,"You can run Mirror Monitor to check status of the databases."
+			} else {
+				w !,"Failed to start CatchupDB background job."
+			}
+		}
+	}
+}
+ActivateDatabases(AsyncMember,actsfnList) {	
+	s CanActivate=$SYSTEM.Security.Check("%Admin_Manage","USE")
+	s CanCatchup=$SYSTEM.Security.Check("%Admin_Operate","USE")
+	if 'CanActivate,'CanCatchup w !,"Activate required %Admin_Manage:USE, catchup required %Admin_Operate:USE privilege." q
+	s SkipCatchup=0,SkipActivate=0
+	s rc=$$SelectDatabases(.ActDBList,.DBInfo,,,1,0/*InActiveMirror*/)
+	i 'rc q
+	s ActivateBits="" ;a bitstring of the databases that need activation
+	s i=1 f  {
+		s dbpath=$li(ActDBList,i)
+		w !,dbpath
+		i $li(DBInfo(i),4) s $bit(ActivateBits,i)=1
+		e  s $bit(ActivateBits,i)=0 w " is active but requires catchup" ;'MirrorActivationRequired
+		i $i(i)>$ll(ActDBList) q
+	}
+	i $bitcount(ActivateBits,0) { ;#databases that DO NOT need activation
+		w !,"Some databases, as indicated above, are active but require catchup"
+		if 'CanCatchup {
+			w !,"But it required %Admin_Operate:USE privilege, catchup skipped."
+			s SkipCatchup=1
+		} else {
+			i $$YN("Do you want to catch up those database","Y")="N" s SkipCatchup=1
+		}
+	}
+	i $bitcount(ActivateBits,1) { ;#databases that DO need activation
+		if 'CanActivate {
+			s SkipActivate=1
+			w !,"Activate mirrored databases required %Admin_Manage:USE privilege, activation skipped."
+			if CanCatchup,$bitcount(ActivateBits,0),'SkipCatchup w !,"But you still can catchup those already activated databases."
+		} else {
+			if 'CanCatchup w !,"You could activate those databases.",!,"But you don't have %Admin_Operate:USE privilege to catchup them."
+			i $$YN("Really activate above databases for use on this mirror member","N")="N" s SkipActivate=1
+		}
+	}
+	s actcnt=0 
+	f i=1:1:$LL(ActDBList) {
+		s dbpath=$li(ActDBList,i)
+		i $bit(ActivateBits,i) {
+			if SkipActivate continue
+			w !,dbpath
+			s rc=$SYSTEM.Mirror.DBActivate(dbpath)
+			if '+rc {
+				s text=$P(rc,",",2)
+				w !,"Activation failed because ",text
+				continue
+			}
+			w " ...Activated"
+			if SkipCatchup {
+				w ", but can't catchup."
+			} else {
+				s $li(actsfnList,$i(actcnt))=$li(DBInfo(i),2) ;sfn of dbpath
+			}
+		} else {
+			if 'SkipCatchup {
+				w !,dbpath
+				s $li(actsfnList,$i(actcnt))=$li(DBInfo(i),2) ;sfn of dbpath
+			}
+			continue
+		}
+		; if we're a read/write async member then clear the failover db
+		; flag now.
+		if AsyncMember {
+			if ##class(Config.MirrorMember).IsReadWriteReportingMember() {
+				; read-write async member
+			    s rc=$SYSTEM.Mirror.ClearFailoverDBFlag(dbpath)
+			    w " ...marked as read/write"
+			}
+		}
+	}
+}
+DBList() PUBLIC {
+	s $zt="err"
+	s sfn=$SYSTEM.Mirror.GetNextDBBySFN(-1)	
+	if +sfn=-1 {
+		w !,"No mirrored db's mounted"
+		goto scan
+	}
+	r !,"Show details? <N> ",resp
+	s detail=$s("Yy"[$e(resp_"X"):1,1:0)
+	w !,"SFN",?5,"Local path",?50,"Mirror name"
+	if detail {
+	   w !,?5,"Jrncnt/jrnoff/targjrncnt/targjrnoff/lastjrnrestored/mirrorname/curdirname"
+	   w !,?5,"dbguid/jrnguid"
+	   w !,?5,"mirrorguid/cursysguid"
+	   w !,?5,"createdflag/newcnt/newoff/oldcnt/oldoff"
+	}
+	w !,"----"
+    s nofailoverbit=+$ZU(40,8,31)
+    s creatednewbit=+$ZU(40,8,34)
+	do {
+		s mirname=$P(sfn,"^",2)
+		s locdir=$P(sfn,"^",3)
+		s locsfn=$P(sfn,"^",4)
+		w !,+sfn," "
+		w ?5,locdir
+		if $X>48||($l(mirname)>($X+1)) w !
+		w ?$s($l(mirname)<32:50,1:(80-$l(mirname))),mirname
+	  	if +locsfn=$ZU(40,0,41) {
+		  	s info="" w !,?5,"Removed or Dismounted"
+	  	} else {
+		  	s info=$SYSTEM.Mirror.DBGetInfo(0,+locsfn)
+	  	}
+		if detail,info'="" {
+		   w !,?5
+		   w $P(info,"^",3),"/"
+		   w $P(info,"^",4),"/"
+		   w $P(info,"^",18),"/"
+		   w $P(info,"^",19),"/"
+		   w $P(info,"^",11),"/"
+	       w $P(info,"^",8),"/",$P(info,"^",10)
+		   w !,?5,$P(info,"^",6),"/",$P(info,"^",17)
+		   w !,?5,$P(info,"^",7),"/",$P(info,"^",9)
+	       s infoflag=+$P(info,"^",12)
+    	   s curval=$ZB(infoflag,creatednewbit,1)
+    	   w !,?5,curval,"/"
+    	   w $P(info,"^",13),"/"
+    	   w $P(info,"^",14),"/"
+    	   w $P(info,"^",15),"/"
+    	   w $P(info,"^",16)
+    	   s curval=$ZB(infoflag,nofailoverbit,1)			
+    	   if curval=0 {
+	    	   w !,?5,"Database modified by async member, not a failover copy"
+    	   }
+		}
+	    s sfn=$SYSTEM.Mirror.GetNextDBBySFN(+sfn)	
+	} while (+sfn '= -1)
+scan ;
+	; 
+	; Now go through and see if we can find any db's with the activate req
+	; bit set. If so, these don't have mirrored aliases as there's a problem
+	; so they aren't returned by .GetNextDBBySFN().
+	s sfnmax=$zu(40,0,41)
+	s first=1
+	for sfn=0:1:sfnmax {
+		s dbdata=$ZU(49,+sfn)
+		if +dbdata>-1,($zb(+$p(dbdata,",",18),$zu(40,8,32),1)) {
+		   if first w !,"Databases with the activation required flag set" s first=0
+		   s namedata=$zu(49,+sfn,3)
+		   s locdir=$P(namedata,"^",2)
+	 	   s info=$SYSTEM.Mirror.DBGetInfo(0,+sfn)
+	 	   s mirname=$P(info,"^",2)
+		   w !,+sfn," "
+	       w ?5,$E(locdir,$L(locdir)-40,$L(locdir))," "  ;trim to field width
+	       w ?50,$E(mirname,$L(mirname)-30,$L(mirname))," "
+	       if info'="" {
+		      w !,?5
+		         w $P(info,"^",3),"/"
+		         w $P(info,"^",4),"/"
+		         w $P(info,"^",18),"/"
+		         w $P(info,"^",19),"/"
+			     w $P(info,"^",11),"/"
+	             w $P(info,"^",8),"/"
+	             w $P(info,"^",10)
+	          w !,?5
+	             w $P(info,"^",6)
+	          w !,?5
+	             w $P(info,"^",7),"/"
+	             w $P(info,"^",9)
+		   }
+		}
+	}
+	quit
+err ;
+	s $zt=""
+	w !,"Unexpected error: ",$ze
+	quit	
+} 
+ ; Pause journaling on one or more databases
+DBPause() {	
+	if $SYSTEM.Mirror.IsPrimary() {
+		w !,"This option is not available on the primary mirror member"
+		quit
+	}
+	i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q
+	w !,"Pause dejournaling to one or more databases"
+	s rc=$$SelectDatabases(.PauseDBList,/*DBInfo*/,,/*MustJournal*/,1,1)
+	i 'rc q ""
+	s i=1 f  {
+		s dbpath=$li(PauseDBList,i)
+		w !,dbpath
+		i $i(i)>$ll(PauseDBList) q
+	}
+	i $$YN("Really pause dejournaling to above databases","N")="N" {
+		w !,"Aborted" 
+		q ""
+	}
+	W !,"Use Database Catchup when you are ready to start dejournaling again"
+	s i=1 f  {
+		s dbpath=$li(PauseDBList,i)
+		w !,dbpath
+		s rc=##class(SYS.MirrorConfiguration).DejournalPauseDatabase(dbpath)
+ 		if ('rc) {
+	 		k err
+    			D DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+    			w !,"Failed to pause dejournaling: ",err(1)
+		}
+		i $i(i)>$ll(PauseDBList) q
+	}
+}
+ModifyDBSize() {
+	if $SYSTEM.Mirror.GetInfo()["PRIMARY" {
+		w !,"This node is the primary, switching to ^DATABASE"
+		D EDIT^DATABASE
+		quit
+	}
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s status=$SYSTEM.Mirror.GetInfo()
+	s Obj = $$SelectDatabases(/*DBList*/,/*DBInfo*/,1/*SingleSelect*/,,1)
+	q:Obj=0
+	s dirname=Obj.Directory
+	s cursize=Obj.Size
+	s expsize=Obj.ExpansionSize
+	s maxsize=Obj.MaxSize
+	s blocksize=Obj.BlockSize
+	s Obj=""
+	w !,"1. Current size (MB):   ",cursize
+	w !,"2. Expansion size (MB): ",expsize
+	w !,"3. Maximum size (MB):   ",maxsize
+		r !,"Enter field to change? <Quit> ",field
+	s field=+field
+	while field>3 {
+		w !,"Field out of range, must be 1-3"
+		r !,"Enter field to change? <Quit> ",field
+		s field=+field
+	}
+	if 'field quit
+	s type=$CASE(field,1:"current",2:"expansion",3:"maximum")
+	w !,"Enter new ",type," size (MB)? <no change> "
+	read resp	
+	if resp="" quit
+	s resp=+resp
+	if resp<0 w !,"Invalid value, size cannot be negative" quit
+	if (field=1) {
+		if resp<cursize {
+			w !,"Invalid size, cannot be less than current size" 
+			quit
+		}
+		s cursize=resp
+	} elseif (field=2) {
+		s expsize=resp
+	} elseif (field=3) {
+		if resp && (resp<cursize) {
+			 w !,"Invalid size, cannot be less than current size" 
+			 quit
+		}
+		s maxsize=resp
+	}
+	; expandby and maxsize are in blocks, cursize is in MB
+	; so convert expandby & maxsize
+	s expsize=(expsize*1048576)/blocksize
+	s maxsize=(maxsize*1048576)/blocksize
+	;
+	s rc=$SYSTEM.Mirror.DBModify(dirname,cursize,expsize,maxsize)
+	if rc>0 {
+		w !,"Succeeded"
+	} else {
+		w !,"Failed."
+	    if rc<0	w "Error: ",$$Error^%apiOBJ(-rc)
+	}
+	q
+}	
+MarkAsCaughtUp() PUBLIC {
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s state=$SYSTEM.Mirror.GetInfo()
+	if state'[",DEFINED," {
+		w !,"Must be a mirror member to manage mirrored databases"
+		quit
+	}
+	s Obj = $$SelectDatabases(/*DBList*/,,1/*SingleSelect*/,,1,0,0)
+	q:'$IsObject(Obj)
+	w !,"This is only supposed to be used in cases where a read-only database"
+	w !,"has been changed to read-write and it needs to be marked ""current"""
+	w !,"so that it can be used as part of the current mirror. The catch up function"
+	w !,"should be used if there is any journal data which has yet to be applied to "
+	w !,"the database."
+	w !
+	w !,"Really mark ",Obj.Directory
+	w !,"     as up to date <N> "
+	r conf
+	s conf=$E(conf_"X")
+	if "Yy"'[conf w !,"Aborted" quit ""
+	do AskResetMirroredDB(Obj)
+	quit
+}
+SelectDatabases(DBPathList,DBInfo,SingleSelect,Journaled,Mirrored,ActiveYN,ActReqYN) Public {
+ s $zt="ERROR"    
+ s Flag=8+512
+ i '$g(SingleSelect) s Flag=Flag+1024
+ s MustJournal=$g(Journaled) ;Journaled may be set to -1 below
+ s Mirrored=+$g(Mirrored)
+ i $g(ActiveYN)="" s ActiveYN="01" 
+ e  s ActiveYN=+ActiveYN
+ i $g(ActReqYN)="" s ActReqYN="01" 
+ e  s ActReqYN=+ActReqYN
+ s rc=0 ;return value, which is either an OREF (SingleSelect) or #databases
+ f  {
+	Kill dbname,DBInfo
+	s Index=0
+	s (List,dbinfo,active,actreq)=""
+	s Journaled=MustJournal ;restore original value
+	i $g(SingleSelect)="M" { ;a list of mounted databases instead of ...
+		Set Rset = ##class(%Library.ResultSet).%New("SYS.Database:List")
+	} else { ;a list of configured databases
+		Set Rset = ##class(%Library.ResultSet).%New("Config.Databases:List")
+	}
+	d Rset.Execute()
+	While (Rset.Next()) {
+		i $g(Rset.Data("Server"))'="" continue ;must be local
+		s dbpath=Rset.Data("Directory") 
+		s dbname=$g(Rset.Data("Name")) ;="" for SYS.Database:List
+		i $d(dbname(dbpath)) continue
+		s dbinfo=$zu(49,dbpath)
+		i (dbinfo<0)||(dbinfo>$zu(40,0,41)) continue ;must be mounted
+		i MustJournal,$zb(+$p(dbinfo,",",17),$zu(40,8,23),1) continue
+		i Mirrored {
+			i '$zb(+$p(dbinfo,",",17),$zu(40,8,28),1) continue
+			s active=''$zb(+$p(dbinfo,",",18),$zu(40,8,29),1)
+			i ActiveYN'[active continue
+			s actreq=''$zb(+$p(dbinfo,",",18),$zu(40,8,32),1)
+			i ActReqYN'[actreq continue
+		} else { ;requiring a non-mirrored, non-system database
+			i '##class(SYS.Database).CanDatabaseBeMirrored(dbpath) continue
+		}
+		s List($i(Index))=dbpath
+		s dbname(dbpath)=$lb(dbname,+dbinfo,$g(active),$g(actreq))
+ 	}
+ 	Kill Rset
+	s rc=0 ;none selected
+	i 'Index {
+		w !,"No applicable databases found",!
+		q  ;no database to choose from that meets the criteria
+	}
+	s DBPathList=""
+	s Status=##Class(%Library.Prompt).GetArray("Database directory?",.DBPathList,.List,,,,Flag)
+ 	i (+Status=0)||(Status=2)||(DBPathList="") q
+	i $g(SingleSelect) {
+		s dbpath=DBPathList
+	} elseif $ll(DBPathList)<2 {
+		s dbpath=$li(DBPathList,1)
+		i $d(dbname(dbpath)) {
+			s rc=1
+			s DBInfo(1)=dbname(dbpath)
+			q
+		}
+	} else {	;multiple selected
+		s rc=$ll(DBPathList)
+		s i=1 f  {
+			s dbpath=$li(DBPathList,i)
+			s DBInfo(i)=dbname(dbpath)
+			i $i(i)>rc q
+		}
+		q
+	}
+ 	s dir0=$zu(12,dbpath,1)
+ 	i dir0="" {
+	 	i ($zversion(1)=1) s dir0=$zu(12,dbpath,4)
+	 	i dir0="" w !!,"Invalid directory specification, please re-enter",! Continue
+ 	}
+ 	s dbpath=$zu(12,dir0,3)
+ 	i dbpath="" {
+	 	w !!,"Directory "_dir0_" does not exist, please re-enter",! 
+		Continue
+ 	}
+	s dbinfo=$zu(49,dbpath)
+	i (dbinfo<0)||(dbinfo>$zu(40,0,41)) {
+ 		w !!,"Database is not mounted, please re-enter",! 
+		Continue
+	}
+	i Mirrored {
+		i '$zb(+$p(dbinfo,",",17),$zu(40,8,28),1) {
+			w !,dbpath," not marked as mirrored"
+			continue
+		}
+		s active=''$zb(+$p(dbinfo,",",18),$zu(40,8,29),1)
+		s actreq=''$zb(+$p(dbinfo,",",18),$zu(40,8,32),1)
+		i ActiveYN'[active {
+			i ActiveYN w !,dbpath," is not currently active on this system"
+			e  w !,dbpath," is already active on this system"
+			continue
+		}
+		i ActReqYN'[actreq {
+			i ActReqYN w !,dbpath," requires activation for use on this system"
+			continue
+		}
+	} else { ;requiring a non-mirrored, non-system database
+		i $zb(+$p(dbinfo,",",17),$zu(40,8,28),1) {
+			w !,"Already mirrored" 
+			continue
+		}
+		i '##class(SYS.Database).CanDatabaseBeMirrored(dbpath) {
+			w !,"DB is not allowed to be mirrored because it is a system DB." 
+			continue
+		}
+		s status=##class(Config.Databases).DatabasesByDirectory("",dbpath,.dbnamelist)
+		i ('status) {
+	 		w ! d $System.Status.DisplayError(status) w !
+			Continue
+		}
+		i '$ll(dbnamelist) {
+			w !!,dbpath," not defined in cache.cpf"
+			continue
+		}
+		s dbname=$li(dbnamelist,1)
+	}
+	i MustJournal,$zb(+$p(dbinfo,",",17),$zu(40,8,23),1) {
+		s Journaled=-1 ;caller needs to enable journaling on the DB
+	}
+	i $g(SingleSelect) {
+		s rc=##Class(SYS.Database).%OpenId(dbpath,,.Status)
+		if ('Status) {
+			w ! d $SYSTEM.Status.DisplayError(Status) w !
+			Continue
+		}
+		q 
+	}
+	s DBPathList=$lb(dbpath)
+	s DBInfo(1)=$lb($g(dbname),+dbinfo,$g(active),$g(actreq))
+	s rc=1
+ 	q
+ }
+ q rc
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+getPrimary() PUBLIC {
+	; Looks up the name of the primary mirror member or
+	; returns NULL if we can't find it
+	s mirname=$p(^SYS("MIRRORSET"),"^",2)
+	s id=$O(^MIRROR(mirname,"Status","Member",""))
+	while (id '= "") {
+	   q:$G(^MIRROR(mirname,"Status","Member",id,"Role"))="PRIMARY" 
+	   s id=$O(^MIRROR(mirname,"Status","Member",id))
+	}
+	quit:id="" ""  ; can't find a primary
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",id))
+	s primary=$LG(info,1)
+	quit primary
+}
+LocalMirrorStatus() PUBLIC {
+	s x=$SYSTEM.Mirror.GetInfo(1)
+	if x'["DEFINED" w !,"This node is not a mirror member" q
+	s membertype=##class(%SYSTEM.Mirror).GetMemberType()
+	; does the member type need to be localized?
+	;s membertype=##class(SYS.Mirror).LocalizeMemberType(membertype)
+	s info=$G(^SYS("MIRRORSET"))
+	s mirname=$p(info,"^",2)
+	s mircnt=$L(mirname,",")
+	w !,"This instance is a ",membertype," member "
+	if mircnt>1 {
+		w "of ",mircnt," mirrors"
+	}
+	w !
+	for i=1:1:mircnt {
+		s name=$P(mirname,",",i)
+		s status=##class(%SYSTEM.Mirror).GetMemberStatus(name)
+		s troubelflag=$LG(status,2)
+		s status=$LG(status)
+		if status="Primary",troubelflag="Trouble" s status="Primary In Trouble"
+		; does the member statys need to be localized?
+		s status=##class(SYS.Mirror).LocalizeMemberStatus(status)
+		w ?5,"Status for mirror ",name," is """,status,"""",!
+	}
+	s flags=$SYSTEM.Mirror.DebugFlags()
+	if +flags w !,"Mirror Debug Flags: 0x",$ZH(+flags)
+	;
+	s info=$SYSTEM.Mirror.GetInfo(2)
+	if x["PRIMARY" {
+	   w !,"Current mirror file #",$P(info,",",1)," ends at ",$P(info,",",4)
+	   w !,"Min trans file #",$P(info,",",3)," min trans index: ",$P(info,",",2)
+	} elseif x["ACTIVE" {
+	   w !,"Currently have pos ",$P(info,",",4)," in mirror file #",$P(info,",",1)
+	   s chkpnt=$G(^MIRROR(mirname,"dejrnchkpnt"))
+	   w !,"Last dejrnchkpnt = file #",+chkpnt," pos: ",+$P(chkpnt,"^",2)
+	}
+	if (x'["SHADOW") && (mirname'="") {
+		s cls=##class(Config.Mirrors).Open(mirname)
+		s defprimary=cls.DefinedPrimary
+		s cls=""
+		if defprimary'="" {
+			w !!,"Mirror is in no failover mode, ",defprimary," must be the primary"
+		}
+	}
+	w !
+}
+ChangeValidEnd() PUBLIC {
+	if '$D(^SYS("MIRRORSET")) {
+		w !,"Mirror configuration not loaded"
+		quit
+	}
+	w !,"WARNING: It should never be necessary to use this function"
+	w !,"         There may be situations where this is required to recover"
+	w !,"         from a bug to get the system back up. Unless you have been"
+	w !,"         told to do this by someone from the InterSystems WRC you should"
+	w !,"         not proceed."
+	r !,"Continue? <No> ",resp
+	if "Yy"'[$E(resp_"X") quit
+	s $zt="cveErr"
+	if $SYSTEM.Mirror.GetInfo()["ACTIVE" {
+		w !!,"This node is an active mirror member. This option is only used"
+		w !,"to resolve troubles that block a node from becoming an active member."
+		w !
+		quit
+	}
+top ;	
+    if +$G(^SYS("MIRRORSET")) {
+	    r !,"Enter mirror set name: (? for list, return for quit) ",mirname
+	    if mirname="?" w !!,"Mirror Set name is one of:",!,$p(^SYS("MIRRORSET"),"^",2) goto top
+	    if mirname="" quit
+	    if ","_$P(^SYS("MIRRORSET"),"^",2)_","'[(","_mirname_",") w "   NOT EXIST!" g top
+    } else {
+	    s mirname=$p(^SYS("MIRRORSET"),"^",2)
+    }
+	r !,"Enter mirror journal number: (? for list, Q for quit) ",filecnt
+	if filecnt'="","Qq"[filecnt quit
+	if filecnt="?" do JrnDisplay(mirname) goto top
+	if filecnt="" goto top
+    s jrnfile=$SYSTEM.Mirror.GetJournalFileByMjrncnt(filecnt,mirname)
+	if '+jrnfile {
+	   w !,"Failed to find file #"_filecnt_" in journal log"
+	   goto top
+    }
+    s jrnfile=$P(jrnfile,",",2)
+	s jrninfo=$zu(78,22,jrnfile,99)
+	if jrninfo<0 {
+	   w !,"Failed to read header information from "_jrnfile
+	   goto top
+	}
+    s filecnt=$P(jrninfo,",",13+1)
+    s jrnguid=$P(jrninfo,",",7+1)
+    s sysguid=$P(jrninfo,",",14+1)
+    s mirguid=$P(jrninfo,",",15+1)
+    s valid=$P(jrninfo,",",16+1)
+    ;
+	s fd=$zu(78,5,jrnfile,0)
+	if fd<0 {
+	   w !,"Failed to open journal file: "_jrnfile
+	   quit $LB(0)
+	}
+    do $zu(78,6,fd)
+	s jrnend=$zu(78,18,0)
+	do $zu(78,7,fd) 
+	s fd=0
+enteroption ;
+	w !,"For ",jrnfile
+	w !,?5,"Current endoff: ",jrnend
+	w !,?5,"Current valid end: ",valid
+	if 'valid {
+		s validopts="SQ"
+		w !,"(S)et valid end or (Q)uit? <Quit> "
+	} else {
+		s validopts="CRQ"
+		w !,"(C)lear valid end, (R)eset valid end, or (Q)uit? <Quit> "
+	}
+	r resp w !
+	s resp=$ZCVT($E(resp_"Q"),"U")
+	if validopts'[resp {
+		w !,"Invalid option: ",resp," - Try again"
+		goto enteroption
+	}
+	if resp="Q" goto top
+	if (resp="C") {
+		;clear valid end or reset valid end
+		do $ZU(9,"","Mirror: "_"MIRROR: Clearing valid end of "_jrnfile_" ("_valid_")")
+		s x=$SYSTEM.Mirror.ClearJournalFileMirEnd(jrnfile)
+		if +x {
+			w !,"Done"
+		} else {
+		   s reason=$P(x,",",2)
+		   w !,"Failed to clear end: ",reason
+		}
+		goto top
+	}
+	; set or reset
+	s actend=jrnend
+	if (resp="R") {
+		;reset valid end starts by clearing it
+		do $ZU(9,"","Mirror: "_"MIRROR: Resetting valid end of "_jrnfile_" ("_valid_")")
+		s x=$SYSTEM.Mirror.ClearJournalFileMirEnd(jrnfile)
+		if '+x {
+		   s reason=$P(x,",",2)
+		   w !,"Reset aborted, failed to clear end: ",reason
+		   goto top
+		}
+	   ; now that valid end is cleared, open the file and find the
+	   ; actual end
+	   s fd=$zu(78,5,jrnfile,0)
+	   if fd<0 {
+	      w !,"Failed to open journal file: "_jrnfile_" to locate actual end"
+	      goto top
+  	   }
+       do $zu(78,6,fd)
+	   s actend=$zu(78,18,0)
+	   do $zu(78,7,fd)
+	   s fd=0
+	}		
+	w !,"Enter new valid end up to actual end ",actend,"? "
+	read resp
+	while ('+resp) || (+resp > actend) {
+	   if '+resp {
+		   w !,"0 is not a valid response - please enter a value"
+	   } else {
+	       w !,resp," is > than actual end - try again"
+	   }
+	   w !,"Enter new valid end up to actual end ",actend,"? "
+	   read resp
+	}
+	w !
+	do $ZU(9,"","Mirror: "_"MIRROR: Setting valid end of "_jrnfile_" to "_resp)
+	s x=$SYSTEM.Mirror.SetMirrorJournalFileEnd(jrnfile,+resp)
+	if +x {
+	   w !,"Done" 
+	} else {
+	   w !,"Failed"
+	}
+	goto top
+cveErr ;
+	s $zt=""	
+	w !,"Unexpected error: ",$ZE," at ",$ZU(56,2)
+	if fd do $zu(78,7,fd)
+	quit
+}
+JrnDisplayx() PUBLIC {
+	if '$D(^SYS("MIRRORSET")) {
+		w !,"Mirror configuration not loaded"
+		quit
+	}
+	i '+$G(^SYS("MIRRORSET")) d JrnDisplay($p(^SYS("MIRRORSET"),"^",2)) quit
+top ;
+    s cnt=$$getAsyncMemberSources(.names)
+	if 'cnt {
+	   w !,"No Async member sources defined"
+	   quit
+	}
+	if cnt=1 {
+	   s mirname=names(1)
+	   w !,"Displaying journal files for ",mirname
+	} else {
+	   w !,"This is an Async member tracking ",cnt," mirrors"
+	   r !,"List journal files for which mirror? (? for list, <ret> to exit) ",mirname
+	   while mirname="?" {
+		   w !,"This node is tracking the following mirrors:"
+		   w !,?5
+		   for i=1:1:cnt w names(i) w:i'=cnt ", " w:$X>75 !,?5 
+	       r !,"List journal files for which mirror? (? for list, <ret> to exit) ",mirname
+	   }
+	   s mirname=$zcvt(mirname,"U")
+	}
+	if mirname="" quit
+	d JrnDisplay(mirname)
+	if cnt>1 goto top
+}
+JrnDisplay(mirname) PUBLIC {
+	w:$X !  ;start with a fresh line
+	s cnt=$G(^SYS("MIRRORSET",mirname,"Member"),0)
+	for i=0:1:cnt {
+		s info=$G(^SYS("MIRRORSET",mirname,"Member",i),"")
+		if $L(info) {
+			s name=$LG(info,1)
+			s guid=$LG(info,2)
+			s guidxlate(guid)=name
+		}
+	}
+	s curmirguid=$G(^SYS("MIRRORSET",mirname,"GUID"))
+	;
+	s rc=$SYSTEM.Mirror.GetLastJournalFilename(mirname)
+	if +rc=-1 {
+		w "Failed to read mirror journal log, can't display journal files",!
+		quit
+	}
+	if +rc=0 {
+		w "Mirror journal log doesn't exist, can't display journal files",!
+		quit
+	}
+	s jrnfile=$P(rc,",",2)
+	s jrninfo=$$getjrninfo(jrnfile)  ;returns $LB(1,<mirfilecnt>,<jrnend>,<validflag>,
+									 ;							<jrnguid>,<createguid>,<mirguid>)
+    if '$LG(jrninfo) {
+	    s endfilecnt=+rc-1
+	    if endfilecnt<2 q
+	    s filecnt=endfilecnt - 5
+	    if filecnt<1 s filecnt=1
+	    for i=endfilecnt:-1:filecnt {
+		    s jrnfile=$SYSTEM.Mirror.GetJournalFileByMjrncnt(i,mirname)
+		    q:'+jrnfile
+		    s jrnfile=$P(jrnfile,",",2)
+		    s jrninfo=$$getjrninfo(jrnfile)
+		    q:$LG(jrninfo)
+	    }
+    }					
+    ; 
+    if '$LG(jrninfo) {
+	    w !,"Can't find any mirror journal files even though they are listed"
+	    w !,"   in the journal log"
+	    quit
+    }
+	w !,"Filecnt  ",?11,$J("End addr",10),"(Valid)",?29,"File Name",!
+	s cnt=1  ;gets updated with filecnt of next file later
+	s linecnt=0,dontask=0
+	while cnt,$LG(jrninfo) {
+		if 'dontask,linecnt>20 {
+			s $X=0
+			w "more (a/n/y)?"
+			read *more
+			s more=$C(more)
+			if "QqNn"[more w ! quit
+			if "Aa"[more s dontask=1
+			s linecnt=0
+			s n=$X 
+			f i=1:1:n w *8," ",*8
+			s $X=0
+		}
+		s linecnt=linecnt+1
+		s filecnt=$LG(jrninfo,2)
+		s endoff=$LG(jrninfo,3)
+		s validflag=$LG(jrninfo,4)
+		s sysguid=$LG(jrninfo,6)
+		s mirguid=$LG(jrninfo,7)
+		s len=$L(jrnfile)
+		s validflag=$S(validflag:"(v)",1:"   ")
+	    w $J(filecnt,4),?12,$J(endoff,10),validflag,?29,$E(jrnfile,len-50,len)
+	    ;w " ",$J($G(guidxlate(sysguid),sysguid),10)
+	    if mirguid'=curmirguid w !,?30,"<Foreign mirror: ",mirguid,">"
+	    write !
+	    s cnt=filecnt-1
+	    if cnt {
+		  s jrnfile=$SYSTEM.Mirror.GetJournalFileByMjrncnt(cnt,mirname)
+		  if +'jrnfile {
+			 s cnt=0
+		  } else {
+		     s jrnfile=$P(jrnfile,",",2)
+		 	 s jrninfo=$$getjrninfo(jrnfile)  ;returns $LB(1,<mirfilecnt>,<jrnend>,<validflag>,
+									 ;							<jrnguid>,<createguid>,<mirguid>)
+			 if $LG(jrninfo),$LG(jrninfo,2)'=cnt {
+				 w "File count mismatch in ",jrnfile," (expected: ",cnt," but it has :",$LG(jrninfo,2),")."
+				 quit
+			 }
+		  }
+		}
+	}
+	s SYSOBJ=##Class(Config.Journal).Open()
+	w !,"Primary Journal Directory: ",SYSOBJ.CurrentDirectory
+	w !,"Secondary Journal Directory: ",SYSOBJ.AlternateDirectory
+	quit
+}
+getjrninfo(file) PUBLIC {
+	;returns $LB(1,<mirfilecnt>,<jrnend>,<jrnguid>,<sysguid>,<mirguid>)
+	; sysguid is the guid of the system which created the journal file
+	; mirguid if the guid of the mirror the journal file belongs to
+	s jrninfo=$zu(78,22,file,99)
+	if jrninfo<0 {
+	   w !,"Failed to read header information from "_file
+	   quit $LB(0)
+	}
+    s filecnt=$P(jrninfo,",",13+1)
+    s jrnguid=$P(jrninfo,",",7+1)
+    s sysguid=$P(jrninfo,",",14+1)
+    s mirguid=$P(jrninfo,",",15+1)
+    s valid=$P(jrninfo,",",16+1)
+	s fd=$zu(78,5,file,0)
+	if fd<0 {
+	   quit $LB(0)
+	}
+    do $zu(78,6,fd)
+	s jrnend=$zu(78,18,0)
+	do $zu(78,7,fd)
+	quit $LB(1,filecnt,jrnend,valid,jrnguid,sysguid,mirguid)
+}
+ChangeRecoveryParams() PUBLIC {
+	if '$D(^SYS("MIRRORSET")) {
+		w !,"Mirror configuration not loaded"
+		quit
+	}
+	s state=$SYSTEM.Mirror.GetInfo()
+	s mirname=##class(Config.Mirrors).GetMirrorName()
+	if mirname="" w !,"Failed to locate mirror name in Config.Mirrors" quit
+	s mir=##class(Config.Mirrors).Open(mirname)
+	if '$IsObject(mir) w !,"failed to open Config.Mirrors(",mirname,")" quit
+	s qostimeout=mir.QOSTimeout
+	w !,"QOS Timeout:        ",qostimeout," (msec)"
+	if state'["PRIMARY" {
+		w !,"Parameters can only be changed on the primary"
+		read !,"Press RETURN to continue...",resp
+		quit
+	}
+	r !,"Change this parameter? <N> ",resp
+	if "Yy"'[$E(resp_"N") quit
+	;
+	; get new values
+	;
+	w !,"QOS Timeout in msec <",qostimeout,"> "
+	s resp="" r resp
+	if +resp s qostimeout=+resp
+	w !,"New value: "
+	w !,?5,"QOS Timeout:        ",qostimeout," (msec)"
+	s resp=""
+	read !,"Ok? <n> ",resp
+	s resp=$E(resp_"N")
+	if "Yy"'[resp {
+		w !,"not changed" 
+		quit
+	}
+	if (qostimeout '= mir.QOSTimeout) {
+		s mir.QOSTimeout=qostimeout
+		s rc=mir.%Save()
+		if 'rc {
+			w !,"Failed, rc=",rc
+		} else {
+			w !,"Changed"
+		}
+	}
+}
+AdjustQOSTimeout() {
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") w !!,"Managed by Enterprise Manager, operation not allowed." Quit
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s mirname=$P($G(^SYS("MIRRORSET")),"^",2)
+	if mirname="" w !,"Mirror name not set" quit
+	s state=$SYSTEM.Mirror.GetInfo()
+	s mir=##class(Config.Mirrors).Open(mirname)
+	if '$IsObject(mir) w !,"failed to open Config.Mirrors(",mirname,")" quit
+	s qostimeout=mir.QOSTimeout
+	if qostimeout {
+		s displayval=qostimeout
+	} else {
+		; if its 0 or not defined, use the active value as the default
+		s recovparams=$SYSTEM.Mirror.ReconfigParams()
+		s displayval=$P(recovparams,",",1)
+	}
+	w !,"QOS Timeout: ",displayval," (msec)"
+	if state'["PRIMARY" {
+		w !,"Parameters can only be changed on the primary"
+		read !,"Press RETURN to continue...",resp
+		quit
+	}
+	r !,"Change this parameter? <N> ",resp
+	if "Yy"'[$E(resp_"N") quit
+	w !,"QOS timeout in msec (0=default) <",qostimeout,"> "
+	r resp
+	if resp="" {
+		s newqostimeout=qostimeout
+	} else {
+		s newqostimeout=+resp
+	}
+	if (newqostimeout '= qostimeout) {
+	    s mir.QOSTimeout=newqostimeout
+		s rc=mir.%Save()
+		if 'rc {
+			w !,"Failed, rc=",rc
+		} else {
+			w !,"Changed"
+		}
+	}
+}
+ChangeReconnectionParams() PUBLIC {
+	; There are several configuration entries in ^MIRROR which affect
+	; the behavior of certain aspects of mirroring. These are 
+	; not usually defined and the code uses default values but they are
+	; present in case we need to "tune" the values on a system to deal 
+	; with problems that arise.
+	;
+	; This entry point is not accessible via the ^MIRROR menu as these
+	; are not documented and we don't intend for people to change them,
+	; at least not on their own.
+	;
+	; These may be removed in the future if we find the defaults work well.
+	;
+	; ^MIRROR(mirname,"reconnect","disable")=0/1
+	; ^MIRROR(mirname,"reconnect","mininterval") = min # of seconds we permit
+	;             between reconnections. If a backup tries to connect
+	;             more often, we delay it. Defaults to 60 when missing.
+	; ^MIRROR(mirname,"reconnect","largedelay") = If we've reconnected 10 times in
+	;             a row and our average connection time is less than
+	;             minreconnect, this is an added delay. Defaults to 
+	;             5 minutes.
+	; ^MIRROR(mirname,"reconnect","fixeddelay") = # of seconds which every
+	;        reconnection attempt waits. This overrides "minreconnect"/"largedelay"
+	; ^MIRROR("MirrorStartupSSHoldTime") = max # of seconds which superserver
+	;        holds a job for (other than ECP) while mblkuser=3 indicating that
+	;		 the instance is in the process of becoming the primary. Defaults
+	;        to 60 seconds in %SYS.SERVER. If time expires and mblkuser is still
+	;        set the connection is dropped. Only used on failover members.
+	; 	
+	if '$D(^SYS("MIRRORSET")) {
+		w !,"Mirror configuration not loaded"
+		quit
+	}
+	w !,"These parameters control how an instance retries when it fails to"
+	w !,"connect to another mirror member. Normally these parameters"
+	w !,"do not need to be modified and they do not affect the behavior of"
+	w !,"a system once it has connected."
+	w !
+	i '+$G(^SYS("MIRRORSET")) s mirname=$p(^SYS("MIRRORSET"),"^",2) d ChangeOneMirror quit
+top	r !!,"Enter mirror set name: (? for list, return for quit) ",mirname
+	if mirname="?" w !!,"Mirror Set name is one of:",!,$p(^SYS("MIRRORSET"),"^",2) goto top
+	if mirname="" quit
+	if ","_$P(^SYS("MIRRORSET"),"^",2)_","'[(","_mirname_",") w "   NOT EXIST!" g top
+	d ChangeOneMirror
+	g top
+ChangeOneMirror ;
+	s disable=$G(^MIRROR(mirname,"reconnect","disable"),0)  ;enabled
+	s minreconnect=+$G(^MIRROR(mirname,"reconnect","mininterval"),60)  ;in seconds
+	s longdelay=+$G(^MIRROR(mirname,"reconnect","longdelay"),300)  ;in seconds
+	s fixeddelay=+$G(^MIRROR(mirname,"reconnect","fixeddelay"))
+	s ssholdtime=$G(^MIRROR("MirrorStartupSSHoldTime"),10)  ;seconds
+	s isFailoverNode='+$G(^SYS("MIRRORSET"))
+	r !,"Change this? <No>"
+	w !,"Reconnection parameters for mirror: ",mirname
+	w !,?5,"Reconnection Disabled: ",$S(disable:"Yes",1:"No")
+	w !,?5,"Minimum reconnect time: ",minreconnect
+	w !,?5,"Long Delay time: ",longdelay
+	w !,?5,"Fixed Reconnection Delay: ",fixeddelay
+	w:isFailoverNode !,?5,"SuperServer Hold Time for mirror startup: ",ssholdtime
+	r !,"Change these parameters? <no> ",resp
+	if "Yy"'[$E(resp_"N") quit
+	w !,"Entering K/k for a value will delete it so it takes on its"
+	w !,"'natural' default"
+	r !,"Reconnection enabled (Kill/Yes/No)? <Kill> ",resp
+	s x=$E(resp_"k")
+	while "YyNnKk"'[x {
+	   w !,"Invalid response - """,resp,""" - Enter one of Yes, No or Kill"
+	   r !,"Reconnection enabled (Kill/Yes/No)? <Kill> ",resp
+	   s x=$E(resp_"k")
+	}
+	if "Yy"[x {
+		s ^MIRROR(mirname,"reconnect","disable")=0
+	} elseif "Nn"[x {
+		s ^MIRROR(mirname,"reconnect","disable")=1
+	} else {  /* must be kill */
+		k ^MIRROR(mirname,"reconnect","disable")
+	}
+	r !,"Minimum reconnect time? <Kill> ",resp
+	if "Kk"[$E(resp_"K") {
+		k ^MIRROR(mirname,"reconnect","mininterval")
+	} else {
+		s ^MIRROR(mirname,"reconnect","mininterval")=+resp
+	}
+	r !,"Long delay time? <Kill> ",resp
+	if "Kk"[$E(resp_"K") {
+		k ^MIRROR(mirname,"reconnect","longdelay")
+	} else {
+		s ^MIRROR(mirname,"reconnect","longdelay")=+resp
+	}
+	r !,"Fixed reconnect time? <Kill> ",resp
+	if "Kk"[$E(resp_"K") {
+		k ^MIRROR(mirname,"reconnect","fixeddelay")
+	} else {
+		s ^MIRROR(mirname,"reconnect","fixeddelay")=+resp
+	}
+	if isFailoverNode { 
+	   r !,"SuperServer Hold time for mirror startup? <Kill> ",resp
+	   if "Kk"[$E(resp_"K") {
+		  k ^MIRROR("MirrorStartupSSHoldTime")
+	   } else {
+		  s ^MIRROR("MirrorStartupSSHoldTime")=+resp
+	   }
+	}
+	q
+}
+Reconfigure() PUBLIC {
+	s isMirror=($SYSTEM.Mirror.GetInfo()[",DEFINED,")
+	if 'isMirror {
+		s mm=##class(Config.MirrorMember).Open()
+		s ourname=mm.SystemName
+		Set isMirror=(ourname'="")
+		s mm=""
+	}
+	if 'isMirror {
+		w !,"System is not configured as a mirror member"
+		quit
+	}
+	Set isShadow = ##class(Config.MirrorMember).isAsyncMember()
+	;
+	if isShadow {
+		do ReconfigureAsyncMember()
+	} else {
+		do ReconfigureFailoverMember()
+	}
+}
+ReconfigureAsyncMember() {
+ 	s cmenu(1)="Stop tracking a mirror"
+ 	s cmenu(2)="Remove mirror configuration"
+ 	s cmenu(3)="Display Mirror Configuration"
+ 	for  {
+	   s Value=""
+	   s Status=##class(%Library.Prompt).GetMenu("Option?",.Value,.cmenu,.hmenu,8+128+4)
+	   i (+Status=0)||(Status=2)||(Value="") q
+	   i Value=1 d RemoveAsyncMemberSource() Continue
+	   i Value=2 d RemoveMirrorConfig() continue
+	   i Value=3 d DisplayConfig() continue
+ 	}
+ 	quit
+}
+ReconfigureFailoverMember() {
+ 	s cmenu(1)="Remove Other Mirror Member"
+ 	s cmenu(2)="Remove This failover member"
+ 	s cmenu(3)="Display Mirror Configuration"
+ 	for  {
+	   s Value=""
+	   s Status=##class(%Library.Prompt).GetMenu("Option?",.Value,.cmenu,.hmenu,8+128+4)
+	   i (+Status=0)||(Status=2)||(Value="") q
+	   i Value=1 d RemoveMirrorMember() continue
+	   i Value=2 d RemoveMirrorConfig() continue
+	   i Value=3 d DisplayConfig() continue
+ 	}
+ 	quit
+}
+DisplayConfig() {
+	s mm=##class(Config.MirrorMember).Open()
+	if '$IsObject(mm) {
+		 w !,"Failed to open Config.MirrorMember - Config file requires updating" 
+		 quit
+	}
+	s sysname=mm.SystemName
+	if mm.AsyncMemberGUID'="" {
+		s mm="",cnt=0
+		s rs=##class(%Library.ResultSet).%New("Config.Mirrors:List")
+		Do rs.Execute()
+		While (rs.Next()) {
+			s cnt=cnt+1
+			s list(cnt)=rs.Data("Name")
+		}
+		s rs=""
+		if cnt=1 s mirname=list(1) goto top
+choose ;
+		w !,"There are ",cnt," mirror sets tracked:"
+		for i=1:1:cnt w !,i,")",?5,list(i)
+		r !,"Enter mirror set name to be displayed: ",mirname
+		if mirname="" quit
+		if mirname?.N {
+			if '$d(list(mirname),mirname) w !,"Item #",mirname," does not exist." goto choose
+			w "  ",mirname,!
+		} else {
+			s mirname=$ZCVT(mirname,"U")
+			for i=1:1:cnt q:list(i)=mirname
+			if list(i)'=mirname {
+				w !,"""",mirname,""" is not a mirror set being tracked."
+				goto choose
+			}
+		}
+	} else {
+		s mm=""
+		s mirname=##class(Config.Mirrors).GetMirrorName()
+		if mirname="" {
+			w !,"No mirror defined, can't change modify data"
+			quit
+		}
+	}
+top ;
+	k list
+	k params
+	s rc=##class(Config.Mirrors).Get(mirname,.params)
+	if ('rc) {
+	 	k err
+    	Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+		w !,"Failed to read mirror parameters for ",mirname,": "
+		for i=1:1:err w !,?5,err(i)
+		quit
+	}
+	w !!,"Parameters for mirror: ",mirname
+	do dumpparams(.params)
+	;
+	k params
+	s rc=##class(Config.MirrorMember).Get(.params)
+	if ('rc) {
+	 	k err
+    	Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+		w !,"Failed to read mirror member parameters:"
+		for i=1:1:err w !,?5,err(i)
+		quit
+	}
+	w !!,"Mirror member parameters:"
+	k params("AgentAddress")  ;don't display this, its obsolete
+	do dumpparams(.params)
+	;
+ 	Set rs=##class(%Library.ResultSet).%New("Config.MapMirrors:List")
+ 	s rc=rs.Execute(mirname)
+ 	if rc {
+ 	   While (rs.Next()) {
+	      Set name=rs.Data("Name")
+	      q:name=""  ;exit loop if we get a null name
+	      if rs.Data("MemberType")'=0 continue
+	      k params
+	      s x=##class(Config.MapMirrors).Get(mirname,name,.params)
+		  if ('x) {
+		 	 k err
+    		 Do DecomposeStatus^%apiOBJ(x,.err,"-d") 
+			 w !,"Failed to read MapMirrors.",mirname," info for: ",name
+			 for i=1:1:err w !,?5,err(i)
+			 quit
+		  }
+		  w !!,"Mirror set member information for ",name
+		  ; We want the ECPAddress property called SuperServer Address
+		  s params("SuperServerAddress")=params("ECPAddress")
+		  k params("ECPAddress")
+		  k params("PreferredArbiter")
+		  k params("ConnectsTo")
+		  do dumpparams(.params)
+ 	   }
+ 	}
+    w !
+}
+dumpparams(params) {
+	s maxlen=32  ;we'd like 32 but if there's a longer field, we'll
+	             ;adjust this up.
+	s i=""
+	for  s i=$O(params(i)) quit:i=""  if $L(i)>maxlen s maxlen=$L(i)
+	;
+	s i=$O(params(""),1,v)
+	while (i'="") {
+		w !,?5,$J(i,maxlen)," = "
+		if $ISVALIDNUM(v) {
+			w v
+		} else {
+			w """",v,""""
+		}
+		s i=$O(params(i),1,v)
+	}
+}
+ManageDejournaling() {
+	s $zt="err"
+	i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q
+	if '$System.Mirror.IsAsyncMember() {
+		w !,"This option is only available on async mirror members"
+	}
+	s cnt=$$getAsyncMemberSources(.names)
+	if 'cnt {
+		w !,"No Async member sources defined"
+		quit
+	}
+listMirrors ;
+	w !,"Mirror",?20,"Dejournaling Status"
+	w !,"---------------",?20,"-------------------"
+	s namelist=","
+	for i=1:1:cnt {
+		   s mirname=names(i)
+		   s namelist=namelist_mirname_","
+		   s status=##class(SYS.MirrorConfiguration).GetDejournalStatusMsg(mirname)
+		   w !,mirname,?20,status
+	}
+	if (cnt=1) {
+		w !,"Change dejournaling status of ",names(1),"? <No> "
+		r resp
+		quit:"Yy"'[$E(resp_"X")
+		s resp=names(1)
+	} else {
+		r !,"Change dejournaling status of which member (return to exit)? ",resp
+		quit:resp=""
+		if resp="?" goto listMirrors
+		s mirname=","_$zcvt(resp,"U")_","
+		while (resp'="") && (resp'="?") && (namelist'[mirname) {
+			w !,resp," is not a mirror this instance is tracking"
+			r !,"Change dejournaling status of which member (return to exit)? ",resp
+			s mirname=","_$zcvt(resp,"U")_","
+		}
+		quit:resp=""
+		if resp="?" goto listMirrors
+	}
+	s mirname=$zcvt(resp,"U")
+    s status=##class(SYS.MirrorConfiguration).GetDejournalStatus(mirname)
+	w !,"Current status is ",status
+	do {
+		if status="running" {
+			w !,"Are you sure you want to stop dejournaling for ",mirname," now? "
+		} else {
+			w !,"Are you sure you want to start dejournaling for ",mirname," now? "
+		}
+		r resp
+	} while "YyNn"'[$E(resp_"X")
+	q:"Nn"[$E(resp)
+	if status="running" {
+		s rc=##class(SYS.MirrorConfiguration).DejournalStop(mirname)
+		s verb="stopp"
+	} else {
+		s rc=##class(SYS.MirrorConfiguration).DejournalStart(mirname)
+		s verb="start"
+	}
+	if (''rc) {
+		w !,"....",verb,"ed"
+	} else {
+	 	k err
+    	Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+		w !,"Error ",verb,"ing dejournaling for ",mirname,":"
+		w !,?5,err(1)
+	}
+	quit		
+err	;
+	s $zt=""
+	w !,"Unexpected error: ",$ze
+	quit
+}
+SetupMirror(Type) {
+	s $zt="err"
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") w !!,"Managed by Enterprise Manager, operation not allowed." Quit
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	; Mirroring requires the MirrorService, check that its
+	; enabled and offer to enable it if it isn't.
+	s x=##class(Security.Services).%OpenId($ZCVT("%Service_Mirror","L"),,.rc)
+ 	if ('rc) {
+	 	k err
+    	Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+    	w !,"Failed to check status of MirroringingService: ",err(1)
+    	Quit
+ 	} else {
+	 	if 'x.Enabled {
+		 	w !,"%Service_Mirror is required for Mirroring."
+		 	w !,"You have to enable %Service_Mirror in order to continue."
+		 	r !,"Do you want to enable it now? <Y> ",resp
+		 	if "Nn"'[$E(resp_"y") {
+			 	s x.Enabled=1
+			 	s rc=x.%Save()
+			 	if 'rc { w !,"Failed to enable Mirror Service" Quit}
+		 	} else {
+			 	w !,"Service not enabled." Quit
+			}
+		}
+ 	}
+ 	s x=""
+ 	if Type=3||(Type=4) goto retrieve
+GetMirrorName	;
+	r !,"Mirror Set Name: ",resp
+	while ($L(resp)>15) || (resp[":") {
+		w !,"Mirror Set Name is limited to 15 characters and must not contain any colons"
+	    r !,"Mirror Set Name: ",resp
+	}
+	s mirname=$zcvt(resp,"U")
+	if mirname="" Quit
+	;
+	s mm=##class(Config.Mirrors).Open(mirname)
+	if $isobject(mm) s mm="" w !,"The Mirror Set name ",mirname," already existed." Goto GetMirrorName
+	;
+	Set sslc=##class(Security.SSLConfigs).%OpenId("%MirrorClient",,.status)
+	Set ssls=##class(Security.SSLConfigs).%OpenId("%MirrorServer",,.status)
+	s sslconfigured=$isobject(sslc)||$isobject(ssls)
+ 	if Type goto retrieve
+	; We're creating a new mirror, check whether we have ssl configs. If not
+	; remind the user that SSL is recommended and ask if they want to pause
+	; and go create them.
+	s JRNEncrypted=##class(%SYS.Journal.System).IsJournalEncryptionEnabled(3)
+	If JRNEncrypted {
+		w !!,"Journal encryption is enabled, UseSSL will be set automatically."
+		Set resp=1
+		Goto doSSL
+	}
+RetrySSL ;
+	if JRNEncrypted {
+		w !!,"SSL configuration failed. Abort!" Quit
+	}
+	w !,"The use of SSL for mirroring is strongly recommended due to the"
+	w !,"nature of what mirror members can ""do"" to each other."
+	w !,"This requires two SSL configurations on each failover mirror member:"
+	w !,"    SSL Client configuration: %MirrorClient"
+	w !,"    SSL Server configuration: %MirrorServer"
+	w !,"both configurations should use the same X.509 Credentials, they"
+	w !,"differ only in the client/server designation"
+	w !!,"Do you want to use SSL for the Mirror? <Y> " r resp
+	s resp=$S("Nn"[$E(resp_"Y"):0,1:1)
+doSSL ;
+	if resp {
+		if 'sslconfigured {
+			w !,"Mirror SSL is not set up, setting up the mirror SSL now."
+			if '$$SetupSSL() Goto RetrySSL
+		} else {
+			if $isobject(sslc)&&'sslc.Enabled s sslc.Enabled=1 s rc=sslc.%Save()
+			if $isobject(ssls)&&'ssls.Enabled s ssls.Enabled=1 s rc=ssls.%Save()
+			if '$isobject(sslc) w !,"%MirrorClient SSL configuration does not exist, could not use SSL for mirror." G RetrySSL
+			if '$isobject(ssls) w !,"%MirrorServer SSL configuration does not exist, could not use SSL for mirror." G RetrySSL
+        }
+	    s clientcn=$$GetSSLDNField^MIRRORCTL("client")
+	    if '$LG(clientcn) {
+		    w !,"Error getting SSL DN name in %MirrorClient: ",$LG(clientcn,2)
+		    goto RetrySSL
+	    }
+	    s servercn=$$GetSSLDNField^MIRRORCTL("server")
+	    if '$LG(servercn) {
+		    w !,"Error getting SSL DN name in %MirrorServer: ",$LG(servercn,2)
+		    goto RetrySSL
+	    }
+	    s clientcn=$LG(clientcn,2)
+	    s servercn=$LG(servercn,2)
+	    if servercn'=clientcn {
+		    w !,"SSL config error: Names in Server and client configurations are different"
+		    w !,"   server: ",servercn
+		    w !,"   client: ",client
+		    goto RetrySSL
+	    }
+	}
+	s MirrorInfo("UseSSL")=resp
+	r !,"QOS Timeout (msec)? <8000> ",resp
+	if '+resp s resp=8000
+	s MirrorInfo("QOSTimeout")=resp
+	;
+	s arbiterok=0
+	do {
+		r !,"Address of the arbiter node? ",arbiteraddr
+		while (arbiteraddr'="") && '##class(Config.Host).IsValid(arbiteraddr) {
+			w !,arbiteraddr," is not a valid network address"
+			r !,"Enter an address for the arbiter: ",arbiteraddr
+		}	
+		if arbiteraddr="" {
+			w !,"The use of an arbiter node is strongly recommended."
+			r !,"Do you want to configure the mirror without an arbiter? <N> ",resp
+			if "Yy"[$E(resp_"X") s arbiterok=1
+		}
+	} while ((arbiteraddr="") && (arbiterok=0))
+	if (arbiteraddr '= "") {	
+		r !,"Arbiter port? <2188> ",arbiterport
+		if arbiterport="" s arbiterport=2188
+		s MirrorInfo("ArbiterNode")=arbiteraddr_"|"_arbiterport
+	} else {
+		s MirrorInfo("ArbiterNode")=""
+	}
+	while (1) {
+		r !,"Mirror Virtual IP address: ",resp
+		if resp="" quit  ;If no VIP entered, quit. VIP is not required
+		s err="",type="",ipOut=""
+		s rc=##class(SYS.MirrorConfiguration).ValidateVirtualAddress(resp)
+		if 'rc {  ;Want IP only (for now). Will add FQDN later...
+			k err
+			Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+			write !,$G(err(1))
+			continue	
+		}
+		w !,?5,"Checking if IP exists..."
+		if $System.INetInfo.CheckAddressExist($p(resp,"/")) {
+			write !,?5,"IP address already exists. Cannot use it for Virtual IP."
+			continue	
+		}
+		w " - IP does not exist. It can be used as Virtual IP address!"
+		quit  ;exit loop 
+	}	
+	s MirrorInfo("VirtualAddress")=resp  ;Null, or validated
+	if resp'="" {
+		s VIPInterface=$$getVirtualAddressInterface(resp)
+		if VIPInterface="" quit
+		s MirrorInfo("VirtualAddressInterface")=VIPInterface
+	}
+	/* SML1836, don't need this.
+	if MirrorInfo("UseSSL") {
+		r !,"Do you want to add names of authorized Async members? <N> ",resp
+		if "Yy"[$E(resp_"n") {
+#;SML1552
+			do ManageAuthorizedAsyncMembers(1)
+		}
+	}
+	*/
+	while (1) {
+		w !,"Enter compression mode for Failover members."
+		r !,"0 -> System Selected, 1 -> Uncompressed, 2 -> Compressed <0>? ",resp
+		if resp="" s resp=0 quit
+		if resp>=0,resp<=2 quit
+		w "   please enter 0, 1 or 2."
+	}
+	s MirrorInfo("CompressionForFailoverMembers")=+resp
+	while (1) {
+		w !,"Enter compression mode for Async members."
+		r !,"0 -> System Selected, 1 -> Uncompressed, 2 -> Compressed <0>? ",resp
+		if resp="" s resp=0 quit
+		if resp>=0,resp<=2 quit
+		w "   please enter 0, 1 or 2."
+	}
+	s MirrorInfo("CompressionForAsyncMembers")=+resp
+	s SystemName=$$GetLocalMirrorInfo(.MirrorInfo)
+	w !,"Are you sure you want to create Mirror Set '",mirname,"'? <Y> " r resp
+	s resp=$S("Nn"[$E(resp_"Y"):0,1:1)
+	quit:'resp
+	s rc=##class(SYS.Mirror).CreateNewMirrorSet(mirname,SystemName,.MirrorInfo)
+	i ('rc) {
+		w !,"Failed to create new mirror set '",mirname,"'."
+		w !," Error:",$SYSTEM.Status.GetErrorText(rc)
+	} else {
+		w !,"Mirror set '",mirname,"' succesfully created!"
+	}
+	quit
+retrieve ;
+ 	while (1) {
+	 	set ipToUse=""
+	 	if Type=4 {
+		 	w !,"Network address of Super Server of the async member? "
+	 	} else {
+		 	w !,"Network address of agent job of ",$s(Type=3:"failover",1:"primary")," member? "
+	 	}
+	 	r ipaddr
+		if '##class(SYS.MirrorConfiguration).IsIPFormatValid(ipaddr,.type) {  ;Allow hostname 
+			write !,?5,"Invalid IP address entered."
+			continue	
+		}
+		if type="HOST" {
+			set ipToUse=$$convHostToIP(ipaddr)
+			if ipToUse="" {
+				write !,?5,"Could not resolve host "_ipaddr_" to IP address."
+				continue
+			}
+		}
+		else {
+			set ipToUse=ipaddr	
+		}
+		if '$System.INetInfo.CheckAddressExist(ipToUse) {
+			write !,?5,"IP address ("_ipToUse_") is not reachable from this machine."
+			continue	
+		} 
+		quit
+ 	}
+ 	set ipaddr=ipToUse
+ 	if Type=4 {
+	 	w !,"Port of Super Server of the async member? <",1972,"> "
+ 	} else {
+	 	w !,"Port of agent job of ",$s(Type=3:"failover",1:"primary")," member? <",2188,"> "
+ 	}
+ 	r port
+	if port="" s port=$s(Type=4:1972,1:2188)
+	if Type=4 {
+		s mirname=##class(Config.Mirrors).GetMirrorName()
+		if mirname="" {
+			w !,"No mirror defined, can't add new async member."
+			quit
+		}
+		s rc=$$GetMemberConfigData^MIRRORCTL(mirname,ipaddr_"|"_port,"","","**")
+		if '+$LG(rc) {
+			w !,"Failed to retrieve member's information. Error=",$LG(rc,2)
+			quit
+		}
+		s info=$LG(rc,3)  ;list of $LIST(name,<list of key/value pairs>)
+		if info="" w !,"Remote member does not exist or is not an async member." q
+		s MapMirrors("Name")=$LG(info,1)
+		s data=$lg(info,2)
+		s len=$LL(data)
+		for i=1:1:len {
+			s item=$LG(data,i)
+			s p=$LG(item,1)
+			s v=$LG(item,2)
+			s MapMirrors(p)=v
+		}
+		m params=MapMirrors
+		s params("MemberType")=$case(MapMirrors("MemberType"),0:"Failover",1:"Relay",2:"Async",:"Unknown")
+		; We want the ECPAddress property called SuperServer Address
+		s params("SuperServerAddress")=$G(params("ECPAddress"))
+		k params("ECPAddress")
+		k params("PreferredArbiter")
+		k params("ConnectsTo")
+		w !!,"Properties for member '",MapMirrors("Name"),"':"
+		do dumpparams(.params)
+		w !
+		i $$YN("Are you sure you want to add this new async member '"_MapMirrors("Name")_"'","N")="N" {
+			w !,"Aborted" 
+			q
+		}
+		s rc=##class(Config.MapMirrors).Create(mirname,MapMirrors("Name"),.MapMirrors)
+		if ('rc) {
+			w !,"Failed to add new member '",MapMirrors("Name"),"'. Error=",$SYSTEM.Status.GetErrorText(rc)
+		} else {
+			w !,"New member '",MapMirrors("Name"),"' is added."
+			d ##class(SYS.Mirror).RemoveFromApprovalList(MapMirrors("Name"),MapMirrors("GUID"))
+		}
+		q
+	}
+	w !,"Instance name of the ",$s(Type=3:"failover",1:"primary")," member? " r InstanceName
+	s InstanceName=$zcvt(InstanceName,"U")
+	if Type=3 {
+		s rc=##class(SYS.Mirror).AddFailoverMember(,InstanceName,ipaddr,port)
+		i ('rc) {
+			w !,"Failed to add failover member. Error: ",$SYSTEM.Status.GetErrorText(rc)
+		} else {
+			w !,"Add failover member succeeds!"
+		}
+		quit
+	}
+	Set tObj = ##class(SYS.MirrorConfiguration).RetrieveMirrorConfig(mirname, ipaddr, port, InstanceName, .status)
+	if ('status) {
+		w !,"Failed to contact the primary member. Error:",$SYSTEM.Status.GetErrorText(status)
+		quit
+	}
+	if tObj.UseSSL {
+		if 'sslconfigured {
+			w !,"The primary member has UseSSL set, so you need to setup Mirror SSL configuration"
+			w !,"before you could join the mirror set."
+			w !,"Setting up the Mirror SSL configuration now:"
+			if '$$SetupSSL() w !,"Mirror SSL configuration must be setup before the mirror configuration is setup." Quit
+			s sslconfigured=1
+		}
+		if Type=2 {
+			set DN=""
+			s rc=##class(SYS.MirrorConfiguration).DoSSLConfigurationsExist(.DN)
+			if ('rc) w !,"Failed to get the Mirror SSL DN name. Error: ",$SYSTEM.Status.GetErrorText(rc) quit
+			w !,"You might need to add the SSL DN name in the primary member so it could accept"
+			w !,"the connection from this async member. The SSL DN name is:"
+			w !,DN
+		}
+	}
+	s SystemName=$$GetLocalMirrorInfo(.MirrorInfo)
+	s isasync=##class(Config.MirrorMember).isAsyncMember()
+	if Type=2 {
+		s AsyncMemberType=0,MirrorInfo("EncryptCommunication")=0
+		if 'isasync {
+			s resp=-1
+			while (resp'?1N||(resp<0||(resp>2))) {
+				w !!,"0 - Disaster Recovery.",!,"1 - Read-Only Reporting.",!,"2 - Read-Write Reporting."
+				r !!,"Enter Async Member Type <0>: ",resp
+				s:resp="" resp=0
+			}
+			s AsyncMemberType=resp
+		}
+	}
+	if tObj.VirtualAddress'=""&&(Type=1||('isasync&&(AsyncMemberType=0))) {
+		s VIPInterface=$$getVirtualAddressInterface(tObj.VirtualAddress)
+		if VIPInterface=""&&(Type=1) quit
+		s MirrorInfo("VirtualAddressInterface")=VIPInterface
+	}
+	if tObj.UseSSL {
+		s RetrieveInfo=$LB(SystemName,+$G(AsyncMemberType)'=0,InstanceName,ipaddr,port)
+		w !!,"Verifying Mirror SSL Certificates..."
+		s rc=##class(SYS.MirrorConfiguration).VerifyMirrorSSLCertificates(mirname,0,RetrieveInfo)
+		if '(''rc) {
+			w !,"Mirror SSL certificates verification returned the following errors:",!
+			d $SYSTEM.Status.DisplayError(rc)
+			w !
+		}
+	}
+	w !,"Are you sure you want to join Mirror Set '",mirname,"' as ",$s(Type=1:"failover",1:"async")," member? <Y> " r resp
+	s resp=$S("Nn"[$E(resp_"Y"):0,1:1)
+	quit:'resp
+	if Type=1 {
+		s rc=##class(SYS.Mirror).JoinMirrorAsFailoverMember(mirname,SystemName,InstanceName,ipaddr,port,.MirrorInfo)
+	} else {
+		s rc=##class(SYS.Mirror).JoinMirrorAsAsyncMember(mirname,SystemName,InstanceName,ipaddr,port,AsyncMemberType,.MirrorInfo)
+	}
+	i ('rc) {
+		w !,"Failed to join mirror set '",mirname,"' as ",$s(Type=1:"failover",1:"async")," member."
+		w !," Error:",$SYSTEM.Status.GetErrorText(rc)
+	} else {
+		w !,"Joining Mirror set '",mirname,"' as ",$s(Type=1:"failover",1:"async")," succeeds!"
+	}
+	if tObj.UseSSL&&(Type=1) w !,"Don't forget to authorize this node to join the configuration on the primary member."
+	quit
+err ;
+	s $zt=""
+	w !,"Unexpected error: ",$ze
+	quit 0
+}
+EditVIP() {
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") w !!,"Managed by Enterprise Manager, operation not allowed." Quit
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s mm=##class(Config.MirrorMember).Open()
+	s mirname=##class(Config.Mirrors).GetMirrorName()
+	if mirname="" {
+		w !,"No mirror defined, can't change VIP address"
+		quit
+	}
+	s mir=##class(Config.Mirrors).Open(mirname)
+	if '$IsObject(mir) {
+		 w !,"Failed to open Config.Mirrors(",mirname,") - Config file requires updating" 
+		 quit
+	}
+	if +$G(^SYS("MIRRORSET",mirname,"Member"))>0 {
+		; we're member #0, the other failover node is #1
+		s info=$G(^SYS("MIRRORSET",mirname,"Member",1))
+		s othername=$LG(info,1) ;name of the other failover node
+	}
+	s vipchanged=0
+	s vip=mir.VirtualAddress
+	if $SYSTEM.Mirror.IsBackup() {
+		w !!,"Current Virtual Address is: ",$s(vip="":"Not Configured",1:vip)
+		w !,"Virtual Address can only be changed on the primary."
+		s nvip = vip
+		g interface
+	}
+vip	w !!,"New Virtual Address (address/CIDR mask)? "
+	if vip'="" {
+		w "(enter '-' to remove it) <"_vip_"> " 
+	} else {
+		w "<quit> "
+	}
+	r nvip
+	i nvip="" s nvip=vip
+	i nvip="-" s nvip="" i vip'="" s vipchanged=1
+	i nvip'=vip&&(nvip'="") {
+		s vipchanged=$s($p(nvip,"/")'=$p(vip,"/"):1,1:2)
+	}
+interface ;
+    s virtualinterfaceupdated=0
+	if nvip'="" {
+		s virtualinterface=mm.VirtualAddressInterface
+		if virtualinterface="" {
+			w !,"Must define an interface to host the virtual address"
+			s resp="Y"
+		} else {
+		    w !,"Current interface for the virtual address is: ",virtualinterface
+		    w !,"Do you want to change this? "
+		    if vipchanged {
+		       w "<Yes> " s def="Y"
+		    } else {
+			   w "<No> " s def="N"
+		    }
+		    r resp
+		    if "Yy"[$E(resp_def) s resp="Y"
+		}
+		if resp="Y" {
+			s resp=$$getVirtualAddressInterface(nvip)
+			if resp'="" {
+				s mm.VirtualAddressInterface=resp
+				s virtualinterfaceupdated=1
+			} elseif virtualinterface="" {
+				s vipchanged=0
+				If $SYSTEM.Mirror.IsPrimary() g vip	
+			}
+		}
+		if vipchanged||(virtualinterface'=mm.VirtualAddressInterface) {
+			s rc=##class(SYS.MirrorConfiguration).ValidateVirtualAddress(nvip,$s($SYSTEM.Mirror.GetInfo()["PRIMARY"&&(vipchanged=1):1,1:0),mm.VirtualAddressInterface)
+			if 'rc {  ;Want IP only (for now). Will add FQDN later...
+				k err
+				Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+				write !,$G(err(1))
+				s vipchanged=0,mm.VirtualAddressInterface=virtualinterface
+				If '$SYSTEM.Mirror.IsPrimary() g interface	
+				g vip	
+			}
+		}
+	} else {
+		if mm.VirtualAddressInterface'="" {
+			if vipchanged {
+			 	s mir.VirtualAddress=nvip
+			 	s rc=mir.%Save()
+			 	if (''rc) {
+				 	w !,"Virtual Address updated."
+				 	w !,"*** Don't forget to also update the address on (",$g(othername),")."
+			 	} else {
+				 	k err
+				 	Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+				 	w !,"Error updating Mirror Virtual Address(",$G(err(1)),")"
+			 	}
+		 	}
+		   s mm.VirtualAddressInterface=""
+		   s virtualinterfaceupdated=1
+		}
+	}
+	if (virtualinterfaceupdated) {
+	   if $SYSTEM.Mirror.GetInfo()["PRIMARY" && (nvip="") && vipchanged {
+	      for i=1:1:10 q:'$System.INetInfo.CheckAddressExist($p(vip,"/"))  h .5
+	   }
+	   s rc=mm.%Save()
+	   if (''rc) {
+		   w !,"Virtual Address Interface updated"
+	   } else {
+		 	k err
+		 	Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+		 	w !,"Error updating Mirror Member info (",$G(err(1)),") - Virtual address interface not changed"
+	   }
+	}
+	s mm=""
+	if vipchanged&&(nvip'="") {
+	 	s mir.VirtualAddress=nvip
+	 	s rc=mir.%Save()
+	 	if (''rc) {
+		 	w !,"Virtual Address updated."
+		 	w !,"*** Don't forget to also update the address on (",$g(othername),")."
+	 	} else {
+		 	k err
+		 	Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+		 	w !,"Error updating Mirror Virtual Address(",$G(err(1)),")"
+	 	}
+ 	}
+}
+DisplayMembers(mirname,list) {
+	k list
+    Set rs=##class(%Library.ResultSet).%New("Config.MapMirrors:List")
+    s rc=rs.Execute(mirname)
+    if 'rc {
+ 	    w !,"Failed to retrieve list of mirror members for",mirname
+ 	    quit
+    }
+    w !
+    While (rs.Next()) {
+        Set name=rs.Data("Name")
+        s list($i(list))=name
+        w !,list,")",?5,name
+    }
+    d rs.Close()
+    quit
+}
+EditNetworkAddresses() {
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") w !!,"Managed by Enterprise Manager, operation not allowed." Quit
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s mm=##class(Config.MirrorMember).Open()
+	if '$IsObject(mm) {
+		 w !,"Failed to open Config.MirrorMember - Config file requires updating" 
+		 quit
+	}
+	s sysname=mm.SystemName
+	if mm.AsyncMemberGUID'="" {
+		s mm="",cnt=0
+		s rs=##class(%Library.ResultSet).%New("Config.Mirrors:List")
+		Do rs.Execute()
+		While (rs.Next()) {
+			s cnt=cnt+1
+			s list(cnt)=rs.Data("Name")
+		}
+		s rs=""
+		if cnt=1 s mirname=list(1) goto topx
+choose ;
+		w !,"There are ",cnt," mirror sets tracked:"
+		for i=1:1:cnt w !,i,")",?5,list(i)
+		r !,"Enter mirror set name to be modified: ",mirname
+		if mirname="" quit
+		if mirname?.N {
+			if '$d(list(mirname),mirname) w !,"Item #",mirname," does not exist." goto choose
+			w "  ",mirname,!
+		} else {
+			s mirname=$ZCVT(mirname,"U")
+			for i=1:1:cnt q:list(i)=mirname
+			if list(i)'=mirname {
+				w !,"""",mirname,""" is not a mirror set being tracked."
+				goto choose
+			}
+		}
+	} else {
+		s mm=""
+		s mirname=##class(Config.Mirrors).GetMirrorName()
+		if mirname="" {
+			w !,"No mirror defined, can't change modify data"
+			quit
+		}
+	}
+	k list
+topx ;
+	If '$SYSTEM.Mirror.IsPrimary() {
+		if $SYSTEM.Mirror.ConnectedToPrimary(mirname) {
+			if $SYSTEM.Mirror.IsBackup() w !,"This member is the backup. Changes must be made on the primary." quit
+			w !,"This member is connected. Changes must be made on the primary."
+			quit
+		}
+		if +$G(^SYS("MIRRORSET")) {
+			w !!,"This member is not connected. If the network addresses of the primary have"
+			w !,"changed, ensure that the addresses for all members are correctly configured"
+			w !,"on the primary, then update the primary's current addresses here."
+			w !,"Once connected, this member will automatically update all addresses to match"
+			w !,"the primary's configuration."
+		} else {
+			w !!,"This member is neither primary nor backup. If the network addresses of the"
+			w !,"other failover member have changed, and it is running as primary, ensure that"
+			w !,"the addresses for all members are correctly configured on the primary,"
+			w !,"then update the primary's current addresses here. Otherwise, update the"
+			w !,"addresses of all members here as required. On connecting, the backup and async"
+			w !,"members automatically update all addresses to match the primary's configuration."
+		}
+		r !,"Press <enter> to continue...",resp
+	} else {
+		w !!,"This member is the primary. Changes will be sent to other members."
+	}
+top ;
+	do DisplayMembers(mirname,.list)
+	w !!,"Member to edit? (^ to exit) <",sysname,"> "
+	r resp
+	if resp="^" quit
+	if resp="" {
+		s resp=sysname
+	} elseif resp?.N {
+		if '$d(list(resp),resp) w !,"Item #",resp," does not exist." goto top
+		w "  ",resp,!
+	} else {
+	 	s resp=$zcvt(resp,"U")
+	}
+	s mm=##class(Config.MapMirrors).Open(mirname,resp,,,.rc)
+	if '$IsObject(mm) {
+	    k err
+	    Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+		w !,"Failed to open Config.MapMirrors("""_mirname_""","""_resp_""") - Error = "_$G(err(1)) 
+		goto top
+	}
+	s changed=0
+    s def=mm.AgentAddress
+    s resp=$$getAddress("Agent Address",def)
+	if resp'=""&&(resp'=def) {
+ 	   s changed=1
+	   s mm.AgentAddress=resp
+	}
+	s def=mm.AgentPort
+	w !,"Agent Port <"_def_"> " 
+	r resp
+	if resp'=""&&(resp'=def) {
+		s changed=1
+		s mm.AgentPort=resp
+	}
+	s def=mm.MirrorAddress
+    s resp=$$getAddress("Mirror Private Address",def)
+	if resp'=""&&(resp'=def) {
+		s changed=1
+		s mm.MirrorAddress=resp
+	}
+	s def=mm.MirrorSSPort
+	w !,"SuperServer Port <"_def_"> " 
+	r resp
+	if resp'=""&&(resp'=def) {
+		s changed=1
+		s mm.MirrorSSPort=resp
+	}
+	s def=mm.ECPAddress
+    s resp=$$getAddress("SuperServer Address",def)
+	if resp'=""&&(resp'=def) {
+		s changed=1
+		s mm.ECPAddress=resp
+	}
+	if changed {
+		w !!,"New settings:"
+		w !,"Agent Address:  ",mm.AgentAddress,"|",mm.AgentPort
+	    w !,"Mirror Private Address: ",mm.MirrorAddress,"|",mm.MirrorSSPort
+	    w !,"SuperServer Address:    ",mm.ECPAddress
+	    r !,"Save changes? ",resp
+	    while "YyNn"'[$E(resp_"X") {
+		    w !,"Please enter yes or no"
+		    r !,"Save changes? ",resp
+	    }
+	    if "Yy"[$E(resp_"X") {
+		    s rc=mm.%Save()
+    	 	if (''rc) {
+			    w !,"Saved"
+    	 	} else {
+	    	 	w !,"Failed to save changes"
+    	 	}
+	    } else {
+		    w !,"Changes discarded"
+	    }
+	}
+	s mm=""
+	quit
+}
+getAddress(prompt,default) {
+	; Ask the user to enter a network address and validate
+	; it and if it doesn't exist, ask them if they really want
+	; to use it.
+	;
+	; If a default is supplied then we accept <RET> (null) as an answer.
+	;
+	; Returns:
+	;      null - use the default
+	;      <all else> - answer
+	while (1) {
+	   w !,prompt,"?"
+	   if default'="" {
+		   w " <"_default_">"
+	   }
+	   w " " 
+	   r resp
+	   if default'="",resp="" {
+		   quit  ;exit while loop & return "" to use the default
+	   }
+	   s rc=##class(SYS.MirrorConfiguration).IsIPFormatValid(resp, .IPType, 0)
+	   if (''rc) {
+           if $System.INetInfo.CheckAddressExist(resp) {
+	           quit  ;all is good, exit while loop
+           }
+	       w !,"IP address """,resp,""" does not exist."
+	       r !,"Are you sure you want to use this? <No> ",ans
+	       if "Yy"[$e(ans_"X") quit
+	   } else {
+	      w !,"Address """,resp,""" is not valid"
+	   }
+	}
+	quit resp
+}
+UpdateOtherFailoverNodeInfo() {
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") w !!,"Managed by Enterprise Manager, operation not allowed." Quit
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	; Retrieve the info from the other node - its ip addresses,
+	; ssl name, etc... Requires that the agent address be correct.
+	s mirname=##class(Config.Mirrors).GetMirrorName()
+	if mirname="" {
+		w !,"Failed to lookup mirror name"
+		quit
+	}
+	;
+	s id=1  ;the other node
+	s info=$G(^SYS("MIRRORSET",mirname,"Member",id))
+    if info="" {
+	   w !,"Missing information for mirror member #"_id
+	   quit
+    }
+	s name=$lg(info,1)
+    s agentip=$lg(info,5)
+    s basedir=$lg(info,6)
+    s targguid=$LG(info,2)
+	;
+    s rc=$$GetMemberConfigData^MIRRORCTL(mirname,agentip,targguid,basedir)
+	if '$LG(rc) {
+		w !,"Failed to retrieve configuration for ",name," from ",agentip
+		w !,"Error: ",$LG(rc,2)
+		quit
+	}
+	s memberlist=$LG(rc,2)
+	s found=0
+	for i=1:1:$LL(memberlist) {
+		s item=$LG(memberlist,i)
+		s membername=$lg(item,1)
+		if membername=name {
+			s found=1
+			s memberinfo=$LG(item,2)
+			k xx
+			for i=1:1:$LL(memberinfo) {
+				s item=$LG(memberinfo,i)
+				s p=$LG(item,1)
+				s v=$LG(item,2)
+				s xx(p)=v
+			}
+			s rc=""
+			if '$d(xx("EncryptCommunication")) s xx("MemberType")=0
+			;
+			; We want the ECPAddress property called SuperServer Address
+			s xx("SuperServerAddress")=$G(xx("ECPAddress"))
+			k xx("ECPAddress")
+			k xx("PreferredArbiter")
+			s cc2=xx("ConnectsTo") k xx("ConnectsTo")
+			w !,"Mirror member data for """,name,""""
+			do dumpparams(.xx)
+			read !,"Ok to store these values for this instance? <Y> ",resp
+			if "Nn"[$E(resp_"Y") {
+				w !,"Not saved"
+				quit
+			}
+			s xx("ECPAddress")=xx("SuperServerAddress")
+			k xx("SuperServerAddress")
+			s xx("ConnectsTo")=cc2
+	   		s rc=##class(Config.MapMirrors).Modify(mirname,name,.xx)
+		 	if 'rc {
+	   			k err
+	   			Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+	   			w !,"Error modifying mirror member ",name," (",$G(err(1)),")"
+ 			} else {
+ 			   w !,"Saved"
+ 			}
+ 			quit  ;exit for loop
+		}
+	}
+	if 'found {
+	    ; Its a bit odd if we get out of the for loop and 
+	    ; don't find the other node's information in its config...
+		w !,"Couldn't find information for ",name," at ",agentip
+	}
+}
+ModifyPerNodeSSL(isAsync) PUBLIC {
+	; This entry point manages the Config.MapMirrors.EncryptCommunication
+	; parameter. When Config.Mirrors.UseSSL is set all communication is encrypted.
+	; When Config.Mirrors.UseSSL is clear, this parameter controls whether
+	; outgoing connections made by this mirror member are encrypted.
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	; Opens it and returns SSLCOnfig if it exists
+	s exists=##class(Security.SSLConfigs).%ExistsId("%MirrorServer")
+	if exists {
+		r !,"Edit Mirror SSL Configuration? <Y> ",resp
+	} else {
+		r !,"Create Mirror SSL Configuration? <Y> ",resp
+	}
+	if "Nn"'[$E(resp_"X") {
+		do CreateEditMirrorSSL^SECURITY2(exists)
+	}
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") {
+		w !!,"Managed by Enterprise Manager, cannot alter per-node SSL requirements." 
+		Quit
+	}
+	s mm=##class(Config.MirrorMember).Open()
+	s ourname=mm.SystemName
+	if ourname="" {
+		w !,"Local Mirror system name not defined - can't modify configuration"
+		quit
+	}
+	s mm=""
+	Set isShadow = ##class(Config.MirrorMember).isAsyncMember()
+	if 'isShadow {
+		s mirname=##class(Config.Mirrors).GetMirrorName()
+		if mirname="" {
+			w !,"No mirror defined, cannot modify parameter"
+			quit
+		}
+	} else {
+		s cnt=0
+		Set rs=##class(%Library.ResultSet).%New("Config.Mirrors:List")
+		s rc=rs.Execute()
+		if rc {
+			While (rs.Next()) {
+				Set name=rs.Data("Name")
+				q:name=""  ;exit loop if we get a null name
+				s List(name)=""
+				s cnt=cnt+1
+			}
+		}
+		s rs=""
+		if cnt=0 {
+			w !,"This instance is not tracking any mirrors"
+			quit
+		}
+	    if cnt=1 {
+		    s mirname=$O(List(""))
+	    } else {
+ask ;		
+			r !,"Enter name of mirror to modify, <ret> to exit? ",mirname
+			if mirname="" quit  ;exit
+			if mirname="?" || '$D(List(mirname)) {
+				if mirname'="?" {
+					w !,"Invalid name - ",mirname," - enter one of"
+				}
+				s name=""
+				for  {
+					s name=$O(List(name))
+					q:name=""
+					w !,?5,name
+				}
+				goto ask
+			}
+	    }
+	}
+	s mirror=##class(Config.Mirrors).Open(mirname)
+	if '$IsObject(mirror) {
+	   w !,"Failed to open Config.Mirrors to read mirror parameters for ",mirname
+	   quit
+	}
+	s usessl=mirror.UseSSL
+	s mirror=""
+	s mm=##class(Config.MapMirrors).Open(mirname,ourname)
+	if '$IsObject(mm) {
+	   w !,"Failed to open Config.MapMirrors to read mirror parameters for ",ourname
+	   w " in mirror ",mirname
+	   quit
+	}
+	s encryptCommunication=mm.EncryptCommunication
+	if encryptCommunication=0 {
+		s default="0 - None"
+	} elseif encryptCommunication=1 {
+		s default="1 - Outgoing only"
+	} elseif encryptCommunication=2 {
+		s default="2 - Incoming only"
+	} elseif encryptCommunication=3 {
+		s default="3 - All"
+	}
+	;
+	if usessl {
+		w !!,"The mirror is configured to use SSL so SSL is required"
+		w !,"regardless of the encryption setting of this member."
+		w !!,"This setting only applies if the mirror wide SSL setting is changed."
+	}
+	s resp=-1
+	while (((resp'?1N)&&(resp'=""))||(resp<0||(resp>3))) {
+		w !!,"0 - None",!,"1 - Outgoing only"
+		w !,"2 - Incoming only",!,"3 - All"
+		w !!,"Enter new setting: ",default," => "
+		r resp
+	}
+	i resp="" quit
+	s mm.EncryptCommunication=resp
+	s rc=mm.%Save()
+	if 'rc {
+	   k err
+	   Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+	   w !,"Error changing EncryptCommunication setting: (",$G(err(1)),")"
+	   quit
+	}
+	w !,"EncryptCommunication setting saved."
+	quit
+}
+GetLocalMirrorInfo(MirrorInfo) {
+	s ourname=""
+	if '##class(Config.MirrorMember).isAsyncMember() {
+		s defaultname=##class(SYS.MirrorConfiguration).DefaultSystemName()
+	 	w !,"Our mirror member name: <",defaultname,"> "
+	 	r ourname s:ourname="" ourname=defaultname
+	 	while ($L(ourname)>32) || ourname="" || (ourname[":") {
+		 	w !,"Mirror member name is limited to 32 characters and it must not contain any colons"
+		 	w !,"Our mirror member name: <",defaultname,"> "
+		 	r ourname s:ourname="" ourname=defaultname
+	 	}
+	 	s ourname=$zcvt(ourname,"U")
+	}
+ 	while (1) {
+	 	s defaultaddr=$System.INetInfo.LocalHostName()
+ 		w !,"Mirror Private address of local member: <",defaultaddr,"> "
+ 		r resp
+ 		if resp="" { 
+ 			s resp=defaultaddr
+ 			quit
+ 		}
+ 		else {
+		 	if '##class(SYS.MirrorConfiguration).IsIPFormatValid(resp,.type) { ;Allow hostname 
+			 	write !,type
+			 	continue
+		 	}
+		 	if type="HOST" {
+			 	set ipToUse=$$convHostToIP(resp)
+			 	if (ipToUse="") {
+				 	write !,"Error: Host ",resp," does not resolve to IP address"
+				 	continue	
+			 	}
+		 	}
+		 	else {
+			 	set ipToUse=resp	
+		 	}
+		 	if '$System.INetInfo.CheckAddressExist(ipToUse) {
+				write !,"IP address does not exist. Cannot use it as the SuperServer address"
+			 	continue	
+		 	}
+ 		}
+ 		quit
+ 	}
+ 	s ssaddr=resp
+ 	while (1) {
+		w !,"SuperServer Address: <",ssaddr,"> "
+ 		r resp
+ 		if resp="" {
+	 		s resp=ssaddr
+	 		quit
+ 		}
+ 		else {
+	 		if '##class(SYS.MirrorConfiguration).IsIPFormatValid(resp,.type) { ;Allow hostname
+		 		write !,type
+		 		continue	
+	 		}	
+	 		if type="HOST" {
+		 		set ipToUse=$$convHostToIP(resp)
+		 		if (ipToUse="") {
+			 		write !,"Error: Host ",resp," does not resolve to IP address"
+			 		continue	
+		 		}
+	 		}
+	 		else {
+		 		set ipToUse=resp	
+	 		}
+	 		if '$System.INetInfo.CheckAddressExist(ipToUse) {
+		 		write !,"IP address does not exist. Cannot use it the SuperServer address"
+		 		continue	
+	 		}
+ 		}
+ 		quit
+ 	}
+ 	s MirrorInfo("ECPAddress")=resp
+ 	s MirrorInfo("MirrorAddress")=ssaddr
+ 	quit ourname
+}
+GetOS() {
+	q:$System.Version.GetOS()'="UNIX" ""
+	s dev="uname -s" o dev:"QR" u dev r os c dev
+	quit os
+}
+getVirtualAddressInterface(mirrorVIP) {
+	s os=$$GetOS(),hpsun=((",HP-UX,")[(","_os_","))
+	while (1) {
+		;This will eventually get replaced by code that provides a list of interfaces...
+		k viarray
+ 		Set tList = ##class(%SYSTEM.INetInfo).GetListOfConfiguredInterfaces(0,mirrorVIP)
+ 		if tList="" {
+	 		w !!,"There is no installed interface with matched subnet for '",mirrorVIP,"'."
+	 		w !,"Please check if the virtual IP address and subnet mask is correct.",!
+	 		s iVirt=""
+	 		quit
+ 		}
+ 		Set tItem = 1
+ 		w !
+ 		While $lg(tList,tItem) '= "" {
+ 			Set value = $lg($lg(tList,tItem),1)
+ 			w !,tItem,") ",value s viarray(tItem)=value
+ 			Set tItem = tItem + 1
+ 		}
+ 		w !,tItem,") Abort." s viarray(tItem)="Abort"
+		w !!
+		r "Select Network interface for Mirror Virtual Network address: ",iVirt
+		if iVirt="" {
+			continue
+		} elseif iVirt?.N {
+			if $G(viarray(iVirt))="" {
+	 			write !,"Select item 1 to ",tItem
+	 			continue
+			}
+			s iVirt=viarray(iVirt)
+		} Else {
+			s iv=$p(iVirt,":"),found=0
+			f i=1:1:tItem i viarray(i)=iv s found=1 q
+			if 'found {
+				w !,"Interface '",iv,"' not found."
+				continue
+			}
+		}
+		if iVirt="Abort" s iVirt="" quit
+		i hpsun {
+idxnum		r !,"logical index number :",idxnum
+			if idxnum'?.N w !,"Must be a integer value" g idxnum
+			s iVirt=iVirt_":"_idxnum
+		}
+		if os]"" { ;This is some form of UNIX/Linux 
+			s ifaceExists=$System.INetInfo.CheckInterfaceExist(iVirt,1) ;Ask for exact match for the interface - don't strip out the virtual part...
+			if ($e(iVirt,1,2)="lo") {  ;On UNIX platforms, interfaces that start with lo are *typically* loopback interfaces. We don't want these...
+				write !,"This interface appears to be a loopback interface."
+				write !,"Please enter an appropriate non-loopback interface."
+				continue	 				
+			}
+	 		if hpsun { ;For HP-UX and SunOS platforms, we require virtual (logical) interfaces, so we have to check to see if the base (physical) one exists...
+		 		if ifaceExists {
+		 			write !,?5,"This platform requires a virtual (logical) interface."
+		 			write !,?5,"The interface you entered ("_iVirt_") already exists."
+		 			write !,?5,"Please enter an appropriate logical interface that does not already exist (it"
+		 			write !,?5,"will be created when assigning the Virtual IP"
+		 			continue
+		 		}
+		 		if $p(iVirt,":",2)="" {
+			 		write !,?5,"Please enter an appropriate logical interface that does not already exist (it"
+			 		write !,?5,"will be created when assigining the Virtual IP"
+			 		continue
+		 		}
+			 	if '$System.INetInfo.CheckInterfaceExist($p(iVirt,":")) {
+					write !,?5,"Physical interface ("_$p(iVirt,":")_") does not exist."
+					write !,?5,"The base physical interface must exist for a virtual interface"
+					write !,?5,"to be added on."
+					continue	
+			 	}
+			} else { ;Non HP-UX, non SunOS platforms, so the entered interface must already exist for it to be selected
+				if 'ifaceExists {
+			 		write !,?5,"This platform requires a physical interface, and it must already"
+			 		write !,?5,"exists. The interface you entered ("_iVirt_") does not exist."
+					continue 
+				}
+		 	}
+		} else {
+		 	if '$System.INetInfo.CheckInterfaceExist(iVirt) {
+		 		w !,"Interface does not exist."
+		 		continue
+			}
+		}
+		quit	
+	}
+	quit iVirt
+}
+RemoveMirrorMember() {
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") w !!,"Managed by Enterprise Manager, operation not allowed." Quit
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s mirname=##class(Config.Mirrors).GetMirrorName()
+	if mirname="" {
+		w !,"Failed to determine mirror name"
+		quit
+	}
+	s mm=##class(Config.MirrorMember).Open()
+	s ourname=mm.SystemName
+	k mm
+	s $p(space," ",40)=" "
+ 	Set rs=##class(%Library.ResultSet).%New("Config.MapMirrors:List")
+ 	s rc=rs.Execute(mirname)
+ 	if rc {
+ 	   While (rs.Next()) {
+	      Set name=rs.Data("Name")
+	      if name=ourname continue
+	      s type=$case(rs.Data("MemberType"),0:"Failover",1:"Relay",2:"Async")
+	      s mlist($i(mlist))=$e(name_space,1,40)_"("_type_")"
+ 	   }
+    }
+ 	s rs=""
+ 	if +$G(mlist)=0 w !,"No other mirror member is configured." q
+	s Value=""
+	s Status=##class(%Library.Prompt).GetMenu("Select member to be removed?",.Value,.mlist,,128+8+4)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+ 	s othername=$p(mlist(Value)," "),type=$p($p(mlist(Value),")"),"(",2)
+	if $SYSTEM.Mirror.IsBackup()&&(type="Failover") {
+		w !,"Backup member is not allowed to remove another failover member which could be primary now."
+		q
+	}
+ 	w !,"Are you sure you want to remove the mirror member '",othername,"' <N>? "
+ 	r resp
+ 	if "Yy"'[$E(resp_"N") quit
+ 	s rc=##class(Config.MapMirrors).Delete(mirname,othername)
+ 	if (''rc) {
+	 	w !,"Mirror member ",othername," is removed."
+ 	} else {
+		k err
+		Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+		w !,"Failed to remove member ",othername," (",$G(err(1)),")"
+		quit
+	}
+}
+RemoveMirrorDBandNS(DBName) {
+	Do ##Class(Config.Databases).SynonymDBs(DBName,.SynonymDBs)
+	Quit:$G(SynonymDBs)=""
+	For dbi=1:1 {
+		s dbn = $p(SynonymDBs,",",dbi) Quit:dbn=""
+		kill nsp
+		d ##class(Config.Namespaces).NamespacesByDB(dbn,.nsp,0)
+		if $G(nsp)'="" {
+			For n=1:1 {
+				Set nam = $P(nsp,",",n) Quit:nam=""  
+				Set sta = ##Class(Config.Namespaces).Delete(nam)
+				Kill ^CacheTemp.MgtPortalMap("cfgMappings",nam)
+				If ##class(%Library.EnsembleMgr).IsEnsembleInstalled() do ##class(%Library.EnsembleMgr).DisableNamespace(nam)
+				if (''sta) w !,"Removed namespace "_nam
+			}
+		}
+		s sta=##class(Config.Databases).Delete(dbn)
+		if (''sta) w !,"Removed dataset "_dbn_" from the configuration"
+	}
+}
+RemoveMirrorConfig() {
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") w !!,"Managed by Enterprise Manager, operation not allowed." Quit
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	if $SYSTEM.Mirror.GetInfo()["PRIMARY" {
+		w !!,"This is the active primary node so you can't remove"
+		w !,"the mirror configuration."
+		w !!,"You need to first clear JoinMirror in the CPF file"
+		w !,"or disable the %Service_Mirror service so that this node does not"
+		w !,"activate the configuration at startup and then restart Cache'"
+		w !,"and then run this option again."  ;JO2395
+		s mm=##class(Config.MirrorMember).Open()
+		if mm.JoinMirror {
+			r !,"Do you want to Clear the JoinMirror flag? <No> ",resp
+			if "Yy"[$E(resp_"n") {
+				s mm.JoinMirror=0
+				s rc=mm.%Save()
+			}
+		}
+		q
+	}
+	s mm=##class(Config.MirrorMember).Open()
+	if '$IsObject(mm)||(mm.SystemName="") {
+		w !,"Failed to open Config.MirrorMember - aborting"
+		quit
+	}
+	w !!,"This action will delete the mirror journal files and the"
+	w !,"mirror configuration information. "
+	if $SYSTEM.Mirror.GetInfo()'["NOTINIT" {
+		w "Cache' needs to be restarted"
+	    w !,"to complete this operation."
+	}
+	r !,"Are you sure you want to do this? <N> ",resp
+	if "Nn"[$E(resp_"n") quit
+	;
+	w !!,"In addition to the above, do you also want to remove mirror attribute of"
+	w !,"mirrored databases (the databases themselves will not be deleted)? <No> "
+	r resp
+	if "Yy"[$E(resp_"n") {
+		s deleteDBs=1
+		w !,"The mirrored databases' mirror attribute will be removed."
+	} else { 
+		s deleteDBs=0
+		w !,"The mirrored databases' mirror attribute will not be removed."
+	}
+	s rc=##class(SYS.MirrorConfiguration).RemoveMirrorConfiguration(deleteDBs)
+	;
+	if ('rc) {
+	   k err
+       Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+	   w !,"**** Failed to delete mirror configuration. Error ",err(1)
+	}
+    ;
+    w !,"Mirror configuration deleted."
+	if $SYSTEM.Mirror.GetInfo()'["NOTINIT" {
+	    w " You should shutdown and restart this system."
+	}
+    quit
+err ;
+	s $zt=""
+	w !,"Unexpected error removing node from the mirror: ",$ze
+	quit     
+}
+getAsyncMemberSources(list) {
+	 s cnt=0
+	 if +$G(^SYS("MIRRORSET")) {
+		 s rs=##class(%Library.ResultSet).%New("Config.Mirrors:List")
+		 Do rs.Execute()
+		 While (rs.Next()) {
+			 s cnt=cnt+1
+			 s list(cnt)=rs.Data("Name")
+		 }
+	 }
+	 quit cnt
+}
+RemoveAsyncMemberSource() {
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") w !!,"Managed by Enterprise Manager, operation not allowed." Quit
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	 s cnt=$$getAsyncMemberSources(.names)
+	 if 'cnt {
+		 w !,"No Async member sources defined"
+		 quit
+	 }
+	 if cnt=1 {
+		 s name=names(1)
+		 s newformat=+$g(names(1,0))
+		 w !,"There is one Async member source, """,name,""" defined"
+		 r !,"Remove it? <N> ",resp
+		 if "Yy"[$E(resp_"x") {
+			 goto deleteone
+		 }
+		 w !,"Not removed"
+		 quit
+	 }
+choose ;	 
+	 w !,"There are ",cnt," Async member sources:"
+	 for i=1:1:cnt w !,?5,names(i)
+	 r !,"Enter source to delete or "":ABORT"" to cancel: ",name
+	 s name=$ZCVT(name,"U")
+	 if name=":ABORT" w !,"Cancled" quit
+	 for i=1:1:cnt q:names(i)=name
+	 if names(i)'=name {
+		 w !,"""",name,""" is not a Async member source"
+		 goto choose
+	 }
+deleteone ;	 
+	w !!,"This action will remove the mirror from the list of mirrors"
+	w !,"being tracked, delete the journal log for this mirror and remove"
+	w !,"all journal files from this mirror. "
+	r !,"Are you sure you want to do this? <N> ",resp
+	if "Nn"[$E(resp_"n") quit
+	;
+	w !!,"In addition to the above, do you also want to remove mirror attribute of"
+	w !,"mirrored databases (the databases themselves will not be deleted)? <No> "
+	r resp
+	if "Yy"[$E(resp_"n") {
+		s deleteDBs=1
+		w !,"The mirrored databases' mirror attribute will be removed."
+	} else { 
+		s deleteDBs=0
+		w !,"The mirrored databases' mirror attribute will not be removed."
+	}
+	s rc=##class(SYS.MirrorConfiguration).RemoveOneMirrorSet(name,deleteDBs)
+	if ('rc) {
+	   k err
+       Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+	   w !,"Failed to delete ",name,". Error ",err(1)
+	} else {
+	   w !,"Deleted"
+	}
+    ; 
+	quit 
+}
+fixbasedir(dir) {
+	; the base directory (installation directory) needs to end
+	; in a seperator. we're not sure what the target o/s is though
+	; so scan though the directory to find the 1st seperator.
+	s last=$E(dir,$L(dir))
+	if "/\]"[last quit dir  ;we're all set
+	f i=1:1:$L(dir) s ch=$E(dir,i) quit:"/\["[ch
+	if "/\"[ch {
+		; if this is VMS we already checked that it ends in ] and it
+		; doesn't. that's bad but we can't just add one... otherwise, if we
+		; found a \ or / then add it to the end. If not, we'll live with what
+		; we have.
+		s dir=dir_ch
+	}
+	quit dir
+}
+ManageNoFailover() {
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s info=$SYSTEM.Mirror.GetInfo()
+	if info'[",DEFINED,"||+$G(^SYS("MIRRORSET")) {
+		w !,"This instance is not initialized as a failover member"
+		quit
+	}
+	if (info [ ",SHADOW,") {
+		w !,"This option is not valid on async members"
+		quit
+	}
+	s mirname=##class(Config.Mirrors).GetMirrorName()
+	if mirname="" {
+		w !,"Failed to determine mirror name"
+		quit
+	}
+	s cls=##class(Config.Mirrors).Open(mirname)
+	s primary=cls.DefinedPrimary
+	if primary="" {
+		if $SYSTEM.Mirror.IsPrimary() {
+			s name=$LG($G(^SYS("MIRRORSET",mirname,"Member",0)))
+			if name="" w !,"No primary member is found, could not set 'No Failover' mode" quit
+		} else {
+			s systemcnt=$G(^SYS("MIRRORSET",mirname,"Member"),0)
+			if 'systemcnt w !,"No primary member is found, could not set 'No Failover' mode" quit
+			s info=$G(^SYS("MIRRORSET",mirname,"Member",1))
+			s name=$lg(info,1)
+			if info=""||(name="") w !,"No primary member is found, could not set 'No Failover' mode" quit
+			s rc=$$GetStatus^MIRRORCTL(mirname,1)
+			s status=$LG(rc)  
+			if status'="PRIMARY" w !,"No primary member is found, could not set 'No Failover' mode" quit
+		}
+		w !,"'No Failover' state is not set, setting 'No Failover' state will prevent"
+		w !,"backup member from taking over and becoming a primary member when primary"
+		w !,"member is down."
+		r !,"Do you want to set it? <N> ",resp
+		if "Yy"'[$E(resp_"X") quit
+	    s rc=$$SetMirrorNoFailover^MIRRORCTL(name)
+	    if $LG(rc)="OK" {
+		    w !,"Success, """,name,""" is set as the defined primary."
+	    } else {
+		    w !,"Failed to set """,name,""" as the defined primary"
+		    w !,"Error: ",$lg(rc,2)
+	    }
+	} else {
+		w !,"'No Failover' state is set and ",primary," is currently defined as the primary."
+		w !,"Clearing 'No Failover' state will allow backup member to take over and"
+		w !,"become a primary member when primary member is down."
+		r !,"Do you want to clear this? <N> ",resp
+		if "Yy"'[$E(resp_"X") quit
+	    s rc=$$ClearMirrorNoFailover^MIRRORCTL("")
+	    if $LG(rc)="OK" {
+		    w !,"Success"
+	    } else {
+		    w !,"Failed to clear defined primary."
+		    w !,"Error: ",$lg(rc,2)
+	    }
+	}
+}
+RequestPrimary() {
+	s $zt="err"
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s info=$SYSTEM.Mirror.GetInfo()
+	if info[",SHADOW," {
+		w !,"This option only works on failover members"
+		quit
+	}
+	s mirname=##class(Config.Mirrors).GetMirrorName()
+	if mirname="" {
+		w !,"Cannot read mirror name, cannot become primary"
+		quit
+	}
+	s cls=##class(Config.Mirrors).Open(mirname,,,.rc)
+	if ('rc) {
+		w "Failed to read [Mirrors] configuration section"
+		quit
+	}
+	if '$SYSTEM.Mirror.IsBackup() {
+		w !,"This function only works on the backup"
+		quit
+	}
+	s defprimary=cls.DefinedPrimary
+	s cls=""
+	s systemcnt=$G(^SYS("MIRRORSET",mirname,"Member"),0)
+	s status=""
+	for id=1:1:systemcnt {
+	   s info=$G(^SYS("MIRRORSET",mirname,"Member",id))
+       if info'="" {
+	      s name=$lg(info,1)
+          s rc=$$GetStatus^MIRRORCTL(mirname,id)
+          s status=$LG(rc)  
+	      if status="PRIMARY" {
+		      quit
+	      }
+       }
+	}
+	w !,name," is the current primary. Continuing will force it down"
+	r !,"Continue? <N> ",resp
+	if "Yy"'[$E(resp_"X") {
+		w !,"Aborted"
+		quit
+	}
+	if defprimary'="" {
+		s ourname=$LG($G(^SYS("MIRRORSET",mirname,"Member",0)),1)
+		if ourname'=defprimary {
+			w !,"No failover mode is set and the primary is defined as ",defprimary
+			r !,"Do you want to clear this so that this node can take over? <N> ",resp
+		    if "Yy"'[$E(resp_"N") quit
+	        s rc=$$ClearMirrorNoFailover^MIRRORCTL("")
+	        if $LG(rc)'="OK" {
+		       w !,"Cannot become primary - failed to clear defined primary"
+		       w !,"Error: ",$lg(rc,2)
+		       quit
+	       }
+		}
+	}
+	s rc=$$TakeOverAsPrimary^MIRRORMGR() 
+	if $LG(rc) {
+		w !,$LG(rc,2)
+		quit
+	}
+	w !,"Failed to become the primary:"
+	w !,?5,$LG(rc,2)
+	quit
+err ;
+	s $zt=""
+	w !,"Unexpected error: ",$ze
+	quit
+}
+ForcePrimary() {
+	s $zt="err"
+	s info=$SYSTEM.Mirror.GetInfo()
+	if info["PRIMARY" {
+		w !,"This node is already the primary"
+		quit
+	}
+	if (info[",NOTINIT,") {
+		w !,"This instance is not initialized as a mirror member"
+		quit
+	}
+	if (info [ ",SHADOW,") {
+		w !,"This option is not valid on async members"
+		quit
+	}
+	s mirname=##class(Config.Mirrors).GetMirrorName()
+	if mirname="" {
+		w !,"Failed to read mirror name - Cannot become primary"
+		quit
+	}
+	s cls=##class(Config.Mirrors).Open(mirname,,,.rc)
+	if ('rc) {
+		w "Failed to read [Mirror] configuration section"
+		quit
+	}
+	s defprimary=cls.DefinedPrimary
+	s cls=""
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s systemcnt=$G(^SYS("MIRRORSET",mirname,"Member"),0)
+	s status=""
+	for id=1:1:systemcnt {
+	   s info=$G(^SYS("MIRRORSET",mirname,"Member",id))
+       if info'="" {
+	      s name=$lg(info,1)
+          s rc=$$GetStatus^MIRRORCTL(mirname,id)
+          s status=$LG(rc)  
+	      if status="PRIMARY" {
+		      quit
+	      }
+       }
+	}
+	s forcefailover=0
+	if (status="PRIMARY") {
+		w !,"Mirror member """,name," is currently the primary."
+		read !,"Do you want to force it down so that we become the primary? <No> ",resp
+		if "Yy"'[$E(resp_"N") quit  ;JO2369
+		s forcefailover=1
+	} else {
+		s rc=$SYSTEM.Mirror.GetLastJournalFilename(mirname)  ;mirjrncnt,filename
+		if +rc<0 {
+			s lastfilecnt=""
+			s lastfilename=""
+		} else {
+			s lastfilecnt=+rc
+			s lastfilename=$P(rc,",",2)
+		}
+		if (lastfilename'="") && ($SYSTEM.Mirror.ActiveBackupFlag(-1)=1) {
+			w !,"This instance was an active backup member the last time it was "
+			w !,"connected so if the primary has not done any work since that time,"
+			w !,"this instance can take over without having to rebuild the mirror "
+			w !,"when the primary reconnects. If the primary has done any work"
+			w !,"beyond this point (file #",lastfilecnt,"),"
+			w !,?5,lastfilename
+			w !,"then the consequence of forcing this instance to become the primary is"
+		    w !,"that some operations may be lost and the other mirror member may need"
+		    w !,"to be rebuilt from a backup of this node before it can join as"
+		    w !,"a backup node again."
+		} else {
+		   w !,"Warning, this action can result in forcing this node to become"
+		   w !,"the primary when it does not have all of the journal data which"
+		   w !,"has been generated in the mirror. The consequence of this is that"
+		   w !,"some operations may be lost and the other mirror member may need"
+		   w !,"to be rebuilt from a backup of this node before it can join as"
+		   w !,"a backup node again."
+		}
+		s lastjrninfo=$$GetMaxDejrnStart^MIRRORMGR(mirname,3)  ;returns $LB(rc,<jrnfilecnt>,<jrnendoff>)
+	    if '$LG(lastjrninfo)||($LG(lastjrninfo,2)=0) {
+		    s lastjrnfilecnt=0
+		    s lastjrnend=""  ;no journal files yet	
+	    } else {
+		    s lastjrnend=+$LG(lastjrninfo,3)
+		    s lastjrnfilecnt=+$LG(lastjrninfo,2)
+	    }
+		if '$$CheckRequiredDatabases^MIRRORCOMM(1,lastjrnfilecnt,lastjrnend) {
+			w !!,"Additionally, one or more mirrored databases which are marked"
+			w !,"in the configuration as ""Mount Required at Startup"" are not currently"
+			w !,"active. Continuing will force this instance to become the primary and these"
+			w !,"databases will be mounted read-only rather than read-write."
+		}
+		read !,"Do you want to continue? <No> ",resp
+		if "Yy"'[$E(resp_"N") {
+			w !,"Aborted"
+			quit
+		}
+	}
+	if defprimary'="" {
+		s ourname=$LG($G(^SYS("MIRRORSET",mirname,"Member",0)),1)
+		if ourname'=defprimary {
+			w !,"No failover mode is set and the primary is defined as ",defprimary
+			r !,"Do you want to clear this so that this node can take over? <N> ",resp
+		    if "Yy"'[$E(resp_"N") quit
+	        s rc=$$ClearMirrorNoFailover^MIRRORCTL("")
+	        if $LG(rc)'="OK" {
+		       w !,"Cannot become primary - failed to clear defined primary"
+		       w !,"Error: ",$lg(rc,2)
+		       quit
+	       }
+		}
+	}
+	s cls=##class(Config.MirrorMember).Open()
+	if cls.ValidatedMember'=1 {
+		w !,"This mirror member has not been validated, this could be a promoted"
+		w !,"async member and you are forcing this member to be a primary member."
+		w !,"You need to set this member as a validated member to be able to become"
+		w !,"a primary member."
+		r !,"Do you want to set this member as a validated member? <N> ",resp
+		if "Yy"'[$E(resp_"N") quit
+		s cls.ValidatedMember = 1
+		s x=cls.%Save()
+		i 'x w !,"Failed to become a validated member, Error:",$SYSTEM.Status.GetErrorText(x) quit
+		w !,"This member is now a validated member."
+	}
+	s cls=""
+	s rc=$$DesignatePrimary^MIRRORMGR(forcefailover) 
+	if $LG(rc) {
+		w !,"Success"
+		quit
+	}
+	w !,"Timed out waiting to become the primary: "
+	w !,?5,$LG(rc,2)
+	w !,"Check the console log for further information, this instance may still be"
+	w !,?5,"in the process of becoming the primary mirror member."
+	quit
+err ;
+	s $zt=""
+	w !,"Unexpected error: ",$ze
+	quit
+}
+ActivateMirror() {
+	i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q
+	s $zt="err"
+	s cls=##class(Config.MirrorMember).Open()
+	s isasync=cls.isAsyncMember()
+	if $SYSTEM.Mirror.GetInfo()[",DEFINED,"&&isasync {
+		s mirname=$p(^SYS("MIRRORSET"),"^",2)
+		if mirname="" w !," No mirror set to be started." quit
+		if $L(mirname,",")=1 goto gotname
+top		r !,"Enter mirror set name: (? for list, return for quit) ",mirname
+		if mirname="?" w !!,"Mirror Set name is one of:",!,$p(^SYS("MIRRORSET"),"^",2) goto top
+		if mirname="" quit
+		s mirname=$zcvt(mirname,"U")
+		if ","_$P(^SYS("MIRRORSET"),"^",2)_","'[(","_mirname_",") w "   doesn't exist!" g top
+gotname	;
+		s dspname=mirname
+	} else {
+		if ('isasync)&&'cls.JoinMirror {
+			w !,"The JoinMirror is not set, could not start the mirror until it is set"
+			quit
+		}
+		if isasync {
+			s dspname="All Mirror Sets"
+			s mirname=""
+		} else {
+			s (mirname,dspname)=##class(Config.Mirrors).GetMirrorName()
+		}
+	}
+	s cls=""
+	if mirname'=""&&##class(SYS.Mirror).IsMirrorStarted(mirname) {
+		w !,"The mirror '",dspname,"' has already been started."
+		quit
+	}
+	s dspname=$s(dspname["All Mirror":dspname,1:"Mirror Set "_dspname)
+	w !,"OK to start "_dspname_" <N>? " r resp
+	if "Yy"'[$E(resp_"X") quit
+	s rc=##class(SYS.Mirror).StartMirror(mirname)
+	if ('rc) {
+		k err
+	   	Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+	   	w !,"Failed to start ",dspname,". Error = ",err(1)
+    	quit
+	}
+	w !,dspname," started."
+	w !,"See Status Monitor for connection status and progress."
+	quit
+err ;
+	s $zt=""
+	w !,"Unexpected error: ",$ze
+	quit
+}
+DeactivateMirror() {
+	i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q
+	s $zt="err"
+	s info=$SYSTEM.Mirror.GetInfo()
+	if info'[",DEFINED," w !,"Mirror is not started yet." quit
+	if info["PRIMARY" w !,"Cannot stop the primary mirror member." quit
+	s isasync=##class(Config.MirrorMember).isAsyncMember()
+	if isasync {
+		s mirname=$p(^SYS("MIRRORSET"),"^",2)
+		if mirname="" w !," No mirror set to be stopped." quit
+		if $L(mirname,",")=1 goto gotname
+top		r !,"Enter mirror set name: (? for list, return for quit) ",mirname
+		if mirname="?" w !!,"Mirror Set name is one of:",!,$p(^SYS("MIRRORSET"),"^",2) goto top
+		if mirname="" quit
+		s mirname=$zcvt(mirname,"U")
+		if ","_$P(^SYS("MIRRORSET"),"^",2)_","'[(","_mirname_",") w "   doesn't exist!" g top
+gotname	;
+		s dspname=mirname
+	} else {
+		if isasync {
+			s dspname="All Mirror Sets"
+			s mirname=""
+		} else {
+			s (mirname,dspname)=##class(Config.Mirrors).GetMirrorName()
+		}
+	}
+	if mirname'=""&&'##class(SYS.Mirror).IsMirrorStarted(mirname) {
+		w !,"The mirror '",dspname,"' has already been stopped."
+		quit
+	}
+	s dspname=$s(dspname["All Mirror":dspname,1:"Mirror Set "_dspname)
+	w !,"OK to stop "_dspname_" <N>? " r resp
+	if "Yy"'[$E(resp_"X") quit
+	s rc=##class(SYS.Mirror).StopMirror(mirname)
+	if ('rc) {
+		k err
+	   	Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+	   	w !,"Failed to stop ",dspname,". Error = ",err(1)
+    	quit
+	}
+	w !,dspname," stopped."
+	quit
+err ;
+	s $zt=""
+	w !,"Unexpected error: ",$ze
+	quit
+}
+Monitor() PUBLIC {
+	s $zt="err"
+	s x=$SYSTEM.Mirror.GetInfo(1)
+	if x'["DEFINED" {
+		w !,"This node is not a mirror member"
+		q
+	}
+	if +$G(^SYS("MIRRORSET")) {
+	   s cnt=$$getAsyncMemberSources(.mirnames)
+	   if 'cnt {
+		   w !,"No Async member sources defined"
+		   quit
+	   }
+	   if cnt=1 {
+		   s mirname=mirnames(1)
+		   w !,"Monitoring ",mirname
+	   } else {
+		   s namelist=","
+		   for i=1:1:cnt s namelist=namelist_mirnames(i)_","
+		   w !,"This is an Async member tracking ",cnt," mirrors"
+		   r !,"Enter name of mirror to monitor? (? for list) ",mirname
+		   s mirname=$zcvt(mirname,"U")
+		   q:mirname=""
+		   while (mirname'="") && ((mirname="?") || (namelist'[(","_mirname_",")))  {
+			   w !,"This node is tracking the following mirrors:"
+			   w !,?5
+			   for i=1:1:cnt w mirnames(i) w:i'=cnt ", " w:$X>75 !,?5 
+	  	       r !,"Enter name of mirror to monitor? (? for list) ",mirname
+			   s mirname=$zcvt(mirname,"U")
+		   }
+	   }
+	} else {
+	    s mirname=$p($G(^SYS("MIRRORSET")),"^",2)
+	}
+	if mirname="" {
+		quit
+	}
+	if x["PRIMARY" {
+		s primary=1
+	} else {
+		s primary=0
+	}
+	s index=""
+	s ourname=$LG(^SYS("MIRRORSET",mirname,"Member",0))
+	s ourindex=0
+	for  {
+	   s index=$O(^SYS("MIRRORSET",mirname,"Member",index),1,info)
+	   q:index=""
+	   s name=$lg(info,1)
+	   s nameindex(name)=index
+       if name=ourname {
+	       s ourindex=index
+	       quit
+       }
+	}
+	s DisplayDatabases=0  ;user can toggle this after the 1st pass
+	s refresh=60
+	s PrevRate="0,0,0"
+StatusLoop ;
+	; 
+	s cls=##class(Config.Mirrors).Open(mirname,,,.rc)
+	if ('rc) {
+		w "Monitor aborted - Failed to read configuration for "_mirname
+		quit
+	}
+	s cls=##class(Config.Mirrors).Open(mirname)
+	s defprimary=cls.DefinedPrimary
+    if +$G(^SYS("MIRRORSET")) {
+	    s failoverMember = 0
+    } else {
+	    s failoverMember = 1
+		Set arbiteraddr = $P(cls.ArbiterNode,"^",1)
+		If arbiteraddr = "" {
+			s ArbiterNode = "Arbiter not configured"
+		} Else {
+			s ArbiterNode = arbiteraddr
+		}
+		; Mirror FailoverMode
+		Set mode = $SYSTEM.Mirror.FailoverRule()
+		If mode = 1 {
+			Set modeString = "Arbiter Controlled"
+		} ElseIf mode = 2 {
+			Set modeString = "Agent Controlled"
+		} Else {
+			Set modeString = "User Controlled"
+		}
+		;Arbiter ConnectionStatus
+		Set state = $SYSTEM.Mirror.ArbiterState()
+		Set thisConnected = $SELECT($ZB(+state,+2,1)'=0:1,1:0)
+		Set otherConnected = $SELECT($ZB(+state,+4,1)'=0:1,1:0)
+		If 'thisConnected {
+			Set stateString = "This member is not connected to the arbiter"
+		} ElseIf 'otherConnected {
+			Set stateString = "Only this member is connected to the arbiter"
+		} Else {
+			Set stateString = "Both failover members are connected to the arbiter"
+		}
+    }
+	s cls=""
+	s time=$zdatetime($H)
+	w !,"Status of Mirror ",mirname," at ",$P(time," ",2)," on ",$P(time," ")
+	if '$SYSTEM.Mirror.IsPrimary() {
+		w !,"Incoming Journal Transfer Rate for This Member (over refresh interval)"
+		d JournalRate(mirname,.PrevRate)
+	}
+	if failoverMember {
+		w !,"Arbiter Connection Status:"
+		w !,?5,"Arbiter Address:   ",ArbiterNode
+		w !,?5,"Failover Mode:     ",modeString
+		w !,?5,"Connection Status: ",stateString
+		w !
+	}
+	w !,?39,"Journal Transfer"
+	w !,"Member Name+Type",?28,"Status",?42,"Latency"
+	w ?56,"Dejournal Latency"
+	w !,"--------------------------",?28,"---------"
+	w ?39,"---------------",?56,"--------------"
+	s haveprimary=0
+	; reset list of members between each run
+	k names,membertype,displaystatus,jrntimelatency,dbtimelatency
+	Set tRS = ##class(%Library.ResultSet).%New("SYS.Mirror:MemberStatusList")
+	Do tRS.Execute(mirname)
+	while tRS.Next() {
+		s name=tRS.Data("MemberName")
+		s names(name)=name
+		s membertype(name)=tRS.Data("DisplayType")
+		s displaystatus(name)=tRS.Data("DisplayStatus")
+		s jrntimelatency(name)=tRS.Data("JournalTimeLatency")
+		s dbtimelatency(name)=tRS.Data("DatabaseTimeLatency")
+		if tRS.Data("CurrentRole")="Primary" {
+			s pindex=$G(nameindex(name))
+			s haveprimary=1
+		}
+	}
+	s tRS=""
+	; Now retrieve the set of async members so we can get a more
+	; detailed member type for the display than simply "Async"
+	Set tRS = ##class(%Library.ResultSet).%New("SYS.Mirror:AsyncMemberList")
+	Do tRS.Execute()
+	while tRS.Next() {
+		s name=tRS.Data("Name")
+		s membertype(name)= tRS.Data("Type")
+	}
+	s tRS=""
+	s name=""
+	for  {
+		s name=$O(names(name))
+		q:name=""
+		W !,name
+		w !,?5,membertype(name)
+		w ?28,displaystatus(name)
+		w ?39
+		if $X+$L(jrntimelatency(name))>79 s tab=79-$L(jrntimelatency(name)) w !,?tab
+		w jrntimelatency(name)
+		if (dbtimelatency(name)'["Disconnected") || (dbtimelatency(name)'=jrntimelatency(name)) {
+			w ?56
+			if $X+$L(dbtimelatency(name))>79 s tab=79-$L(dbtimelatency(name)) w !,?tab
+			w dbtimelatency(name)
+		}
+	}
+	if defprimary'="" {
+		w !!,"Mirror is in no failover mode, ",defprimary," must be the primary"
+	}
+	if $SYSTEM.Mirror.IsAsyncMember() {
+		w !,"Dejournal Status: ",##class(SYS.MirrorConfiguration).GetDejournalStatusMsg(mirname)
+	}
+	if $SYSTEM.Mirror.IsBackup()||##class(Config.MirrorMember).IsDRMember() {
+		s rs=##class(%Library.ResultSet).%New("SYS.Mirror:MissingMirroredDatabases")
+		if rs.Execute(mirname) {
+			if rs.Next() {
+				w !!,"WARNING!!!!!",!
+				w "Missing mirrored database(s) which existed in primary member:"
+				do {
+				w !,?5,rs.Data("Name")
+				} while rs.Next()
+			}
+		}
+	}
+	if 'DisplayDatabases {
+		goto skip
+	}
+	w !!,"Mirror Databases:"
+	w !,?67,"Record To"
+	w !,"Name",?15,"Directory path",?55,"Status",?67,"Dejournal"
+	w !,"-------------",?15,"-----------------------------------"
+	w ?55,"-----------",?67,"-----------"
+	s rs=##class(%Library.ResultSet).%New("%CSP.UI.System.Mirror:MirroredDatabaseList")
+	s x=rs.Execute(mirname)
+	while (rs.Next()) {
+		s name=rs.Data("Name")
+		s directory=rs.Data("Directory")
+		s status=rs.Data("MirrorStatus")
+		s latency=rs.Data("LastDejournalRecord")
+		w !,name
+		w ?15,directory
+		if $X>55 w !
+		w ?55,status
+		if $l(latency)>10 {
+			w !,?3,latency
+		} else {
+			w ?67,latency
+		}
+	}
+	s rs=""
+	w !
+skip ;
+	w !!,"Press RETURN to refresh, D to toggle database display, Q to quit,"
+	w !," or specify new refresh interval <",refresh,"> "
+	s intv=0
+	r intv:refresh
+	if +intv s refresh=intv
+	if "Dd"[$E(intv_"x") {
+		s DisplayDatabases='DisplayDatabases
+		w !,"Database display is now ",$S(DisplayDatabases:"on",1:"off")
+	}
+	if "Qq"'[$E(intv_"X") w !! goto StatusLoop
+	w !,"Done"
+	q
+err ;
+	s $zt=""
+	w !,"Unexpected error: ",$ze
+	quit
+}
+JournalRate(mirname,prev) {
+	Set miridx = $SYSTEM.Mirror.MirrorNameToIndex(mirname,0)
+	if miridx>=0 {
+		Set curtime=$ZH
+		Set cur=$SYSTEM.Mirror.GetInfo(7,miridx)
+		Set recv=+$p(cur,",",1),recvcmp=+$p(cur,",",2)
+		If +prev>recv Set $p(prev,",",1)=0
+		If +$p(prev,",")=0 {
+			Set Text="--- (will be displayed on refresh)"
+		} else {
+			Set timediff=curtime-$p(prev,",",3),intervaltext=" ("_(timediff\1)_"s interval)"
+			Set journalbyte=recv-prev
+			Set datatext=$J(journalbyte/1024/timediff,0,2)_" KB/s"
+			if recvcmp=0 {
+				Set Text=datatext
+			} else {
+				Set cmpbyte=recvcmp-$p(prev,",",2)
+				Set Text=$J(cmpbyte/1024/timediff,0,2)_" KB/s network; "_datatext_" journal; compression ratio "_$J($s(cmpbyte=0:0,1:journalbyte/cmpbyte),0,2)_":1"
+			}
+			Set Text=Text_intervaltext
+		}
+		s prev=recv_","_recvcmp_","_curtime
+	} else {
+		Set Text="Can't find mirror set name "_mirname
+	}
+	w !," ",Text,!
+}
+convHostToIP(host) {
+	if $zcvt(host,"U")=$zcvt($zu(54,0),"U") s host="localhost"  ;force to localhost to get loopback address if the machine name is passed in
+	quit $s($zbitget($zversion(0)_$c(0,0,0,0),42):$SYSTEM.INetInfo.HostNameToAddr(host),1:$p($zu(54,13,host),","))	
+}
+ManageAsyncJournalPurge() {
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s curval=+$G(^SYS("MIRRORSET",0,"AsyncUseSystemPurgeInterval"))
+	if curval {
+		w !,"This async member is configured to purge mirror journal files"
+		w !,"according to the same criteria used to control purging of locally"
+		w !,"created journal files."
+	} else {
+		w !,"This async member is configured to purge mirror journal files"
+		w !,"as soon as they are no longer needed."
+	}
+	r !,"Do you want to change this behavior? <No> ",resp
+	if "Yy"'[$E(resp_"X") {
+		quit
+	}
+	s cls=##class(Config.MirrorMember).Open(,,.rc)
+	if ('rc) {
+		k err
+		Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+		w !,"Modify failed  - error reading mirror member configuration: ",err(1)
+		quit
+	}
+	s newval='curval	; the new setting is the opposite of the current setting
+	s cls.AsyncUseSystemPurgeInterval = newval
+	s rc=cls.%Save()
+	if ('rc) {
+		k err
+		Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+		w !,"Failed to save changes: ",err(1)
+		quit
+	}
+	if newval {
+		w !!,"This async member is now configured to purge mirror journal files"
+		w !,"according to the same criteria used to control purging of locally"
+		w !,"created journal files."
+	} else {
+		w !!,"This async member is now configured to purge mirror journal files"
+		w !,"as soon as they are no longer needed."
+		d PURGE^JRNUTIL  ;see if there are files we can clean up
+	}
+}
+Promote() {
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") w !!,"Managed by Enterprise Manager, operation not allowed." Quit
+	s mirname=##class(Config.Mirrors).GetMirrorName()
+	if mirname="" w !!,"No mirror set name is configured." quit
+	if '##class(Config.MirrorMember).isAsyncMember() {
+		w !!,"The system is a failover member, promoting to failover member is not allowed.",!
+		Quit
+	}
+	if '##class(Config.MirrorMember).IsDRMember() {
+		w !!,"The system is a non-DR Async mirror member, promoting to failover member is not allowed.",!
+		Quit
+	}
+	s cls=##class(Config.Mirrors).Open(mirname)
+	s vip=cls.VirtualAddress,cls="",virtualinterface=""
+	if vip'="" {
+		s MemberObj=##class(Config.MirrorMember).Open()
+		s virtualinterface=MemberObj.VirtualAddressInterface
+		s MemberObj=""
+ 		Set tList = ##class(%SYSTEM.INetInfo).GetListOfConfiguredInterfaces(1,vip)
+ 		if tList="" {
+			w !!,"WARNING: There is no network interface could acquire virtual IP '",vip,"'."
+			w !,"This promoted failover member won't acquire virtual IP when it becomes primary."
+			w !,"Do you want to continue? <No> "
+			r resp
+			if "Yy"'[$E(resp_"N") quit
+			s virtualinterface="NoMatchedSubnet"
+			s resp="N"
+ 		} elseif virtualinterface=""||(virtualinterface="NoMatchedSubnet") {
+			w !,"Must define an interface to host the virtual address ",vip,"."
+			s resp="Y"
+		} else {
+		    w !,"Current interface for the virtual address is: ",virtualinterface
+			s subnetmatched=(''##class(SYS.MirrorConfiguration).ValidateVirtualAddress(vip,0,virtualinterface))
+			if 'subnetmatched {
+				w !,"This interface could not acquire virtual IP '",vip,"' so you must change it.",!
+				s resp="Y"
+			} else {
+			    w !,"Do you want to change this? <No> "
+			    r resp
+			    if "Yy"[$E(resp_"N") s resp="Y"
+			}
+		}
+		if resp="Y" {
+vif			s resp=$$getVirtualAddressInterface(vip)
+			if resp'="" {
+				s virtualinterface=resp
+			} else {
+				w !!,"You need to setup Network Interface for the Virtual IP '",vip,"'."
+				r !,"Do you want to setup Network Interface again? <Yes> ",resp
+				if "Nn"'[$E(resp_"y") g vif
+				w !,"Aborted!!" quit
+			}
+		}
+	}
+	try {
+		s mirlock=$zu(156,11)
+	} catch {
+		s mirlock=0
+	}
+	if mirlock {
+		w !!,"Warning!! There are locks of mirrored databases in this system."
+		w !,"   Promoting the system to failover member will remove these locks"
+		w !,"   and owners of these locks will get <LOCKLOST> error."
+	}
+	s nfailover=0
+ 	Set rs=##class(%Library.ResultSet).%New("Config.MapMirrors:List")
+ 	s rc=rs.Execute(mirname)
+ 	if rc {
+ 	   While (rs.Next()) {
+	      if rs.Data("MemberType")=0 s nfailover=nfailover+1
+ 	   }
+    }
+ 	s rs=""
+ 	if nfailover=2 {
+	 	w !!,"Warning!! There are two failover members configured, promoting this system"
+	 	w !,"   will demote the backup member to DR async member."
+ 	}
+	r !!,"Are you sure you want to promote this system to a failover member? <No> ",ans
+	if "Yy"'[$e(ans_"X") quit
+	s DownList=""
+	w !,"Please wait..."
+	s rc=##class(SYS.MirrorConfiguration).PromoteToFailoverMember("",.DownList,"",0,virtualinterface)
+	if (''rc) {
+		w !,"System is promoted to a failover member."
+		if DownList'="" {
+			d $zu(9,"","IMPORTANT: Before you restart "_DownList_" you must manually edit the cache.cpf configuration file, and in the [MirrorMember] section set ValidatedMember=0.",1 /* broadcast and log message*/,2  /* Severe error */)
+			w !!,"IMPORTANT: Agent of ",DownList," could not be contacted."
+			w !,"Before you restart ",DownList
+			w !,"you must manually edit the cache.cpf configuration file, and in the"
+			w !,"[MirrorMember] section set ValidatedMember=0. Failure to do so could result in"
+			w !,"having two primary members running simultaneously."
+			r !!,"Press <RETURN> to continue",x
+		}
+		quit
+	}
+	if DownList="" {
+		w !,"Failed to promote this system to failover member"
+		w !," Error:",$SYSTEM.Status.GetErrorText(rc)
+		q
+	}
+	s MemberObj=##class(Config.MirrorMember).Open()
+	s ourname=MemberObj.SystemName
+	s MemberObj=""
+	k MemberList,MemberNames
+	s mirname=$p(^SYS("MIRRORSET"),"^",2),syscnt=+$G(^SYS("MIRRORSET",mirname,"Member"))
+	f i=1:1:syscnt {
+		s MemberList(i)=$LG(^SYS("MIRRORSET",mirname,"Member",i))
+		s MemberNames(MemberList(i))=i
+	}
+	s MemberList(syscnt+1)="No Partner Failover Member"
+	s MemberList(syscnt+2)="Abort"
+	w !!,"Could not contact the agent(s) on failover member(s):"
+	w !,?5,DownList
+	w !,"If these failover member(s) are available, choose ""Abort"" and restore" 
+	w !,"connectivity. Otherwise, you may select a failover partner for this member."
+	w !!,"This member may not have the mirror's most recent journal data. If you select a"
+	w !,"partner failover member, on successful contact with it, this member will obtain"
+	w !,"any newer journal data that the partner has, and attempt to become primary." 
+	w !,"Choose the failover member that was last primary since that member has the most"
+	w !,"recent journal data. If the partner member remains inaccessible and you wish to"
+	w !,"make this member primary without obtaining additional journal data, you may"
+	w !,"later use the ^MIRROR option ""Force this node to become primary""."
+	w !!,"If you select ""No Partner Failover Member"", this member will attempt to become"
+	w !,"primary immediately using the journal data it currently has." 
+	w !!,"Existing failover member(s) not selected as partner will be demoted to DR async.",!
+	f i=1:1:syscnt+2 w !,i,") ",MemberList(i)
+again r !,"Enter the partner failover member: ",member
+	if '$D(MemberNames(member)),(member?1.N) {
+		if member>(syscnt+2) w !,"please enter 1 to ",syscnt+2,"." g again
+		if member=(syscnt+2) w "   Aborted!" quit
+		if member=(syscnt+1) {
+			s member="" w "   No partner selected."
+		} else {
+			s member=MemberList(member)
+			w "   '",member,"' selected."
+		}
+	} else {
+		s member=$zcvt(member,"U")
+		if '$D(MemberNames(member)) {
+			w "   member doesn't exist!" 
+			g again		
+		}
+	}
+	if member="" {
+		w !!,"Warning: This member may become the primary without all of the journal data" 
+		w !,"which has been generated in the mirror. The consequence of this is that some"
+		w !,"operations may be lost and the other mirror members may need to be rebuilt"
+		w !,"from a backup."
+		r !!,"Do you want to continue? <No> ",ans
+		if "Yy"'[$e(ans_"X") quit
+		s standalone=1
+		goto dopromote
+	}
+	s standalone=0
+	w !!,"Warning: If the partner member ",member
+	w !,"was not the last member to be primary, it may not have all of the journal data"
+	w !,"which has been generated in the mirror. The consequence of this is that some"
+	w !,"operations may be lost and the other mirror members may need to be rebuilt" 
+	w !,"from a backup."
+	r !!,"Do you want to continue? <No> ",ans
+	if "Yy"'[$e(ans_"X") quit
+dopromote ;
+	s DownList=""
+	w !,"Please wait..."
+	s rc=##class(SYS.MirrorConfiguration).PromoteToFailoverMember("",.DownList,member,standalone,virtualinterface)
+	if (''rc) {
+		w !,"System is promoted to a failover member."
+		if DownList'="" {
+			d $zu(9,"","IMPORTANT: Before you restart "_DownList_" you must manually edit the cache.cpf configuration file, and in the [MirrorMember] section set ValidatedMember=0.",1 /* broadcast and log message*/,2  /* Severe error */)
+			w !!,"IMPORTANT: Before you restart ",DownList
+			w !,"you must manually edit the cache.cpf configuration file, and in the"
+			w !,"[MirrorMember] section set ValidatedMember=0. Failure to do so could result in"
+			w !,"having two primary members running simultaneously."
+			r !!,"Press <RETURN> to continue",x
+		}
+		quit
+	}
+	w !,"Failed to promote this system to failover member"
+	w !," Error:",$SYSTEM.Status.GetErrorText(rc)
+	q
+}
+Demote() {
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") w !!,"Managed by Enterprise Manager, operation not allowed." Quit
+	if ##class(Config.MirrorMember).isAsyncMember()||$SYSTEM.Mirror.IsPrimary() {
+		w !!,"The system is a primary or async mirror member, demoting to async member is not allowed.",!
+		Quit
+	}
+	r !,"Are you sure you want to demote this system to an async member? <No> ",ans
+	if "Yy"'[$e(ans_"X") quit
+	s rc=##class(SYS.MirrorConfiguration).DemoteToAsyncMember("")
+	if (''rc) {
+		w !,"System is demoted to an async member."
+		quit
+	}
+	w !,"Failed to demote the system to async member."
+	w !," Error:",$SYSTEM.Status.GetErrorText(rc)
+	q
+}
+ManageAsyncMemberType() {
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") w !!,"Managed by Enterprise Manager, operation not allowed." Quit
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s cls=##Class(Config.MirrorMember).Open()
+	s curtype=cls.AsyncMemberType
+	s curtypestring=$case(curtype,0:"Disaster Recovery (DR)",1:"Read-Only Reporting",2:"Read-Write Reporting",:"Unknown")
+	w !!,"Current async member type is ",curtypestring,"."
+	if curtype=1 {
+		s List(1)="Disaster Recovery (DR)"
+		s List(2)="Read-Write Reporting"
+		s NewList(1)=0
+		s NewList(2)=2
+	} elseif curtype=2 {
+		s List(1)="Disaster Recovery (DR)"
+		s List(2)="Read-Only Reporting"
+		s NewList(1)=0
+		s NewList(2)=1
+	} else {
+		s List(1)="Read-Only Reporting"
+		s List(2)="Read-Write Reporting"
+		s NewList(1)=1
+		s NewList(2)=2
+	}
+	s Help(1)="There are three types of async member."
+	s Help(2)="Disaster Recovery (DR) - All the mirrored databases are read-only."
+	s Help(3)="Read-Only Reporting - The mirrored databases could be read-only or read-write."
+	s Help(4)="                      When a mirrored DB is created/restored,"
+	s Help(5)="                      the DB is set to read-only."
+	s Help(6)="Read-Write Reporting- The mirrored databases could be read-only or read-write."
+	s Help(7)="                      When a mirrored DB is created/restored,"
+	s Help(8)="                      the DB is set to read-write."
+	s Value=""
+	s Status=##class(%Library.Prompt).GetMenu("Change to new async member type?",.Value,.List,.Help,128+8+4)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+	s newtype=NewList(Value)
+ 	if newtype=0 {
+	 	s rc=##class(SYS.MirrorConfiguration).DRMemberValidation(cls.SystemName)
+	 	if '(''rc) {
+		 	s errcode=+$SYSTEM.Status.GetErrorCodes(rc)
+		 	if errcode=2172 {
+				w !,"This member cannot become a DR async because the FailoverDB flag is cleared"
+				w !,"on at least one mirrored database. To make this member a DR async, first remove"
+				w !,"all such databases from the mirror on this member, then change the member type"
+				w !,"to DR async, and finally restore the databases from a backup made on a failover"
+				w !,"member to add them back to the mirror."
+		 	} elseif errcode=2149 {
+				w !,"This member cannot become a DR async because this member has joined more than"
+				w !,"one mirror set."
+		 	} elseif errcode=2150 {
+				w !,"This member cannot become a DR async because this member is a Relay Async member."
+		 	} else {
+				w !,"This member cannot become a DR async because ISCAgent is not running in"
+				w !,"local system."
+				w !,"Error code: ",$SYSTEM.Status.GetErrorText(rc)
+		 	}
+		 	w !,"*** Failed to convert to Disaster Recovery (DR) async member type."
+		 	Quit
+	 	}
+		s mirname=##class(Config.Mirrors).GetMirrorName()
+	    if mirname="" {
+		    W !,"No mirror set is configured."
+		    Quit
+	    }
+		s mm=##class(Config.MapMirrors).Open(mirname,cls.SystemName,,,.rc)
+		if ('rc) {
+			W !,"Could not open the mirror member "_cls.SystemName_" in mirror set"_mirname_". Error:"_$SYSTEM.Status.GetErrorText(rc)
+			Quit
+		}
+		if mm.DejournalFilter'="" {
+			w !,"WARNING!!!"
+			w !,"The currently configured DejournalFilter '"_mm.DejournalFilter_"'"
+			w !,"will be removed after changing async member type from Reporing to DR."
+			w !,"You need to reconfigure it if you decide to change it back to Reporting type later."
+		}
+		s mm=""
+	 	if +##class(%SYS.Journal.System).IsJournalEncryptionEnabled() {
+			w !,"WARNING!!!"
+			w !,"The journal encryption is currently enabled, DR member must have same encryption"
+			w !,"key as failover members have. Please make sure the encryption key matched with"
+			w !,"failover members' key otherwise the DR member will not be able to connect to"
+			w !,"primary."
+	 	}
+ 	}
+ 	s x=$case(newtype,0:"Disaster Recovery (DR)",1:"Read-Only Reporting",2:"Read-Write Reporting",:"Unknown")
+	w !,"Are you sure you want to change to ",x," type <Y>? " r resp
+	if ("Nn"[$E(resp_"X")) Quit
+	s cls.AsyncMemberType = newtype
+	s rc=cls.%Save()
+	if ('rc) {
+		w !,"Failed to update the AsyncMemberType in MirrorMember section."
+		w !,"   Error: ",$SYSTEM.Status.GetErrorText(rc)
+		quit
+	} else {
+		w !,"Async member type is updated from ",curtypestring," to ",$case(newtype,0:"Disaster Recovery (DR)",1:"Read-Only Reporting",2:"Read-Write Reporting",:"Unknown"),"."
+	}
+	s cls=""
+	if newtype=2 {
+		w !!,"Do you want to clear FailoverDB flag for all the mirrored databases"
+		w !,"in this system to make them read-write databases? <N>"
+		r ans
+		if "Yy"[$E(ans_"X") {
+			s rc=##class(Config.MirrorMember).ClearFailoverDBForNonDRAsyncMember()
+			if ('rc) {
+				w !,"Failed to clear FailoverDB flag on all mirrored databases."
+				w !,"   Error: ",$SYSTEM.Status.GetErrorText(rc)
+			} else {
+				w !,"All the activated mirrored databases have been set to be read-write databases."
+			}
+		}
+	}
+}
+ClearFailoverDBFlag() {
+	if '##class(Config.MirrorMember).AllowClearFailoverDBFlag() {
+		w !,"Clear FailoverDB flag on mirrored databases is not allowed" 
+		q
+	}
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s cnt=$$GetListOfMirroredDB(.dblist,1)
+	if 'cnt w !,"No mirrored database with FailoverDB flags set." q
+loop
+	w !!,"The following databases have FailoverDB flag (Read-Only) set."
+	w !,"Please select one of the database or all the databases to"
+	w !,"clear the FailoverDB flag.",!
+	f i=1:1:cnt w !,i,") ",dblist(i) if '+$g(dblist(i,0)) w " (Not activated, can't be cleared)"
+	w !,cnt+1,") All of the above databases."
+	w !,cnt+2,") Exit"
+	r !!,"Select: ",sel
+	if sel=""||(sel=(cnt+2)) quit
+	if sel?.N {
+		if sel=(cnt+1) {
+			w !,"You selected to clear FailoverDB flag for all the mirrored databases."
+			r !,"Are you sure? <N>",ans
+			if "Yy"'[$E(ans_"X") goto loop
+			s rc=##class(Config.MirrorMember).ClearFailoverDBForNonDRAsyncMember()
+			if ('rc) {
+				w !,"Failed to clear FailoverDB flag for all mirrored databases."
+				w !,"   Error: ",$SYSTEM.Status.GetErrorText(rc)
+			} else {
+				w !,"The FailoverDB flag on all mirrored databases have been cleared."
+			}
+			quit
+		}
+		if '$d(dblist(sel),dir) w !," Invalid selection" goto loop
+	} else {
+		s dir=sel
+	}
+	s rc=##class(SYS.Database).ClearMirrorFailoverDB(dir)
+	if ('rc) {
+		w !,"Failed to clear FailoverDB flag for ",dir
+		w !,"   Error: ",$SYSTEM.Status.GetErrorText(rc)
+	} else {
+		w !,"The FailoverDB flag on ",dir," have been cleared."
+	}
+	q
+}
+GetListOfMirroredDB(dblist,flag) {
+	s rs=##class(%Library.ResultSet).%New("Config.Databases:MirrorDatabaseList")
+	d rs.Execute()
+	s cnt=0
+	while (rs.Next()) {
+		s dir=rs.Data("Directory")
+		if (flag&&rs.Data("MirrorFailoverDB"))||(('flag)&&('rs.Data("MirrorFailoverDB"))) {
+			s dblist($i(cnt))=dir
+			if flag {
+				s Obj=##class(SYS.Database).%OpenId(dir,,.rc)
+				if (''rc) s dblist(cnt,0)=('Obj.MirrorNoWrite)&&('Obj.MirrorActivationRequired)
+			}
+		}
+	}
+	quit cnt
+}
+DisplayMirroredDB() {
+	s rs=##class(%Library.ResultSet).%New("Config.Databases:MirrorDatabaseList")
+	d rs.Execute()
+	s $p(b,"-",80)="-"
+	w !!,"Directory",?45,"Mirror DB Name",?70,"FailoverDB Flag"
+	w !,b
+	while (rs.Next()) {
+		w !,rs.Data("Directory")
+		w ?45,":mirror:",rs.Data("Mirror"),":",rs.Data("MirrorDBName")
+		w ?73,$s(rs.Data("MirrorFailoverDB"):"Set",1:"Cleared")
+	}
+}
+AskResetMirroredDB(Obj) PUBLIC {
+	s $zt="err"
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s dir=Obj.Directory
+	s mirname=Obj.MirrorSetName
+	s mirrordbname=":mirror:"_mirname_":"_Obj.MirrorDBName
+	s sfn=Obj.SFN
+	;
+	if Obj.ReadOnly {
+		w !,dir," is marked read-only."
+		r !,"Do you want to mark it read-write? <Yes> ",resp
+		if "Nn"[$E(resp_"X") {
+			w !,"Not reset."
+			quit
+		}
+		s Obj.ReadOnly=0
+		s rc=Obj.%Save()
+		i ('rc) {
+			w ! d
+			d $SYSTEM.Status.DisplayError(rc) 
+			w !
+			quit
+		}
+		w !
+	}
+	if Obj.InActiveMirror {
+		w !,dir," is part of the active mirror - no updating is required"
+		quit
+	}
+	s dbinfo=$SYSTEM.Mirror.DBGetInfo(0,sfn)  ;get current info string
+	if dbinfo="" {
+		w !,"Failed to read mirror database info for sfn #",sfn
+		quit
+	}
+	s curfilecnt=$P(dbinfo,"^",3)
+	s curfileoff=$P(dbinfo,"^",4)
+	; See whether curfilecnt exists, it could even be the current
+	; file if this db was just marked r/o and then r/w!
+	s rc=$SYSTEM.Mirror.GetJournalFileByMjrncnt(curfilecnt,mirname)
+	s missingjournalfiles=1
+	if +rc>0 {
+		s jrnfile=$P(rc,",",2)
+		s jrninfo=$zu(78,22,jrnfile,99)
+		if +jrninfo>0 {
+			; Journal file exists, lets see if all the other files exist too
+		    s lastfilecnt=+$SYSTEM.Mirror.GetLastJournalFilename(mirname)
+			for i=curfilecnt+1:1:lastfilecnt {
+				s rc=$SYSTEM.Mirror.GetJournalFileByMjrncnt(i,mirname)
+				q:rc<=0
+				s jrnfile=$P(rc,",",2)
+				s jrninfo=$zu(78,22,jrnfile,99)
+				q:+jrninfo<=0
+			}
+			if (rc>0) && (jrninfo>0) {
+				s missingjournalfiles=0
+				w !,"All of the journal files (#'s ",curfilecnt,"-",lastfilecnt,") required to"
+				w !,"catch up ",dir," exist."
+				w !,"Do you want to run catch-up rather than resetting the end? <Yes> "
+				r resp
+				if "Nn"'[$E(resp_"X") {
+					s list=$LB(sfn)
+					s x=##class(SYS.Mirror).CatchupDB(list,,.errlist)
+					if 'x {
+						w !,"CatchupDB failed."
+					} else {
+						if '$LL(errlist) {
+							w !,"Succeeded"
+						} else {
+							w !,"The following databases were not succesfully restored"
+							f i=1:1:$LL(errlist) {
+								s sfn=$LG(errlist,i)
+								w !,?5,$P($ZU(49,+sfn,3),"^",2)
+							}
+						}
+						w !,"Don't forget repeat the operation for the database on the other mirror members"
+					}
+					quit
+				} 
+			}
+		}
+	}
+	; Ok, we don't have all the journal files we need or the user doesn't
+	; want to catch the file up, see if we can reset the current end so we 
+	; can make this writeable
+	if $SYSTEM.Mirror.GetInfo()["PRIMARY" {
+		; If there is another failover member check to see whether its copy of the
+		; database has already been reset as if so, it would be best to update ours
+		; to match it since it must have been reset on the node which was the primary
+		; at the time and there's a good chance (since it became read/write) that there
+		; is journal data which needs to be replayed.
+		; If we're the primary, if there is a backupm, is node #1
+		s info=$g(^SYS("MIRRORSET",mirname,"Member",1))
+		s jrnoffnew=0
+		i $LG(info,8)=0 {  ;this is false when info is ""
+			s name=$lg(info,1)
+			s rc=$$CheckDBNameInUse^MIRRORCTL(mirname,1,mirrordbname)
+			s status=$LG(rc)  
+			if status="FOUND" {
+				s info=$LG(rc,3)  ;$SYSTEM.Mirror.DBGetInfo(sfn)
+				s jrnoffnew=+$P(info,"^",14)
+				if jrnoffnew'=0 {
+					s jrnfcntnew=+$P(info,"^",13)
+					s jrnoffold=+$P(info,"^",16)
+					s jrnfcntold=+$P(info,"^",15)
+				}
+			}
+			if jrnoffnew'=0 {
+				; when jrnoffnew is non-zero that means this db has been reset. We need
+				; to figure out whether this is an older reset or whether it matches the
+	 			; our db.
+	 			if (jrnfcntnew>curfilecnt) || 
+	 				((jrnfcntnew = curfilecnt) && (jrnoffnew > curfileoff)) {
+		 			if (jrnfcntold=curfilecnt) && (jrnoffold=curfileoff) {
+			 			; our current journal point exactly matches the point at which the other
+			 			; copy was reset so use it to reset this copy. Maybe we also want to include
+			 			; cases where its close, but not exact?
+		 		    	w !,name," has a copy of this database which was at the same point as the"
+		 		    	w !,"   local copy is now when it was reset to read/write. Resetting the local"
+		 		    	w !,"   copy based on the same point in time after which it can be caught up"
+						goto ResetToMatchOther
+		 			}
+		 		    /* this copy was reset to a point after our current end so we should either
+		 		       update ours to match this end or the user should restore a copy of the
+		 		       other database over the local copy */
+		 		    w !,name," has a copy of this database"
+		 		    w !,"     which was reset to read/write from "
+		 		    w !,          jrnfcntold,"/",jrnoffold," to ",jrnfcntnew,"/",jrnoffnew
+					w !,"The local copy of the database is current as of ",curfilecnt,"/",curfileoff
+					w !,"If there is no journal data in the gap between when this file was marked"
+					w !,"     read-only and when the other file was marked read-only, this file can be"
+					w !,"     updated to be current as of ",jrnfcntnew,"/",jrnoffnew," and then caught"
+					w !,"     up from there to make it active."
+					w !!,"Mark this copy as up-to-date using the information from the other file? <Yes> "
+					r resp
+					if "Nn"'[$E(resp_"X") {
+						goto ResetToMatchOther
+					}
+	 			}
+				;  Should we check whether the other db is currently read/write or 
+	 			;  not? 
+			}
+		}
+		w !,"Is there any journal data to"
+		w !,"     replay since this database was marked read/only? "
+		r resp
+		while "YyNnQq"'[$E(resp_"X") {
+			w !,"Please enter Yes, No or Quit"
+			w !,"Is there any journal data to"
+			w !,"     replay since this database was marked read/only? "
+			r resp
+		}
+		if "Qq"[$E(resp_"X") {
+			w !!,"The read only flag for ",dir
+			w !,"    has been cleared but since it is a mirrored database it will "
+			w !,"    remain read-only until it is caught up or ""reset"" to be current."
+			quit
+		}
+		if "Yy"[$E(resp_"X") {
+			if missingjournalfiles {
+			   s rc=$$GetJournalFilesAndUpdateLog^MIRRORCOMM(mirname,curfilecnt)
+			   i 'rc {
+				   s msg=$p(rc,",",2)
+					w !,"One or more journal files required to catch up the database are missing"
+					w !,"and we ran into trouble trying to retrieve them: "
+					w !,?5,msg
+					w !,"Please ensure all of the journal files since mirror journal file #",curfilecnt
+					w !,"are available. The mirror management inferface can be used to rebuild the"
+					w !,"mirror journal log if necessary after restoring the journal files."
+					quit
+			   }
+			}
+			w !,"Start catchup for ",dir,"? "
+			r resp
+			while ("NnYy"'[$E(resp_"X")) {
+				w !,"Please answer yes or no"
+				w !,"Start catchup for ",dir,"? "
+				r resp
+			}
+			if "Yy"[$E(resp_"X") {
+				s list=$LB(sfn)
+				s x=##class(SYS.Mirror).CatchupDB(list,,.errlist)
+				if 'x {
+					w !,"CatchupDB failed."
+				} else {
+					if '$LL(errlist) {
+						w !,"Succeeded"
+					} else {
+						w !,"The following databases were not succesfully restored"
+						f i=1:1:$LL(errlist) {
+							s sfn=$LG(errlist,i)
+							w !,?5,$P($ZU(49,+sfn,3),"^",2)
+						}
+					}
+				}
+				quit
+			} else {
+				w !!,"Since there is journal data which has not been applied to "
+				w !,"     the database if you continue, and reset the database to be"
+				w !,"     up to date, the database will be made writable even though it"
+				w !,"     is incomplete. This should only be done if the journal files"
+				w !,"     required to complete catch-up are not available and you will"
+				w !,"     resolve any issues due to possible missing data/incomplete open "
+				w !,"     transactions manually."
+			}
+		}
+		w !,"Do you want to reset ",dir
+		w !,"   to mark it as caught up so that it can be mounted read/write? "
+		r resp
+		while "YyNnQq"'[$E(resp_"X") {
+			if "Hh?"[$E(resp_"X") {
+				w !!,"When a mirrored database is read-only the internal journal position in the"
+				w !,"    database is not updated. When the read/only flag is cleared in order for"
+				w !,"    the database to be mounted read/write, the database needs to be declared"
+				w !,"    up-to-date. This is safe as long as no other copies of the database have"
+				w !,"    been marked read/write since this database was changed to read/only - it is"
+				w !,"    safe if this copy of the database is up to date. Alternativly, if the"
+				w !,"    journal files dating back to when this database was marked read only are"
+				w !,"    available, the catch up option can be used to apply the required"
+				w !,"    modifications (eg. if some other copy of the database wasn't marked "
+				w !,"    read/only and became active somehow)."
+				w !
+			} else {
+				w !,"Please enter Yes, No, Quit or h/H/? for help"
+			}
+			w !,"Do you want to reset ",dir
+			w !,"   to mark it as caught up so that it can be mounted read/write? "
+			r resp
+		}
+		if "NnQq"[$E(resp_"X") {
+			w !!,"The read only flag for ",dir
+			w !,"    has been cleared but since it is a mirrored database it will "
+			w !,"    remain read-only until it is caught up or ""reset"" to be current."
+			quit
+		}
+		s rc=$SYSTEM.Mirror.DBReset(dir)
+		if +rc=0 {
+			s msg=$p(rc,",",2,99)
+			w !,"Failed to reset database ",dir
+			w !,?10,msg
+		}
+		w !,"Don't forget repeat the operation for the database on the other mirror members"
+		quit	
+	}
+	s jrnoffnew=0  ;in case we don't find any failover members
+	s index=0  ;start with us so we don't see our copy
+	for  {
+		s index=$O(^SYS("MIRRORSET",mirname,"Member",index),1,info)
+		q:index=""
+		i $LG(info,8)=0 {
+			s name=$lg(info,1)
+			s rc=$$CheckDBNameInUse^MIRRORCTL(mirname,index,mirrordbname)
+			s status=$LG(rc)  
+			if status="FOUND" {
+				s info=$LG(rc,3)  ;$SYSTEM.Mirror.DBGetInfo(sfn)
+				s jrnoffnew=+$P(info,"^",14)
+				if jrnoffnew'=0 {
+					s jrnfcntnew=+$P(info,"^",13)
+					s jrnoffold=+$P(info,"^",16)
+					s jrnfcntold=+$P(info,"^",15)
+					quit  ;we found a node with data so we can stop
+				}
+			}
+		}
+	}
+	if jrnoffnew=0 {
+		w !!,"We cannot locate a copy of this database on a failover member which"
+		w !,"    has been reset so the local copy cannot be updated. When a copy is"
+		w !,"    available on a failover member you can try resetting this copy with"
+		w !,"    the mirror management screen or utility."
+		quit
+	}
+	w !!,"A read/write copy of this database was found on ",name
+	w !,"    which was converted from read/only to read/write at journal"
+	w !,"    position ",jrnfcntnew,"/",jrnoffnew," (file #/journal offset)"
+	w !
+	; In order for us to use the new filecnt/fileoffset the current
+	; journal position must match (equal or greater than) the old journal 
+	; position from the reset data. Otherwise we need to ask the user
+	; if its ok - it might be. When a db is marked read-only we'll update
+	; the other copies we can find or the other copies will get updated the
+	; next time the node reconnects and sees that it is now readonly. This
+	; can result in different current journal offsets stored in different 
+	; copies even though all of them actually became read-only at the same
+	; time. The 1st copy to become read/write could be "ahead" or "behind"
+	; the other copies depending on which one is on the primary at the time
+	; the use wants to make it read/write again.
+	if ((curfilecnt<jrnfcntold) || 
+		((curfilecnt=jrnfcntold) && (curfileoff <= jrnoffold))) {
+	    w !,"This copy of the database was last updated at an earlier"
+	    w !,"    point in time ("
+	    if curfilecnt<jrnfcntold w curfilecnt,"/"
+	    w curfileoff
+	    w ") than the point at which the read/write copy"
+	    w !,"    was converted from read/only to read/write ("
+	    if curfilecnt<jrnfcntold w jrnfcntold,"/"
+		w jrnoffold,")."
+		w !,"    There may be journal data which needs to be"
+		w !,"    restored to this copy before marking it as up to date."
+		r !,"Do you want to continue anyway and mark this copy as up to date? <No> ",resp
+		if "Yy"'[$E(resp_"X") {
+			w !,"Not updated."
+			quit
+		}
+	} else {
+		r !,"Reset this database to be current as of this position? ",resp
+		while "YyNnQq"'[$E(resp_"X") {
+			w !,"Please answer one of yes, no or quit."
+			r !,"Reset this database to be current as of this position? ",resp
+		}
+		if "NnQq"[$E(resp) {
+			w !,"Not updated."
+			quit
+		}
+	}
+ResetToMatchOther ;	
+	s rc=$SYSTEM.Mirror.GetJournalFileByMjrncnt(jrnfcntnew,mirname)
+	if rc<=0 {
+		w !,"Journal file #",jrnfcntnew," could not be found in mirror journal log file."
+		quit
+	}
+	s jrnfile=$P(rc,",",2)
+	s jrninfo=$zu(78,22,jrnfile,99)
+	if +jrninfo<=0 {
+		w !,"Journal file ",jrnfile," (#",jrnfcntnew,") does not exist."
+		quit
+	}
+	s x=$SYSTEM.Mirror.DBReset(dir, jrnfcntnew, jrnoffnew,$p(jrninfo,",",7+1))
+	if +x=0 {
+		w !,"Failed to reset database: ",$P(x,",",2,99)
+		quit
+	}
+	w !!,dir," is now marked current as of ",jrnfcntnew,"/",jrnoffnew
+	w !,"Do you want to start the catchup process so this database"
+	w !,"gets linked into the active deournaling system? <Yes> "
+	r resp
+	if "Nn"[$E(resp_"X") {
+		w !,"Not started"
+		quit
+	}
+	s list=$LB(sfn)
+	s x=##class(SYS.Mirror).CatchupDB(list,,.errlist)
+	if 'x {
+		w !,"Catchup failed."
+	} else {
+		if '$LL(errlist) {
+			w !,"Succeeded"
+		} else {
+			w !,"The following databases were not succesfully restored"
+			f i=1:1:$LL(errlist) {
+				s sfn=$LG(errlist,i)
+				w !,?5,$P($ZU(49,+sfn,3),"^",2)
+			}
+		}
+	}
+	w !,"Done"
+	quit
+err ;
+	s Zt=""
+	w !,"Unexpected error: ",$ZE
+	QUIT
+}
+UpdateMemberType(mirname,newtype) PUBLIC {
+	if newtype'=1&&(newtype'=2) quit "0,wrong async type "_newtype_"."
+	s cls=##class(Config.MirrorMember).Open(,,.rc)
+	if ('rc) Quit "0,failed to read mirror member configuration. Error:"_$SYSTEM.Status.GetErrorText(rc)
+	s ourname=cls.SystemName
+	if 'cls.isAsyncMember() quit "0,This is not an async member"
+	s cls=##class(Config.MapMirrors).Open(mirname,ourname,,,.rc)
+	if ('rc) Quit "0,Could not open the mirror member "_ourname_" in mirror set"_mirname_". Error:"_$SYSTEM.Status.GetErrorText(rc)
+	s cls.MemberType=newtype
+	s rc=cls.%Save()
+	if ('rc) Quit "0,Could not update mirror member "_ourname_" in mirror set"_mirname_". Error:"_$SYSTEM.Status.GetErrorText(rc)
+	Quit 1
+}
+SetupSSL() {
+ s SSLConfig=##class(Security.SSLConfigs).%New()
+ i $$YN("Allow SSLv2 protocol",$case($zb(SSLConfig.Protocols,1,1),1:"Y",:"N"))="Y" {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,1,7)
+ } else {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,1,2)
+ }
+ i $$YN("Allow SSLv3 protocol",$case($zb(SSLConfig.Protocols,2,1),2:"Y",:"N"))="Y" {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,2,7)
+ } else {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,2,2)
+ }
+ i $$YN("Allow TLSv1 protocol",$case($zb(SSLConfig.Protocols,4,1),4:"Y",:"N"))="Y" {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,4,7)
+ } else {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,4,2)
+ }
+ i $$YN("Allow TLSv1.1 protocol",$case($zb(SSLConfig.Protocols,8,1),8:"Y",:"N"))="Y" {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,8,7)
+ } else {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,8,2)
+ }
+ i $$YN("Allow TLSv1.2 protocol",$case($zb(SSLConfig.Protocols,16,1),16:"Y",:"N"))="Y" {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,16,7)
+ } else {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,16,2)
+ }
+ s SSLInfo("Protocols")=SSLConfig.Protocols
+CypherList
+ s SSLConfig.CipherList=$$STRINGOPTION("Enabled ciphersuites",SSLConfig.CipherList,1) q:SSLConfig.CipherList=-1 0
+ s SSLInfo("CipherList")=SSLConfig.CipherList
+CertificateFile
+ s SSLConfig.CertificateFile=$$STRINGOPTION("File containing this configuration's X.509 certificate",SSLConfig.CertificateFile,0) q:SSLConfig.CertificateFile=-1 0
+ s SSLInfo("CertificateFile")=SSLConfig.CertificateFile
+PrivateKeyFile
+ s SSLConfig.PrivateKeyFile=$$STRINGOPTION("File containing this configuration's private key",SSLConfig.PrivateKeyFile,0) q:SSLConfig.PrivateKeyFile=-1 0
+ s SSLInfo("PrivateKeyFile")=SSLConfig.PrivateKeyFile
+PrivateKeyType
+ w !
+ w !,"   Key Type"
+ w !,"   --------"
+ w !,"1) DSA"
+ w !,"2) RSA"
+ w !
+ s Option=$$NUMOPTION("Private key type",SSLConfig.PrivateKeyType,1,2)
+ i Option=0 q 0
+ i Option=1 s SSLConfig.PrivateKeyType=1
+ i Option=2 s SSLConfig.PrivateKeyType=2
+ s SSLInfo("PrivateKeyType")=SSLConfig.PrivateKeyType
+PrivateKeyPassword
+ s oPassword=SSLConfig.PrivateKeyPasswordLogicalToDisplay(SSLConfig.PrivateKeyPassword)
+ u:$zu(96,14)=1 $io:(:"S")
+ s Password=$$STRINGOPTION("Private key password",oPassword,1) 
+ u:$zu(96,14)=1 $io:(:"-S") 
+ q:Password=-1 0
+ i (Password'=oPassword) {
+	u:$zu(96,14)=1 $io:(:"S")
+	s cPassword=$$STRINGOPTION("Please enter the password again","",1) 
+	u:$zu(96,14)=1 $io:(:"-S") 
+	q:cPassword=-1 0
+	i cPassword'=Password w !,"Password does not match, please re-enter" g PrivateKeyPassword
+	s SSLConfig.PrivateKeyPassword=Password
+ }
+ s SSLInfo("PrivateKeyPassword")=SSLConfig.PrivateKeyPassword
+CAFile
+ s SSLConfig.CAFile=$$STRINGOPTION("Trusted Certificate Authority X.509 certificate(s)",SSLConfig.CAFile,0) q:SSLConfig.CAFile=-1 0
+ s SSLInfo("CAFile")=SSLConfig.CAFile
+CRLFile
+ s SSLConfig.CRLFile=$$STRINGOPTION("Certificate Revocation List",SSLConfig.CRLFile,1) q:SSLConfig.CAFile=-1 0
+ s SSLInfo("CRLFile")=SSLConfig.CRLFile
+ k SSLConfig
+ s rc=##class(SYS.Mirror).UpdateMirrorSSL(.SSLInfo)
+ i ('rc) w !,"Failed to create Mirror SSL configuration. Error: ",$SYSTEM.Status.GetErrorText(rc) quit 0
+ w !,"%MirrorClient and %MirrorServer SSL configuration succesfully created."
+ quit 1
+}
+NUMOPTION(prompt,default,min,max) [] PRIVATE {
+ s $zt="NUMOPTIONE"
+NUMOPTION1 w !,prompt_"? "_default_" => "
+ r Option i Option="" q default
+ i '(Option?1.5N)!(Option<min)!(Option>max) w !!,"Please enter a number between "_min_" and "_max,! g NUMOPTION1
+ q +Option
+NUMOPTIONE s $zt=""
+ i $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q -1
+}
+STRINGOPTION(prompt,default,allownull) [] PRIVATE {
+ s $zt="STRINGOPTIONE"
+STRINGOPTION1 w !,prompt_"? " i default'="" w default_" => "
+ r Option i Option="",(default'="") q default
+ i Option="",(allownull=0) w !,"Please enter a non-null value" g STRINGOPTION1 
+ q Option
+STRINGOPTIONE s $zt=""
+ i $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q -1
+}
+ConvertShadowDatabases() public {
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !!,"Operation requires %Admin_Manage:Use privilege." q
+	If '$System.Mirror.IsMember() w !!,"The system is not a mirror member." q
+	If $system.Mirror.IsPrimary() w !!,"The system is a primary member, not allowed." q
+getshdid ;
+	k list
+	s rs=##class(%Library.ResultSet).%New("SYS.Shadowing.Shadow:List")
+	s rc=rs.Execute()
+	i ('rc) {
+		w !!," Failed to get Shadow ID list. Error=",$System.Status.GetErrorText(rc)
+		q
+	}
+	s list=""
+	f  q:'rs.Next()  s list($i(list))=rs.Data("Name")
+	if '$g(list) w !!,"No Shadow is configured." q
+	if list>1 {
+		s ShadowID=""
+		s Flag=8+512+128
+		s Status=##Class(%Library.Prompt).GetArray("Shadow ID?",.ShadowID,.list,,,,Flag)
+	 	i (+Status=0)||(Status=2)||(ShadowID="") q
+	} else {
+		s ShadowID=list(1)
+	}
+	s mirlist=$p($G(^SYS("MIRRORSET")),"^",2)
+	if mirlist="" w !,"No mirror set is configured." q
+	for list=1:1:$l(mirlist,",") s list(list)=$p(mirlist,",",list)
+	if list>1 {
+		s mirname=""
+		s Flag=8+512+128
+		s Status=##Class(%Library.Prompt).GetArray("Mirror Set Name?",.mirname,.list,,,,Flag)
+	 	i (+Status=0) q
+	 	if (Status=2)||(mirname="") g getshdid
+	 	w !
+	} else {
+		s mirname=list(1)
+	}
+	;if +$G(^SYS("MIRRORSET",mirname,"Member"))'=1 w !!,"Need only one failover member for shadow client to connect to" q
+	s shdwobj=##class(SYS.Shadowing.Shadow).%OpenId(ShadowID)
+	i '$isobject(shdwobj) w !!,"Invalid shadow '",ShadowID,"'." q
+	if '##class(%Library.ShadowState).CanStart(shdwobj.Status) {
+		w !,"Shadow '",ShadowID,"' is not stopped."
+		w !,"It needs to be stopped before proceeding."
+		w !,"Stop Shadow '"_ShadowID_"'? <Y> " r resp
+		w !,"Stopping Shadow '",ShadowID,"'..."
+		if "Nn"[$E(resp_"Y") w !," Abort!" q
+		s rc=shdwobj.Stop()
+		i ('rc) {
+			w !,"Failed to stop Shadow '"_ShadowID_"'. Error:",$System.Status.GetErrorText(rc)
+			q
+		}
+		w !,"Shadow '",ShadowID,"' is stopped."
+	}
+	k cpinfo
+	s rc=##class(SYS.Shadowing.Shadow).CheckPointInfo(ShadowID,.cpinfo)
+	if 'rc {
+		w !!,"Failed to get shadow journal check point."
+		q
+	}
+	s filename=$g(cpinfo(0,"JournalLocation","File"))
+	s tfname=$g(cpinfo(0,"OldestOpenTranLoc","File"))
+	if filename="" w !!,"Could not find shadow journal file." q
+	s jrninfo=$zu(78,22,filename,99)
+	s JrnFileCount=+$p(jrninfo,",",13+1)
+	s JrnFileOffset=$g(cpinfo(0,"JournalLocation","Offset"))
+	if 'jrninfo||('JrnFileCount) {  ;+1 to skip status code
+		w !!,"Shadow check point journal file ",filename," is not a mirror journal file." q
+		q
+	}
+	if tfname'="" {
+		if '(+$P($ZU(78,22,tfname,13),",",2)) {
+			w !!,"Shadow transaction check point journal file ",tfname," is not a mirror journal file." q
+			q
+		}
+	}
+	s rs=##class(%Library.ResultSet).%New("SYS.Shadowing.Shadow:DatabaseRedirections")
+	s rc=rs.Execute(ShadowID)
+	i ('rc) {
+		w !!," Failed to get Shadow database list. Error=",$System.Status.GetErrorText(rc)
+		q
+	}
+	k DstDB,SrcDB
+	m SrcDB=shdwobj.DatabaseRedirection
+	s nextdb=$o(SrcDB(""),1,dstdb)
+	while (nextdb'="") {
+		if $d(DstDB(dstdb)) {
+			k SrcDB(DstDB(dstdb))
+			k SrcDB(nextdb)
+		} else {
+			s DstDB(dstdb)=nextdb
+		}
+		s nextdb=$o(SrcDB(nextdb),1,dstdb)
+	}
+	k DstDB
+	k srclist,dstlist
+	s narray=0,ndb=0
+	s nextdb=$o(SrcDB(""),1,dstdb)
+	while (nextdb'="") {
+		s dstdb=$zu(12,$p(dstdb,"^",3)),srcdb=$p(nextdb,"^",3)
+		s dbobj=##class(SYS.Database).%OpenId(dstdb,,.rc)
+		if ('(''rc) || dbobj.Mirrored || '##class(SYS.Database).CanDatabaseBeMirrored(dstdb)) {
+			s nextdb=$o(SrcDB(nextdb),1,dstdb)
+			continue
+		}
+		if ndb=50 s ndb=0,narray=narray+1
+		s srclist(narray)=$g(srclist(narray))_$LB(srcdb)
+		s dstlist(narray)=$g(dstlist(narray))_$LB(dstdb)
+		s ndb=ndb+1
+		s nextdb=$o(SrcDB(nextdb),1,dstdb)
+	}
+	if 'narray,'ndb w !!,"No shadow DB needs to be converted to mirrored DB." q
+	s failed=0,Index=0
+	k List
+	for ii=0:1:narray {
+		s srclist=srclist(ii),dstlist=dstlist(ii)
+		s rc=$$GetMultipleDBInfo^MIRRORCTL(mirname,1,srclist)
+		if $LG(rc)'="OK" s failed=1 q
+		s dbinfo=$LG(rc,2)
+		for ndb=1:1:$listlength(dbinfo) {
+			s dstdb=$lg(dstlist,ndb)
+			s onedb=$lg(dbinfo,ndb)
+			if onedb'="" {
+				s DstDB(dstdb)=$lb(onedb,$lg(srclist,ndb))
+				s List($i(Index))=dstdb_" ("_$P(onedb,"^",2)_")"
+			}
+		}
+	}
+	if failed {
+		if $LG(rc)="TIMEOUT" {
+			s errstr="Connection timed out"
+		} else {
+			s errstr=$LG(rc,2)
+		}
+		w !!,"Failed to retrieve database info from primary, error:",errstr
+		q
+	}
+	if Index=0 w !!,"No mirrored database in primary matched shadow database" q
+promptdb ;
+	s Flag=8+512+1024
+	s DBPathList=""
+	w !!,"A shadow database can be converted to a mirror database only if it has"
+	w !,"a single source database and that database is mirrored on the primary member.",!
+	s Status=##Class(%Library.Prompt).GetArray("Database to be converted?",.DBPathList,.List,,,,Flag)
+ 	i (+Status=0)||(Status=2)||(DBPathList="") q
+ 	w !!,"The following shadow database"_$s($ll(DBPathList)<2:" is",1:"s are")_" selected:"
+	s ndb=$ll(DBPathList)
+	f i=1:1:ndb w !,$li(DBPathList,i)
+	w !
+	i $$YN("Are you sure you want to convert selected shadow DB to mirrored DB","N")="N" {
+		w !,"Aborted" 
+		q
+	}
+	if $ll(DBPathList)<2 {
+		s dbpath=$p($li(DBPathList,1)," (")
+	    s dir=$zu(12,dbpath,2) i dir]"" s dbpath=dir
+		i '$d(DstDB(dbpath)) {
+			s dir0=$zu(12,dbpath,1)
+			i dir0="" {
+			 	i ($zversion(1)=1) s dir0=$zu(12,dbpath,4)
+			 	i dir0="" w !!,"Invalid directory specification, please re-enter",! goto promptdb
+			}
+		 	s dbpath=$zu(12,dir0,3)
+		 	i dbpath="" {
+			 	w !!,"Directory "_dir0_" does not exist, please re-enter",! 
+				goto promptdb
+		 	}
+			s dbinfo=$zu(49,dbpath)
+			i (dbinfo<0)||(dbinfo>$zu(40,0,41)) {
+		 		w !!,"Database is not mounted, please re-enter",! 
+				goto promptdb
+			}
+			i '$d(DstDB(dbpath)) w !!,"Selected DB is not a shadow database, please re-enter",! goto promptdb
+		}
+		s SelectedDB(dbpath)=$li(DstDB(dbpath))
+	} else {	;multiple selected
+		s ndb=$ll(DBPathList)
+		f i=1:1:ndb {
+			s dbpath=$p($li(DBPathList,i)," (")
+			s SelectedDB(dbpath)=$li(DstDB(dbpath))
+		}
+	}
+	k list,ndb,ConvertedDB
+	s dbpath=$o(SelectedDB(""),1,dbinfo)
+	while dbpath'="" {
+		s dbname=$p(dbinfo,"^",2)
+		s rc=##class(SYS.Mirror).AddDatabaseNonPrimary(dbpath,mirname,dbname,JrnFileCount,JrnFileOffset,dbinfo,0)
+		if (''rc) {
+			w !,"Shadow DB '",dbpath,"' is converted to mirrored DB '",dbname,"'."
+			s $li(list,$i(ndb))=+$zu(49,dbpath)
+			s ConvertedDB($LG(DstDB(dbpath),2))=""
+		} else {
+			w !,"Shadow DB '",dbpath,"' failed to be converted, error:",$SYSTEM.Status.GetErrorText(rc)
+		}
+		s dbpath=$o(SelectedDB(dbpath),1,dbinfo)
+	}
+	if $d(list) {
+		r !,"Start catchup for converted database(s)? <Y> ",resp
+		if "Nn"'[$E(resp_"Y") {
+			JOB ##class(SYS.Mirror).CatchupDB(list)::5
+			i $T {
+				w !,"CatchupDB background job is started."
+				w !,"You can run Mirror Monitor to check status of the databases."
+			} else {
+				w !,"Failed to start CatchupDB background job."
+			}
+		}
+		w !!,"It is recommened to remove the converted databases from the shadow"
+		w !,"database mapping. Otherwise the Shadow may try to apply journal records"
+		w !,"to mirrored databases.",!
+		r !,"Remove the converted database(s) from shadow database mapping? <Y> ",resp
+		if "Nn"'[$E(resp_"Y") {
+			s nextdb=$o(ConvertedDB(""))
+			while nextdb'="" {
+				d shdwobj.SetDatabaseNotToShadow(nextdb)
+				s nextdb=$o(ConvertedDB(nextdb))
+			}
+			s rc=shdwobj.%Save()
+			if (''rc) {
+				w !,"Converted shadow databases are removed from shadow database mapping."
+			} else {
+				w !,"Failed to remove shadow database mapping. Error:",$SYSTEM.Status.GetErrorText(rc)
+			}
+		}
+	}
+}
+AddNewMember() {
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") w !!,"Managed by Enterprise Manager, operation not allowed." Quit
+	s mirname=##class(Config.Mirrors).GetMirrorName()
+	if mirname="" w !,"Could not find mirror set name." q
+	s rs=##class(%Library.ResultSet).%New("SYS.Mirror:PendingNewMembers")
+	d rs.Execute()
+	while rs.Next() {
+		s name=rs.Data("Name")
+		s mlist($i(mlist)) = rs.Data("Name")_" ("_rs.Data("MemberTypeDisplay")_")"
+		s minfo(name,"Name")=rs.Data("Name")
+		s minfo(name,"MemberType")=rs.Data("MemberType")
+		s minfo(name,"MemberTypeDisplay")=rs.Data("MemberTypeDisplay")
+		s minfo(name,"AgentAddress")=rs.Data("AgentAddress")
+		s minfo(name,"AgentPort")=rs.Data("AgentPort")
+		s minfo(name,"ConnectsTo")=rs.Data("ConnectsTo")
+		s minfo(name,"ECPAddress")=rs.Data("ECPAddress")
+		s minfo(name,"GUID")=rs.Data("GUID")
+		s minfo(name,"InstanceDirectory")=rs.Data("InstanceDirectory")
+		s minfo(name,"MirrorAddress")=rs.Data("MirrorAddress")
+		s minfo(name,"MirrorSSPort")=rs.Data("MirrorSSPort")
+		s minfo(name,"SSLComputerName")=rs.Data("SSLComputerName")
+		s minfo(name,"EncryptCommunication")=rs.Data("EncryptCommunication")
+	}
+	if +$g(mlist)=0 w !,"No pendling new member to be authorized." q
+	s Flag=8+512+128
+	s Selected=""
+	s Status=##Class(%Library.Prompt).GetArray("Select a member to be added or rejected?",.Selected,.mlist,,,,Flag)
+ 	i (+Status=0)||(Status=2)||(Selected="") q
+ 	s Selected=$p(Selected," (")
+ 	if '$d(minfo(Selected)) w !,"Selected member '",Selected,"' is not in the list." q
+ 	m params=minfo(Selected)
+ 	s savetype=params("MemberType")
+ 	s params("MemberType")=params("MemberTypeDisplay")
+ 	kill params("MemberTypeDisplay")
+	; We want the ECPAddress property called SuperServer Address
+	s params("SuperServerAddress")=$G(params("ECPAddress"))
+	k params("ECPAddress")
+	k params("PreferredArbiter")
+	s cc2=params("ConnectsTo") k params("ConnectsTo")
+	w !!,"Properties for member '",Selected,"':"
+	do dumpparams(.params)
+	s params("MemberType")=savetype
+	s params("ECPAddress")=params("SuperServerAddress")
+	k params("SuperServerAddress")
+	s params("ConnectsTo")=cc2
+	s name=Selected
+	w !!,"Enter 'A' to authorize the new member '"_name_"' to join."
+	w !,"Enter 'R' to reject the '"_name_"' member from joining mirror,"
+	w !,"     if you intend for the member '",name,"' on ",params("MirrorAddress")
+	w !,"     to join this mirror (",mirname,"), but the Distinguished Name"
+	w !,"     is unexpected, verify and correct the SSL configuration on that"
+	w !,"     member and connect to the mirror again. Otherwise, edit the"
+	w !,"     configuration of that member to remove it from '",mirname,"'."
+	w !,"Enter '^' to quit."
+again w !,"Select option 'A', 'R' or '^'? " r opt
+	if opt="^" quit
+	s opt=$E($zconvert(opt,"U")) if "AR"'[opt w "    wrong selection..." g again
+	if opt="A" {
+		if params("MemberType")=0,$G(^SYS("MIRRORSET",mirname,"Member"),0)'=0 {
+			w !,"Failed to add new failover member '",name,"' because a backup member already existed."
+			w !,"Please select 'R' to reject this pending request."
+			quit
+		}
+		s rc=##class(Config.MapMirrors).Create(mirname,name,.params)
+		if ('rc) {
+			w !,"Failed to add new member '",name,"'. Error=",$SYSTEM.Status.GetErrorText(rc)
+		} else {
+			w !,"New member '",name,"' is added."
+			d ##class(SYS.Mirror).RemoveFromApprovalList(name,params("GUID"))
+			if $G(params("MemberType"))'=0 d NotifyAsyncMembers^MIRRORMGR(mirname,$G(params("Name")),1)
+		}
+	} else {
+		if params("MemberType")=0 {
+			s basedir=params("InstanceDirectory")
+			s addrlist=params("AgentAddress")_"|"_params("AgentPort")
+			if params("MirrorAddress")'=params("AgentAddress") {
+				s addrlist=addrlist_","_params("MirrorAddress")_"|"_params("AgentPort")
+			}
+			if (params("ECPAddress")'=params("AgentAddress")) && (params("ECPAddress")'=params("MirrorAddress")) {
+				s addrlist=addrlist_","_params("ECPAddress")_"|"_params("AgentPort")
+			}
+		} else {
+			s addrlist=params("ECPAddress")_"|"_params("MirrorSSPort")
+			s basedir=""
+		}
+		s targguid=params("GUID")
+		s rc=$$RejectApprovalByAddr^MIRRORCTL(mirname,addrlist,targguid,basedir,$LB(name,params("GUID")))
+		if $LG(rc)="OK" {
+			w !,"New member '",name,"' is rejected."
+		} else {
+			w !,"Failed to reject member '",name,"', but it is still removed from pending list. Error=",$LG(rc,2)
+		}
+		d ##class(SYS.Mirror).RemoveFromApprovalList(name,params("GUID"),mirname)
+	}
+	q
+}
+PendingDNUpdates() {
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") w !!,"Managed by Enterprise Manager, operation not allowed." Quit
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	if +$G(^SYS("MIRRORSET")) {
+	   s cnt=$$getAsyncMemberSources(.mirnames)
+	   if 'cnt {
+		   w !,"No Async member sources defined"
+		   quit
+	   }
+	   if cnt=1 {
+		   s mirname=mirnames(1)
+	   } else {
+		   s namelist=","
+		   for i=1:1:cnt s namelist=namelist_mirnames(i)_","
+		   w !,"This is an Async member tracking ",cnt," mirrors"
+		   r !,"Enter name of mirror to check the DN Updates (? for list) ",mirname
+		   s mirname=$zcvt(mirname,"U")
+		   q:mirname=""
+		   while (mirname'="") && ((mirname="?") || (namelist'[(","_mirname_",")))  {
+			   w !,"This node is tracking the following mirrors:"
+			   w !,?5
+			   for i=1:1:cnt w mirnames(i) w:i'=cnt ", " w:$X>75 !,?5 
+	  	       r !,"Enter name of mirror to check the DN Updates? (? for list) ",mirname
+			   s mirname=$zcvt(mirname,"U")
+		   }
+	   }
+	} else {
+	    s mirname=$p($G(^SYS("MIRRORSET")),"^",2)
+	}
+	if mirname="" {
+		quit
+	}
+	s rs=##class(%Library.ResultSet).%New("SYS.Mirror:PendingDNUpdates")
+	d rs.Execute(mirname)
+	while rs.Next() {
+		s mlist(mirname,$i(mlist)) = rs.Data("Name")_" ("_rs.Data("MemberType")_") ("_rs.Data("SSLComputerName")_")"
+		s guid(mirname,rs.Data("Name"))=rs.Data("GUID")
+	}
+	if +$g(mlist)=0 w !,"No pendling DN updates to be authorized." q
+	d PromptForDNUpdates(mirname,.mlist,.guid)
+}
+PromptForDNUpdates(mirname,mlist,guid) {
+	if $SYSTEM.Mirror.IsPrimary() {
+		s Flag=8+512+128
+		s info=""
+		m mmlist=mlist(mirname)
+		s Status=##Class(%Library.Prompt).GetArray("Select Member's DN to be updated or rejected?",.info,.mmlist,,,,Flag)
+	 	i (+Status=0)||(Status=2)||(info="") q
+		s name=$p(info," ("),DN=$p(info," (",3,999),DN=$e(DN,1,*-1)
+		s idx=$o(^SYS("MIRRORSET",mirname,"Member",""),1,info)
+		while idx'="" {
+			if $LG(info)=name quit
+			s idx=$o(^SYS("MIRRORSET",mirname,"Member",idx),1,info)
+		}
+		if idx="" w !,"Member '",name,"' does not exist in local mirror configuration, abort!" quit
+	 	w !!,"Enter 'A' to authorize the new DN of '"_name_"' member."
+	 	w !,"Enter 'R' to reject the DN update request from '"_name_"' member,"
+	 	w !,"     if you intend for the member '",name,"' on ",$p($LG(info,4),"|")
+	 	w !,"     to connect to this primary member, but the Distinguished Name"
+	 	w !,"     is unexpected, verify and correct the SSL configuration on that"
+	 	w !,"     member and connect to the mirror again. Otherwise, edit the"
+	 	w !,"     configuration of that member to remove it from '",mirname,"'."
+	 	w !,"Enter '^' to quit."
+again 	w !,"Select option 'A', 'R' or '^'? " r opt
+		if opt="^" quit
+		s opt=$E($zconvert(opt,"U")) if "AR"'[opt w "    wrong selection..." g again
+		if opt="A" {
+			s props("SSLComputerName")=DN
+			s rc=##class(Config.MapMirrors).Modify(mirname,name,.props)
+			if '(''rc) {
+				w !,"Failed to update member '",name,"'. DN is not updated. Error=",$SYSTEM.Status.GetErrorText(rc)
+			} else {
+				w !,"DN of member '",name,"' is updated."
+				d ##class(SYS.Mirror).RemoveFromApprovalList(name,$g(guid(mirname,name)),mirname)
+			}
+		} else {
+			s rc=$$RejectApproval^MIRRORCTL(mirname,idx,$LB(name,$g(guid(mirname,name))))
+			if $LG(rc)="OK" {
+				w !,"DN of member '",name,"' is rejected."
+			} else {
+				w !,"Failed to reject member '",name,"', but it is still removed from pending list. Error=",$LG(rc,2)
+			}
+			d ##class(SYS.Mirror).RemoveFromApprovalList(name,$g(guid(mirname,name)),mirname)
+		}
+		quit
+	}
+	w !!,"Mirror set name: ",mirname
+	s total=$o(mlist(mirname,""),-1),ss=$s(total>1:"s",1:""),was=$s(total>1:" were",1:" was")
+	f i=1:1:total w !,?5,i,") ",mlist(mirname,i)
+	w !!,"The DN of above failover member",ss,was," changed."
+	w !,"You need to authorize the DN change",ss," so the system could"
+	w !,"connect to the primary member."
+	i $$YN("Do you want to update DN of the member"_ss,"N")="N" {
+		w !,"Aborted" 
+		q
+	}
+	f i=1:1:total {
+		s info=mlist(mirname,i)
+		s name=$p(info," ("),DN=$p(info," (",3,999),DN=$e(DN,1,*-1)
+		s props("SSLComputerName")=DN
+		s rc=##class(Config.MapMirrors).Modify(mirname,name,.props)
+		if '(''rc) {
+			w !,"Failed to update member '",name,"'. DN is not updated. Error=",$SYSTEM.Status.GetErrorText(rc)
+		} else {
+			w !,"DN of member '",name,"' is updated."
+			d ##class(SYS.Mirror).RemoveFromApprovalList(name,$g(guid(mirname,name)),mirname)
+		}
+	}
+}
+VerifySSLCertificates(IsAsync) {
+	if IsAsync {
+	   s cnt=$$getAsyncMemberSources(.mirnames)
+	   if 'cnt {
+		   w !,"No Async member sources defined"
+		   quit
+	   }
+	   if cnt=1 {
+		   s mirname=mirnames(1)
+	   } else {
+		   s namelist=","
+		   for i=1:1:cnt s namelist=namelist_mirnames(i)_","
+		   w !,"This is an Async member tracking ",cnt," mirrors"
+		   r !,"Enter name of mirror to verify SSL certificates? (? for list) ",mirname
+		   s mirname=$zcvt(mirname,"U")
+		   q:mirname=""
+		   while (mirname'="") && ((mirname="?") || (namelist'[(","_mirname_",")))  {
+			   w !,"This node is tracking the following mirrors:"
+			   w !,?5
+			   for i=1:1:cnt w mirnames(i) w:i'=cnt ", " w:$X>75 !,?5 
+	  	       r !,"Enter name of mirror to verify SSL certificates? (? for list) ",mirname
+			   s mirname=$zcvt(mirname,"U")
+		   }
+	   }
+	} else {
+	    s mirname=$p($G(^SYS("MIRRORSET")),"^",2)
+	}
+	if mirname="" {
+		quit
+	}
+	w !,"Verifying Mirror SSL Certificates..."
+	s rc=##class(SYS.MirrorConfiguration).VerifyMirrorSSLCertificates(mirname,1)
+	if (''rc) w !,"There is no error found while verifying mirror SSL certificates." Q
+	w !!,"The following errors are found during mirror SSL certficates verification.",!
+	d $SYSTEM.Status.DisplayError(rc)
+	w !
+	q
+}
+DejournalFilter() {
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") w !!,"Managed by Enterprise Manager, operation not allowed." Quit
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s cnt=$$getAsyncMemberSources(.names)
+	if 'cnt {
+		w !,"No Mirror Set is configured."
+		quit
+	}
+listMirrors ;
+	w !,"Mirror",?20,"Dejournal Filter"
+	w !,"---------------",?20,"-------------------"
+	s namelist=","
+	for i=1:1:cnt {
+		s mirname=names(i)
+		s namelist=namelist_mirname_","
+		s status=$LG(^SYS("MIRRORSET",mirname,"Member",0),12)
+		w !,mirname,?20,status
+	}
+	if (cnt=1) {
+		w !,"Change dejournal filter setting of ",names(1),"? <No> "
+		r resp
+		quit:"Yy"'[$E(resp_"X")
+		s resp=names(1)
+	} else {
+		r !,"Change dejournal filter setting of which member (return to exit)? ",resp
+		quit:resp=""
+		if resp="?" goto listMirrors
+		s mirname=","_$zcvt(resp,"U")_","
+		while (resp'="") && (resp'="?") && (namelist'[mirname) {
+			w !,resp," is not a mirror this instance is tracking"
+			r !,"Change dejournal filter setting of which member (return to exit)? ",resp
+			s mirname=","_$zcvt(resp,"U")_","
+		}
+		quit:resp=""
+		if resp="?" goto listMirrors
+	}
+	s mirname=$zcvt(resp,"U")
+	s ourinfo=$G(^SYS("MIRRORSET",mirname,"Member",0))
+	if ourinfo="" w !,"Mirror is not initialized." Quit
+retry ;
+    s FilterClass=$LG(ourinfo,12)
+	w !,"Current filter class name is ",$s(FilterClass="":"cleared.",1:"'"_FilterClass_"'.")
+	s prompt="Please enter the new filter class name: "
+	s help="Enter dejournal filter class name, or '-' to clear the dejournal filter class name."
+	s Status=##Class(%Library.Prompt).GetString(prompt,.FilterClass,0,512,.help,8)
+	i (+Status=0)!(+Status=2) quit
+	if FilterClass="-" s FilterClass=""
+	if FilterClass'=$LG(ourinfo,12) {
+		if FilterClass'="" {
+			s rc=##class(%Dictionary.CacheClassname).IsValid(FilterClass)
+			if ('rc) {
+				w !,"The class name is invalid."
+				goto retry
+			}
+			Set fobj=##class(%Dictionary.CompiledClass).%OpenId(FilterClass,,.rc)
+			if ('rc) {
+				w !,"Entered class '",FilterClass,"' does not exist or be compiled."
+				r !,"Are you sure you want to use this class for mirror dejournal filter <Y>? ",resp
+				if "Nn"[$E(resp_"X") goto retry
+			}
+		}
+		s mm=##class(Config.MapMirrors).Open(mirname,$LG(ourinfo),,,.rc)
+		if '$IsObject(mm) {
+			w !,"Failed to open Config.MapMirrors("""_mirname_""","""_$LG(ourinfo)_""") - Error = "_$SYSTEM.Status.GetErrorText(rc) 
+			quit
+		}
+		s mm.DejournalFilter = FilterClass
+		s rc=mm.%Save()
+	    if (''rc) {
+		    w !,"Dejournal filter class name for ",mirname," is ",$s(FilterClass="":"cleared.",1:"set to "_FilterClass)
+	    } else {
+		    w !,"Failed to save Config.MapMirrors("""_mirname_""","""_$LG(ourinfo)_""") - Error = "_$SYSTEM.Status.GetErrorText(rc)
+	    }
+	} else {
+		w !,"Dejournal filter is not changed."
+	}
+}
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R

@@ -1,0 +1,165 @@
+ROUTINE SNMPTC [Type=INT]
+SNMPTC    ; SNMP AgentX code for TrakCare ; RFD683  10/12/11
+ ;  
+ ;
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* MONEXT.INC */
+init()	
+	//See if TrakCare is installed and set up the TCMIB and TCNS array for local use
+	//MIB contents is managed by TrakCare development
+ 	Try {
+		//Find a TrakCare installation
+		set tcnspace=""
+		set tcnspace=$order(^%SYS("TrakCare","InstalledNamespace",tcnspace))
+		if tcnspace'="" {
+			//If the configured TrakCare namespace exists
+			if ##class(%SYS.Namespace).Exists(tcnspace) {
+				//Switch to the first registered TrakCare namespace for initialisation
+				set namespace=$zu(5,tcnspace)
+				//If websys.Indicators class exists in configured TrakCare namespace
+				if ##class(%Dictionary.CompiledClass).%Exists($listbuild("websys.Indicators")) {
+					//Call the initialisation method
+					set status=##class(websys.Indicators).SNMPInit(tcnspace,.TCMIB,.TCNS)
+					//Switch back to %SYS
+					set namespace=$zu(5,"%SYS")
+				}
+				else {
+					//Switch back to %SYS
+					set namespace=$zu(5,"%SYS")
+					//Log error
+					do $zu(9,"","SNMP - Invalid TrakCare configuration - websys.Indicators class not in namespace "_tcnspace,(1>0),1)
+					set TrakCareInstalled=0
+					quit
+				}
+			}
+			else {
+				//Log error
+				do $zu(9,"","SNMP - Invalid TrakCare configuration - TrakCare installed namespace "_tcnspace_" configured in ^%SYS does not exist",(1>0),1)
+				set TrakCareInstalled=0
+				quit
+			}
+		}
+		else {
+			set TrakCareInstalled=0
+			quit
+		}
+		//If TrakCare is installed return successful initialization else return 0
+		if ($data(TCNS(1))=11)&(status) {
+			set TrakCareInstalled=1
+		}
+		else {
+			set TrakCareInstalled=0
+		}
+ 	}
+	Catch {
+		//Switch back to %SYS
+		set namespace=$zu(5,"%SYS")					
+		//Log any errors
+		do $zu(9,"","SNMP - Unexpected error initalizing TrakCare SNMP - "_$ze,(1>0),1)
+		set TrakCareInstalled=0
+	}
+	//Return
+	quit TrakCareInstalled
+register()	
+	//Register TrakCare for SNMP (non-Windows)
+	/* This calls back to $$register^SNMP(oid, sub, upper, instance) for each table of the TrakCare MIB
+	oid = the exact OID to register
+	sub = specify a sub-id position for the range (always $$$MIBcol)
+	upper = upper range the specified sub-id (the number of columns in the table)
+	instance = a flag (1) if the oid is a fully qualified instance (no secondary indexes)
+	Note that Cache uses sub/upper to register a specific instance, or more exactly
+	the rows in each table that correspond to a specific instance */
+ 	//Register Trakcare MIB
+	set ok=1
+ 	Try {
+		//See if TrakCare is installed
+		if $order(^%SYS("TrakCare","InstalledNamespace",""))="" {
+			do $zu(9,"","TrakCare is not installed - ^%SYS(TrakCare,InstalledNamespace) is empty",(1>0),1)
+			quit
+		}
+		//Find a TrakCare installation
+		set tcnspace=""
+		set tcnspace=$order(^%SYS("TrakCare","InstalledNamespace",tcnspace))
+		if tcnspace'="" {
+			//Switch to the first registered TrakCare namespace for initialisation
+			set namespace=$zu(5,tcnspace)
+			//Call the registration method
+			set ok=##class(websys.Indicators).SNMPRegister(cacheCfg,.TCMIB)
+			//Switch back to %SYS
+			set namespace=$zu(5,"%SYS")
+		}
+ 	}
+ 	Catch {
+		//Switch back to %SYS
+		set namespace=$zu(5,"%SYS")					
+		//Log any errors
+		do $zu(9,"","Unexpected error registering TrakCare SNMP - "_$ze,(1>0),1) 
+	}
+	quit ok
+next(oid) 
+	//Get 'next' OID in TrakCare MIB tree
+	//oid = Object ID for start of search
+	//return = next TrakCare OID (or "" if end of MIB)
+	//Initialize return
+	set return=$listbuild(128,0)
+	Try {
+		//Find a TrakCare installation
+		set tcnspace=""
+		set tcnspace=$order(^%SYS("TrakCare","InstalledNamespace",tcnspace))
+		if tcnspace'="" {
+			//Switch to the first registered TrakCare namespace for initialisation
+			set namespace=$zu(5,tcnspace)
+			//Call the next method
+			set return=##class(websys.Indicators).SNMPNext(oid,cacheCfg,dbg,.TCMIB,.TCNS)
+			//Switch back to %SYS
+			set namespace=$zu(5,"%SYS")
+		}
+	}
+ 	Catch {
+		//Switch back to %SYS
+		set namespace=$zu(5,"%SYS")					
+		//Log any errors
+		do $zu(9,"","Unexpected error relating to next in TrakCare SNMP - "_$ze,(1>0),1) 
+	}
+	quit return
+fetch(oid) 
+	//Get the data and type for an OID
+	//oid = Object ID to fetch data for 
+	//return = $LIST of (data_type, data)
+	//Initialize return
+	set return=$listbuild(128,0)
+	Try {
+		//Find a TrakCare installation
+		set tcnspace=""
+		set tcnspace=$order(^%SYS("TrakCare","InstalledNamespace",tcnspace))
+		if tcnspace'="" {
+			//Switch to the first registered TrakCare namespace for initialisation
+			set namespace=$zu(5,tcnspace)
+			//Call the fetch method
+			set return=##class(websys.Indicators).SNMPFetch(oid,cacheCfg,dbg,.TCNS)
+			//Switch back to %SYS
+			set namespace=$zu(5,"%SYS")
+		}
+	}
+	Catch {
+		//Switch back to %SYS
+		set namespace=$zu(5,"%SYS")					
+		//Log any errors
+		do $zu(9,"","Unexpected error relating to fetch in TrakCare SNMP - "_$ze,(1>0),1) 
+	}
+	quit return

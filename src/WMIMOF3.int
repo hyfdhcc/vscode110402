@@ -1,0 +1,139 @@
+ROUTINE WMIMOF3 [Type=INT]
+WMIMOF3	; Windows Management Instrumentation MOF defintions ; RFD327 10/16/07
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;
+ ; Class definitions for Ensemble WMI used to generate the MOF file and IscMOF.
+ ; Definitions are stored in $TEXT pieces as described below.
+ ; Do build^WMIMOF to generate both the .MOF and the .h files.
+ ; 
+ ; At the "Schema^WMIMOF" tag is a list of all classes. Those point to the
+ ; Property defintions stored here:
+ ;
+ ; The Property definitions are constructed similarly to the Class definitions in
+ ; ^WMIMOF at the Class name text label. The first line is a Property definition containing:
+ ; 
+ ; ";;Property_type ; Name_of_Property ; Example_Instance ; Property_qualifiers ; Class_Ref".
+ ; 
+ ; The lines after a Property are the Property Description, terminated by a blank line.
+ ; 
+ ; Property Qualifiers are a comma-delimited list of qualifiers in MOF format 
+ ; (copied directly into the MOF). All Properties are 'Read' by default.
+ ; 
+ ; NOTE !! - The order of properties within a class is important for decoding the 
+ ; messages returned to the DLL. The order here is maintained in IscMOF.h and must
+ ; match the order they appear in the messages constructed by ^WMI.
+ ;
+ ; NOTE !! - The DLL needs the config name to Get a specific instance. It assumes that 
+ ; the first property of each class is the key for that class, and also that the configuration 
+ ; name is the first "_" piece in all keys.
+ ;  
+ ; ==========================================================================
+ ; 
+ ;
+Production	; properties of an Ensemble Production
+ ;;string;InstanceID;CINST_NAMESPACE_PRODUCTION;Key;
+ ;;The instance ID for an Ensemble Production. This ID is constructed using the 
+ ;;Cache instance name, the Cache namespace, and the Ensemble Production name. 
+ ;;
+ ;;string;Name;MyProduction;;
+ ;;The name of the Ensemble Production.
+ ;;
+ ;;string;Status;Running;;
+ ;;The current status of the Production. One of the following strings: 
+ ;;Running, Suspended, Troubled, Stopped, or NetworkStopped.
+ ;;
+ ;;datetime;LastStart;;;
+ ;;The date-time this Production was last started.
+ ;;
+ ;;datetime;LastStop;;;
+ ;;The date-time this Production was last stopped.
+ ;;
+ ;;ENDOFMOF
+ ;
+EventLog	; properties for the Ensemble Event Log
+ ;;string;InstanceID;CINST_NAMESPACE_EVENTID;Key;
+ ;;The instance ID for an event from an Ensemble Event Log. This ID is constructed using the 
+ ;;Cache instance name, the Cache namespace, the Ensemble Event Log ID number. 
+ ;;
+ ;;uint32;EventID;;;
+ ;;The unique identifier for the message that comprises this event log entry.
+ ;;
+ ;;datetime;TimeLogged;;;
+ ;;The date and time when this entry was logged.
+ ;;
+ ;;string;Type;Warning;;
+ ;;Indicates the type of entry: Alert, Assert, Error, Info, Status, Trace, or Warning.
+ ;;
+ ;;string;Job;;;
+ ;;The system job that hosted the event.
+ ;;
+ ;;uint32;Session;;;
+ ;;The unique identifier for the session that is (or was) associated with this message. 
+ ;;A session marks the beginning and end of all the activities prompted by a primary request 
+ ;;message from outside Ensemble. The primary request message has an ID value that is identical 
+ ;;to the Session. Several additional messages may be instantiated within Ensemble during the 
+ ;;session, in order to fulfill the primary request. All of these messages share the same Session, 
+ ;;but each has a different ID value.
+ ;;
+ ;;string;Source;;;
+ ;;The configuration item (service, process, or operation) that sent the message. 
+ ;;
+ ;;string;Method;;;
+ ;;The host class method that was in progress when the event was logged. 
+ ;;
+ ;;string;Text;;;
+ ;;The text string associated with the event log entry.
+ ;;
+ ;;ENDOFMOF
+ ;
+LogEvent	; properties for the Ensemble WMI Event
+ ;;string;InstanceID;CINST_NAMESPACE_EVENTID;Key;
+ ;;The instance ID for an event from an Ensemble Event Log. This ID is constructed using the 
+ ;;Cache instance name, the Cache namespace, the Ensemble Event Log ID number. 
+ ;;
+ ;;uint32;EventID;;;
+ ;;The unique identifier for the message that comprises this event log entry.
+ ;;
+ ;;datetime;TimeLogged;;;
+ ;;The date and time when this entry was logged.
+ ;;
+ ;;string;Type;Warning;;
+ ;;Indicates the type of entry: Alert, Assert, Error, Info, Status, Trace, or Warning.
+ ;;
+ ;;string;Job;;;
+ ;;The system job that hosted the event.
+ ;;
+ ;;uint32;Session;;;
+ ;;The unique identifier for the session that is (or was) associated with this message. 
+ ;;A session marks the beginning and end of all the activities prompted by a primary request 
+ ;;message from outside Ensemble. The primary request message has an ID value that is identical 
+ ;;to the Session. Several additional messages may be instantiated within Ensemble during the 
+ ;;session, in order to fulfill the primary request. All of these messages share the same Session, 
+ ;;but each has a different ID value.
+ ;;
+ ;;string;Source;;;
+ ;;The configuration item (service, process, or operation) that sent the message. 
+ ;;
+ ;;string;Method;;;
+ ;;The host class method that was in progress when the event was logged. 
+ ;;
+ ;;string;Text;;;
+ ;;The text string associated with the event log entry.
+ ;;
+ ;;ENDOFMOF
+ ;

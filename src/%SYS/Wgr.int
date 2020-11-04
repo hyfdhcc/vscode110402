@@ -1,0 +1,425 @@
+ROUTINE %SYS.Wgr [Type=INT]
+%SYSWgr ;Global Restore utility; STC2221 7/16/13
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+maskincl(mask,item,ext) New e,i,include,m,m1,m2
+ Set include=0,ext=$ZCVT($g(ext,""),"U")
+ For i=1:1 Set m=$p(mask,";",i),e="" Quit:m=""  Do:m'["'"  Quit:include
+ . Set:m["." m=$$ParseRoutineName^%R(m,.e),e=$s(e="*":"",e="SRC":".INC.MAC.INT.BAS",e="":"",1:"."_e)
+ . If m["*" Do  Quit
+ . . Set m=$p(m,"*")
+ . . If m=$e(item,1,$l(m)),(e=""!(e[ext)) Set include=1 Quit
+ . If m[":" Do  Quit
+ . . Set m1=$p(m,":"),m2=$p(m,":",2)
+ . . If m1=$e(item,1,$l(m1))!(item]m1) Do
+ . . . If m2=$e(item,1,$l(m2))!(m2]item) Do
+ . . . . Set:e=""!(e[ext) include=1
+ . If m=item,(e=""!(e[ext)) Set include=1 Quit
+ If include,mask["'" For i=1:1 Set m=$p(mask,";",i),e="" Quit:m=""  Do:m["'"  Quit:'include
+ . Set m=$e(m,2,*)
+ . Set:m["." m=$$ParseRoutineName^%R(m,.e),e=$s(e="*":"",e="SRC":".INC.MAC.INT.BAS",e="":"",1:"."_e)
+ . If m["*" Do  Quit
+ . . Set m=$p(m,"*")
+ . . If m=$e(item,1,$l(m)),e=""!(e[ext) Set include=0
+ . If m[":" Do  Quit
+ . . Set m1=$p(m,":"),m2=$p(m,":",2)
+ . . If m1=$e(item,1,$l(m1))!(item]m1) Do
+ . . . If m2=$e(item,1,$l(m2))!(m2]item) Do
+ . . . . Set:e=""!(e[ext) include=0 ; SJ bug fix
+ . If m=item,(e=""!(e[ext)) Set include=0 Quit
+ Quit include
+main(dev,fmt,mask,confo,confr,gui,gbls,StatusCode,newname) [IO,dev,fmt,StatusCode,write,blocks,blkcnt,endian,version,systemtype,gbls,newname,RMSMAXLEN,Vmode,var,type,load,rsub,rdata,reads,glreads,odd,bigendian,zu93type,gbl,mask,confo,confr] public {
+ i '$d(newname) s newname=""
+ Do init If %UI="GUI",$$callVisM^%Wprim(1," ")
+ Do:return load Quit return
+init Set return=1,reads=0,vol=1,blkcnt=0,%gifmsg="",ze="",za=""
+ Kill %UI,rmsnames
+ Set %UI=$s(gui=1:"GUI",gui=2:"CSP",1:"CHUI") Set:%UI="CHUI" rmsnames(IO)=""
+ Set:$g(write)="" write=1 Set IsFile=$$IsFile^%Wprim(dev)
+ If fmt=3!(fmt=4)!(fmt=6) Set eot=0 Set:fmt'=3 newgbl=1
+ Do INT^%DIR
+ Quit
+load Set $zt="loaderr"
+ If %UI="CHUI",write Use 0 Write !
+ Set RMSMAXLEN=3641144
+ Set:'$$OpenDev^%Wprim(.dev) return=0
+ If 'return Do abort("Unable to open device!") Quit
+ If ($zversion(1)=1),(dev("parms")["V"),$$IsFile^%Wprim(dev) Do
+ . Close dev Open dev:"U" Use dev Set Vmode=1,dev("parms")="(""U"")"
+ Else  Set Vmode=0
+ If fmt=1 Do
+ . For  Set nextrec=$$read() Quit:nextrec'?1";".e
+ Else  If fmt=3!(fmt=4)!(fmt=6) Do
+ . Do read(),read()
+ Else  If fmt=5 Do
+ . Set a=$$read(),b=$$read(),nextrec=$$read()
+ Else  If fmt=99 Do
+ . Do read(),read(),read(),read() Set (x,nextrec)=$$read()
+ Else  Use dev Use:$ZU(96,18,2,"RAW")!1 0 Open 63 Do rblock(),rblock(),rblock(),rblock():vol=1 If 'return Do abort("Unable to open device!") Quit
+ Set gbl=""
+ If fmt=1!(fmt=5) Goto load1
+ If fmt=3 Goto load2
+ If fmt=4!(fmt=6) Goto load3
+ If fmt=7 Goto load4
+ If fmt=99 Goto load5
+ Set $ze="Unrecognized format"
+ Goto loaderr
+load1 Quit:'return  Do rsub If rsub="" Close dev Quit
+ Do rdata,restore(.load,.cancel)
+ If load,%UI="CHUI",'(confo!confr) Do colout(gbl,10,80)
+ If load=-1!cancel Do abort("") Quit
+ If nextrec="**END**" Set nextrec=""
+ Kill rsub,rdata Goto load1
+load2 Do rsub2 If eot Close dev Quit
+ Do rdata2,restore(.load,.cancel) If load=-1!cancel Do abort("") Quit
+ Kill rsub,rdata Goto load2
+load3 Do rsub2 If eot Close dev Quit
+ Set:(fmt=4)&($e(rsub)="(") rsub=gbl_rsub
+ Do rdata2 Set reads=reads+1
+ If %UI="GUI",reads#500=0 Set saveref=$zr,i=$$callVisM^%Wprim(1,rsub_$s('load:" skipped",1:"")) s:saveref'="" saveref=$d(@saveref) If i Do abort("") Quit
+ If newgbl=1 Do  If load=-1 Do abort("") Quit
+ . If rsub="*",rdata="*" Quit
+ . Set gbl=rsub,newgbl=0,gbl=$p(gbl,"("),load=$$gblchk(gbl,mask,confo,confr)
+ . If %UI="GUI" Set saveref=$zr,cancel=$$callVisM^%Wprim(1,rsub_$s('load:" skipped",1:"")) Set:saveref'="" saveref=$d(@saveref)
+ If rsub="*",rdata'="*" Do abort("Wrong file format!") Quit
+ If rsub="*" Set newgbl=1 Goto load3
+ Set:load @rsub=rdata Goto load3
+load4 Set gloname="",note=""
+load4a Quit:'return  Do rblock() Quit:'return
+ Set line=var
+ If type=9 Close dev Do  Quit
+ . If %UI="CHUI",gloname'="",write Use 0 Write:$x>38 ! Write ?40,blocks," records"
+ . Kill glbloop
+ If type=4 Do  Quit:'return
+ . If %UI="CHUI",gloname'="",write Use 0 Write:$x>38 ! Write ?40,blocks," records"
+ . Set blocks=0,glo=$e(line,2,$a(line)+1),gloname="^"_$e(line,2,$a(line)+1)
+ . Set collate=$a(line,$l(line))
+ . if newname]"" s load=$d(^CacheTempJ($j,newname))
+ . e  s load=$d(^CacheTempJ($j,glo))
+ . Set:load load=$$gblchk(gloname,mask,confo,confr)
+ . Set:load&'$d(@gloname) load=load+1
+ . If load=-1 Do abort("") Quit
+ . If %UI="CHUI",write Use 0 Write !,$p("Skipping,Merging,Creating",",",load+1)," ",gloname
+ . Set glbloop=1
+ . Quit:'load  ; Skip this global
+ . ; $ZU(178) entries are never journaled, so there is no need for NGA089 
+ . ; any more to turn off journaling around the following line.
+ . If collate#128>9,'##class(%Library.Collate).IsValidNumber(collate) Do  Quit
+ . . If %UI="CHUI",write Write " (needs collation #",collate,", not available, skipping)"
+ . . Set StatusCode=$$Error^%apiOBJ(367,gloname,collate)
+ . . Set load=0 Quit
+ . if (newname'=""),'$d(@("^"_newname)) Set x=$ZU(178,$zu(5),newname,collate) ; Use correct collation
+ . If (newname=""),'$d(@gloname) Set x=$ZU(178,$zu(5),$p(gloname,"^",2),collate) ; Use correct collation
+ . If newname]"" Set x=$zu(93,6,$zu(5),$p(gloname,"^",2),$Case(version,2:1,3:$Case(endian,0:7,1:8)),0,collate,newname)
+ . Else  Set x=$zu(93,6,$zu(5),$p(gloname,"^",2),$Case(version,2:1,3:$Case(endian,0:7,1:8)),0,collate)
+ If load Do
+ . If type=6 Set node=line Quit
+ . i type=7,$ZBITGET($ZVERSION(0),1) s unibin=1
+ . e  s unibin=0
+ . If type=7!(type=11)!(type=12),$g(node)'="" s:newname]"" node=newname_$c(0)_$e(node,$f(node,$c(0)),$l(node)) Set x=$zu(93,4,node,line,collate,$s(unibin!(type=12):$s(odd:zu93type-1,1:zu93type),1:0)) Quit  
+ . If type=5,gloname'="" Set x=$zu(93,7,line)
+ If 'load set skipflag=$g(skipflag)+1 if '(skipflag#500) h .1
+ If type=7!(type=5)!(type=11)!(type=12) Do
+ . Set blocks=blocks+1,blkcnt=blkcnt+1
+ . If %UI="GUI",((blocks=1)!(blocks#20=0)),$$callVisM^%Wprim(1,gloname_" - "_blocks_" blocks "_$s('load:"skipped",1:"written")) Do abort("")
+ If type=8 Set dummy=$$volend Do:'dummy abort(dummy) ; cont. 
+ Goto load4a
+load5 Quit:'return  Do rsub If rsub="" Close dev Quit
+ Do rdata,restore(.load,.cancel)
+ If load,%UI="CHUI",'(confo!confr) Do colout(gbl,10,80)
+ If load=-1!cancel Do abort("") Quit
+ If nextrec="***DONE***" Do  ;done with global
+ . Do rdata,rdata If nextrec="***DONE***" Set nextrec="" Quit  ;done with file
+ . Do rdata,rdata,rdata ;skip over global header records
+ Kill rsub,rdata Goto load5
+loaderr Set $zt="" Close dev
+ If $g(dtmflag) Set return=1 Quit
+ If $g(ze)'="" Set return=1 Quit
+ Set return=0 Set:$g(ze)="" ze=$ze,%gifmsg=$ze,$ze=""
+ Do abort(ze) Quit
+rsub Set rsub="" Quit:nextrec=""
+rsub1 If nextrec?1";".e Set nextrec=$$read() Quit:'return  Goto rsub1
+ If nextrec'?1"^".e Set nextrec=$$read() Quit:'return  Goto rsub1
+ Set rsub=nextrec,nextrec=$$read() Quit:'return
+rsub1A If nextrec?1"&".e,'$$refck(rsub) Set rsub=rsub_$c(10)_$e(nextrec,2,*),nextrec=$$read() Quit:'return  g rsub1A
+ Quit
+rsub2 Set rsub=$$read() Set:rsub?1"**".e eot=1 Quit
+rdata Set rdata=nextrec,nextrec=$$read() Quit:'return
+rdata1 If nextrec?1"&".e Set rdata=rdata_$c(10)_$e(nextrec,2,*),nextrec=$$read() Quit:'return  Goto rdata1
+ Quit
+rdata2 Set rdata=$$read() Quit
+}
+read(len) [fmt,dev,Vmode,dtmflag,rsub,rdata,confo,confr,gbl,eof,write] Private { 
+ If fmt'=7 Set $zt="readerr"
+read2 Use dev
+ If Vmode Do
+ . Read x#2 Set len=$zwa(x) If 'len Set x="" Quit
+ . Read x#len
+ Else  If $g(len) Read x#len
+ Else  Read x
+ If $ZEOF,$ZUTIL(96,0,42)
+ Quit x 
+readerr Set dtmflg=0,$zt=""
+ ;If $ze["<MAGTAPE>",'$$volend() Quit:fmt'=$$$goISMBLK "" Quit
+ ;If $ze["<MAGTAPE>" Goto:fmt=$$$goISMBLK rblock Goto read2
+ If ((fmt=1)!(fmt=5))&$d(rsub)&$d(rdata) Do
+ . If $d(rsub)&$d(rdata) Do  ; load last data and out - no error
+ . . Do restore(.load,.cancel)
+ . . If %UI="CHUI",'(confo!confr) Do colout(gbl,10,80)
+ . . Set saveflag=1
+ If $ze["ENDOF",fmt=1,$g(saveflag) Set dtmflag=1 Quit ""
+ If $ze["ENDOF",fmt=5,%UI="CHUI" s eof=1 d abort($ze) Quit ""
+ Set return=0 ; end of restoring 
+ Set za=$za,ze=$ze,$ze=""
+ If %UI="CHUI" Do  Use dev
+ . If fmt'=7,$Get(write) Use 0 Write !,"Global Restore aborted",!,"readerr^%SYS.Wgr: $ze="_ze_" $za="_za
+ . Else  Set %gifmsg=$Get(%gifmsg)_"readerr^%SYS.Wgr: $ze="_ze_" $za="_za
+ Else  If %UI="CSP" Do abort("Unable to read file.  Please check format.") If 1
+ Else  Use dev Set dummy=$$MsgBox^%CDSrv("Unable to read file.  Please check format.",16,"Global Restore Error")
+ Quit:fmt'=7 "" Quit
+}  
+rblock() [glbloop,StatusCode,return,dev,var,dtmflag,fmt,rsub,rdata,confo,confr,gbl,eof,write,Vmode,type,odd,bigendian,zu93type] Private {
+ Set $zt="readerr",length=$$read(2)				; KMK488+
+ Set length=$a(length,2)*256+$a(length)
+ if length=65535 Do  
+ . set length=$$read(4)
+ . set length=(($a(length,4)*256+$a(length,3))*256+$a(length,2))*256+$a(length) ; KMK488-
+ Set type=$$read(1),count=$$read(1)
+ Set type=$a(type),count=$a(count)
+ If type>12!(type<4&$g(glbloop)) Do abort("Invalid block type ("_type_")") Quit
+ s bigendian=$zu(40,0,0)
+ s zu93type=0 ; Not a binary or compact string
+ i type=7,$ZBITGET($ZVERSION(0),1) s unibin=1
+ e  s unibin=0
+ If type=11!(type=12)!(unibin) Do  Quit:unierr
+ . Set unierr=0
+ . If '$ZBITGET($ZVERSION(0),1) i type'=7 Do  Quit
+ . . Set umsg="This global contains UNICODE data"
+ . . If %UI="CHUI",write Use 0 Write !,"***",umsg
+ . . If %UI="CSP" Set StatusCode=$$Error^%apiOBJ(5001,umsg)
+ . . Else  If $$MsgBox^%CDSrv(umsg,16,"Global Restore Error")
+ . . Do abort("") Set return=0,unierr=1
+ . i type=7 s zu93type=2 ; binary (8 bit) string
+ . e  s zu93type=4       ; compact string
+ . Set var=$$readu(length\2),odd=0 
+ . i (type=12!(type=7)),length#2 d  
+ . . s odd=1 u dev
+ . . s rmode=$zu(96,18,2,"RAW") r *extra s var=var_$s(bigendian:$c(extra*256),1:$c(extra))
+ . . s rmode=$zu(96,18,2,rmode)
+ Else  Set var=$s(length:$$read(length),1:"")
+ Quit
+readerr Set dtmflg=0,$zt=""
+ ;If $ze["<MAGTAPE>",'$$volend() Quit:fmt'=$$$goISMBLK "" Quit
+ ;If $ze["<MAGTAPE>" Goto:fmt=$$$goISMBLK rblock Goto read2
+ If ((fmt=1)!(fmt=5))&$d(rsub)&$d(rdata) Do
+ . If $d(rsub)&$d(rdata) Do  ; load last data and out - no error
+ . . Do restore(.load,.cancel)
+ . . If %UI="CHUI",'(confo!confr) Do colout(gbl,10,80)
+ . . Set saveflag=1
+ If $ze["ENDOF",fmt=1,$g(saveflag) Set dtmflag=1 Quit ""
+ If $ze["ENDOF",fmt=5,%UI="CHUI" s eof=1 d abort($ze) Quit ""
+ Set return=0 ; end of restoring 
+ Set za=$za,ze=$ze,$ze=""
+ If %UI="CHUI" Do  Use dev
+ . If fmt'=7,$Get(write) Use 0 Write !,"Global Restore aborted",!,"readerr^%SYS.Wgr: $ze="_ze_" $za="_za
+ . Else  Set %gifmsg=$Get(%gifmsg)_"readerr^%SYS.Wgr: $ze="_ze_" $za="_za
+ Else  If %UI="CSP" Do abort("Unable to read file.  Please check format.") If 1
+ Else  Use dev Set dummy=$$MsgBox^%CDSrv("Unable to read file.  Please check format.",16,"Global Restore Error")
+ Quit:fmt'=7 "" Quit
+}
+volend() [vol,bufstr,IsFile,StatusCode,dev,vol,blocks,POP,IO,rmsnames,gui] {
+ Set $zt="",vol=vol+1,bufstr="" Quit $s(IsFile:$$volfile(),1:$$voltape())
+}
+volfile() [StatusCode,dev,vol,blocks,POP,IO,rmsnames,gui] Private {
+ Set m="File has continuation marker. GUI now can not work with continuation file."
+ If %UI="CSP" Set StatusCode=$$Error^%apiOBJ(5001,m) Quit m
+ Quit:(%UI="GUI") m
+ Set sdev=dev,sdev("parms")=dev("parms")
+ Set $zt="" Use 0 Write !?5,"End of file '",dev,"' (volume ",$j(vol-1,3),"): "
+ Write $j($fn(blocks,","),6)," records."
+ Close dev Set POP=0
+ Quit:vol>255 "Maximum volume number (255) exceeded"
+ Set:'$d(IO("F")) IO="" ; IO("F") contains auto-continue code, if any
+volfil1 Do NEXT^%IO Quit:POP "No next file"
+ If $d(rmsnames(IO)) Do  Goto volfil1:'$d(IO("F"))
+ . Use 0 If $d(IO("F")) Write !!,"The file ",IO," has already been used, and will now be overwritten" Quit
+ . Write !!,"That file has already been used. Please select another file name"
+ . Write !,"or enter STOP to quit",!
+ Set rmsnames(IO)="",dev=IO_":"_dev("parms")
+ If $$header(.dev,fmt,gui)=0 Kill rmsnames(IO) Close IO Goto volfil1
+ Quit 1
+}
+voltape() [dev,fmt,gui] private {
+ Set userst=0,sdev=dev,sdev("parms")=dev("parms")
+voltap1 Do eot^%SYS.Wgs(,.sdev) Quit:userst "User termination during requested tape mount"
+ Set dev=sdev Use dev Set dev=dev_":"_dev("parms")
+ Goto:$$header(.dev,fmt,gui)=0 voltap1 Quit 1
+}
+restore(load,cancel) [rsub,rdata,gbl,mask,confo,confr,glreads,reads,load] Private {
+ Set cancel=0,z=$p(rsub,"(")
+ If z'="^",z'=$g(gbl) Set glreads=0,gbl=z,load=$$gblchk(gbl,mask,confo,confr)
+ Set reads=reads+1,glreads=glreads+1
+ If (glreads=1),%UI="GUI" Set saveref=$zr,cancel=$$callVisM^%Wprim(1,rsub_$s('load:" skipped",1:"")) Set:saveref'="" saveref=$d(@saveref)
+ If (reads#500=0),%UI="GUI" Set saveref=$zr,cancel=$$callVisM^%Wprim(1,rsub_$s('load:" skipped",1:"")) Set:saveref'="" saveref=$d(@saveref)
+ If load {
+    If $e(z,2)="%",$e($zu(5),1,2)="^^" {
+       s zu39=$zu(39) d $zu(39,$zu(5))
+       s @rsub=rdata
+       d $zu(39,zu39)
+    } else {
+       s @rsub=rdata
+    }
+ }    
+ Quit
+} 
+header(dev,fmt,gui,StatusCode) [dev,fmt,var,type,eof,vol,write,endian,version,Vmode] Public  {
+ Set $zt="headErr" Set:gui=2 StatusCode=1
+ Kill %UI Set %UI=$s(gui=1:"GUI",gui=2:"CSP",1:"CHUI") Set:$g(vol)="" vol=1 Set hdr=""
+ If '$$OpenDev^%Wprim(.dev) Do abort("Can't open device") Quit 0
+ If ($zversion(1)=1),(dev("parms")["V"),$$IsFile^%Wprim(dev) Do
+ . Close dev Open dev:"U" Use dev Set Vmode=1,dev("parms")="(""U"")"
+ Else  Set Vmode=0
+ If fmt=1 Do hd1
+ Else  If (fmt=3)!(fmt=4)!(fmt=5)!(fmt=99)!(fmt=6) Do hd6
+ Else  If fmt=7 Do hd5
+ Quit:$g(vol)>1 hdr Close dev Quit hdr
+headErr Set $zt="" Set:%UI="CSP" StatusCode=$$Error^%apiOBJ(5001,$ze) Close dev Quit "0"
+hd1 Set x=$$read() If x?1";".e Set hdr=hdr_$e(x,2,*)_$c(13,10) Goto hd1
+ If $e(x)'="^" Set hdr="0"
+ Quit
+hd6 Set hdr=$$read_$c(13,10)_$$read_$c(13,10)
+ Set rec1=$$read If $e(rec1)'="^" Set hdr="0"
+ Quit
+hd5 ;
+ Use dev Use:$ZU(96,18,2,"RAW")!1 0
+ Open 63 Do rblock() Set head0=var
+ If type'=0!(head0'="~%GOF~") Set hdr=0 Quit
+ Do rblock() Set head1=var
+ If type'=1 Set hdr=0 Do abort("<"_type_"> is not a valid header") Quit
+ If $e(head1,4,7)'=$c(10,13,10,13) Do  Set hdr=0 Do abort(msg) Quit
+ . Set msg="This file has undergone DOS/UNIX/MAC conversion and has"_$c(13,10)
+ . Set msg=msg_"scrambled linefeeds and carriage returns."_$c(13,10)
+ . Set msg=msg_"Ensure that file transfers (if any) are done in BINARY mode."
+ If $a(head1,8)'=128 Do  Set hdr=0 Do abort(msg) Quit
+ . Set msg="This file has had all '8-bit' characters truncated to"_$c(13,10)
+ . Set msg=msg_"7-bits -- this file is UNREADABLE as is."_$c(13,10)
+ . Set msg=msg_"Ensure that file transfers (if any) are done in BINARY mode."
+ If $a(head1,15)'=1,$a(head1,15)'=2 Do abort("Expecting system type of "_1_" or "_2) Quit
+ If $a(head1,2)'=$g(vol) Set POP=0 Do  Quit
+ . Set hdr=0 Do abort("Device "_dev_" is not volume/file "_vol)
+ Set version=$a(head1),endian=$a(head1,3)
+ If (version'=2) && (version'=3) Do abort("Expected %GOF version of "_2_" or "_3_" but got "_version) Quit
+ If (endian'=0) && (endian '=1) Do abort("Expected endian-descriptor of 0 or 1, but got "_endian) Quit
+ Set wdate=$e(head1,9,11),wtime=$e(head1,12,14)
+ Do rblock() Set descript=var ; comment
+ If type'=2 Do  Quit
+ . Set hdr=0 Do abort("<"_type_"> read, comment header (2) expected")
+ Set hdr="File written on "_$$datetime^%GIF(wdate,wtime)
+ If descript'="" Set hdr=hdr_$c(13,10,13,10)_"Description: "_descript
+ Quit:$g(vol)>1  Do rblock() Set glolist=var
+ If type'=3 Do  Quit
+ . Set hdr=0 Do abort("<"_type_"> read, global name header (3) expected")
+ Set hdr=hdr_$c(22,35,1),xglo=glolist,globals=0
+ For  Quit:xglo=""  Do
+ . Set len=$a(xglo),glo=$e(xglo,2,len+1),xglo=$e(xglo,len+2,*)
+ . Set globals=globals+1,hdr=hdr_glo_$c(19,94,1)
+ If 'globals Set hdr=0 Do abort("There are no globals to input!") Quit
+ Quit
+}
+filefmt(dev) Public {
+ Set $zt="fmterr"
+ Open dev:("UR":1024):2 If '$t Quit ""
+ Use dev Use:$ZU(96,18,2,"RAW")!1 0
+ Use dev Read x
+ If ($zbitget($zversion(0),1)=1),$length(x)#2=0,$ziswide($zwpack(x))=0 Set x=$zwpack(x)
+ If x["~Format=" s fmt=$p($p(x,"~Format=",2),"~")
+ Else  If x["~%GOF~" s fmt=7
+ Else  If x["~%ROMF" s fmt="Object"
+fmterr Set $zt="" Close dev
+ Quit $g(fmt)
+}
+abort(errmsg) [return,fmt,write,StatusCode,rsub,rdata] Public {
+ Set return=0
+ If %UI="GUI" Do
+ . If errmsg'="" Do
+ . . Set msg="Global Restore aborted."_$c(13,10)_errmsg_$c(13,10)_"subs="_$g(rsub,"?")_$c(13,10)_"data="_$g(rdata,"?")
+ . . Do MsgBox^%CDSrv(msg,16,"Global Restore Error")
+ Else  If %UI="CSP" Do  Quit
+ . Set msg="Global Restore aborted."_$c(13,10)_errmsg_$c(13,10)_"subs="_$g(rsub,"?")_$c(13,10)_"data="_$g(rdata,"?")
+ . Set StatusCode=$$Error^%apiOBJ(5001,msg)
+ Else  Use 0 Write:$Get(write) !,"*** ERROR: "_errmsg Set %gifmsg=$s(fmt=7&write:"",1:errmsg)
+ Quit
+}
+filecharset(dev) Private {
+ Set $zt="chserr"
+ Open dev:("UR":1024):2 If '$t Quit ""
+ Use dev If $ZU(96,18,2,"RAW")
+ Read x Close dev
+ Quit $p($p(x,"~CharSet=",2),"~")
+chserr Set $zt="" Close dev Quit ""
+}
+readu(len) [dev,bigendian] private {
+ Set $zt=""
+ Use dev 
+ Set rmode=$ZU(96,18,2,$s(bigendian:"UnicodeBig",1:"UnicodeLittle"))
+ Read:$g(len) x#len i $ZEOF,$ZUTIL(96,0,42)
+ Read:'$g(len) x i $ZEOF,$ZUTIL(96,0,42)
+ Set rmode=$ZU(96,18,2,rmode) 
+ Quit x
+}
+gblchk(gbl,mask,confo,confr) [dev,yesAll,gbls,load,mask,confo,confr] private {
+ Set load=0
+ If mask'="" Do  Quit:'load 0
+ . For i=1:1 Set m=$p(mask,$c(13,10),i) Quit:m=""  Do  Quit:load
+ . . Set %=$p(m,"*") Set:%=$e(gbl,1,$l(%)) load=1
+ Set msg=""
+ If confo,$d(@gbl) Set msg=gbl_" exists. Do you wish to replace?"
+ Else  Set:confr msg="Do you wish to restore "_gbl_"?"
+ If msg'="" Do
+ . If %UI="CHUI" Use 0 Set load=($$YN("Okay to restore "_gbl,"N")="Y")
+ . Else  Do
+ . . If $g(yesAll,0) Set load=1 Quit
+ . . Set a=$$confirm^%Wprim(msg,"_frmUtility!txtConfirm") 
+ . . If a=-1 Set yesAll=1,load=1 Quit
+ . . Set load=$s(a=6:1,a=7:0,2:-1)
+ . Use dev
+ Else  Set load=1
+ If load||(mask="") Set gbls(gbl)="" If mask="" Quit 0
+ Quit load         
+}
+YN(P,D,t) [POP] private {
+ Set P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ Set D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ For  Write !,P_"? "_D Read:t R:t Read:'t R Do  Quit:"^YN"[R  ;timed or non-timed read
+ . Set X=R,R=$TR($E(R_D_"?"),"yn","YN") Write:"^YN"'[R "  enter Yes or No, please"
+ Set POP=(R="^") Write $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Quit R
+} 
+refck(x) Private {
+ Set p=0,q=0
+ For i=1:1:$l(x) Set c=$e(x,i) Do
+ . If c="""" Set q=1-q Quit
+ . If 'q,c="(" Set p=p+1 Quit
+ . If 'q,c=")" Set p=p-1 Quit
+ Quit 'p
+} 
+colout(str,wide,rm) [write,rsub,gblpr] Private {
+ Quit:'write  Use 0 Set z=$p(rsub,"(") Quit:(z=$g(gblpr))!(z="^")  Set gblpr=z
+ If '$X Write str Quit
+ If ($X\wide*wide+wide+$L(str))>rm Write !,str Quit
+ Write ?($X\wide*wide+wide),str
+ Quit
+} 

@@ -1,0 +1,42 @@
+ROUTINE ECPSvrW [Type=INT]
+ECPSvrW(sys,sc) ; ECP Server Write-side daemon. ; GK464
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+	Set $ZT="err"  ; GK362
+	Set TcpDev=$ZU(53)
+	Use TcpDev
+	s clientipaddr=$s($zbitget($zversion(0)_$c(0,0,0,0),42):$SYSTEM.TCPDevice.PeerAddr(0),1:$zu(54,2,$zu(111,0)))
+	Do $ZU(67,15,clientipaddr,$J) ;ipname
+	Do $ZU(67,12,clientipaddr,$J) ;clientname
+	If $System.ECP.Debug()\$zh("2000")#2=1 Do $zu(9,"","ECPSvrW: Started: Roles="_$roles_" username="_$username_" login_roles="_$lg($System.Security.Users.ExportSecurityContext(),2)) ;; GK464
+	Do $System.Security.Users.ImportSecurityContext(sc) ;; GK464
+	If $System.ECP.Debug()\$zh("2000")#2=1 Do $zu(9,"","ECPSvrW: New/imported Roles="_$roles_" username="_$username_" login_roles="_$lg($System.Security.Users.ExportSecurityContext(),2)) ;; GK464
+	Do $System.ECP.StartServerWriteDmn(sys)
+	Close TcpDev 
+	Set $ZT=""
+	Quit
+err ; GK362+
+	Set $ZT="fatalerror"
+	d $zu(9,"","ECPSvrW: error @ ("_$zu(56,2)_") $ZE("_$ZE_") dmn("_$g(clientipaddr)_") sys("_sys_")",(1  /* Warning */>0),1  /* Warning */)
+	q 0
+fatalerror
+	Set $ZT="fatalexit"
+	Do $zu(9,"","Fatal Error "_$ZE_" in ECPSvrW at "_$ZU(56,2)_" -- Exiting ECPSvrW",(1  /* Warning */>0),1  /* Warning */)
+	do BACK^%ETN
+fatalexit
+	Set $ZT=""
+	h ; GK362-

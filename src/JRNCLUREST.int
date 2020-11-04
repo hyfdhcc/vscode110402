@@ -1,0 +1,192 @@
+ROUTINE JRNCLUREST [Type=INT]
+JRNCLUREST ;Cluster Restore Journal from a File, ; HYY1544 04/02/2010
+ ;
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ ; BITWISE.INC, DPB139 07/09/93
+ ;
+ ; This module contains the code that performs the actual journal
+ ; restore for a cluster. It uses the information returned by
+ ; CLUSETUP^JRNRESTD (invoked from SETUP^JRNRESTO). More code is
+ ; in JRNCLUREST2.MAC because this module was getting too large
+ ; for the desktop editor.
+restore ;
+ ; This entry point takes all the data gathered so far and actually
+ ; performs the cluster journal restore.
+ ;
+ ; Inputs are the outputs of SETUP^JRNRESTO and CLUSETUP^JRNRESTD
+ ;    notresto - if defined and non-zero means abort the restore
+ ;    numclu = # of cluster members in addition to primary system
+ ;    minseq = lowest sequence # to be restored
+ ;    maxseq = highest sequence # to be restored
+ ;    maxclumstart = highest cluster mstart value. maxseq applies
+ ;        only to journal files that have this clumstart value
+ ;    clumember(id)=djfirst^djlast^prefix
+ ;    clumember(id,n)=<journal file name>^1st seq^last seq^clustartcnt
+ ;       where id = integer running from 0 to numclu
+ ;       n runs from 0 to the # of journal files
+ ;       clustartcnt is the cluster restart counter
+ ;    For each journal file we think we need to restore we set:
+ ;    clumember(id,"files",(<shortname>_"J") =
+ ;           <fullfilename>^
+ ;           <prev jrnfile read from the journal file>^
+ ;           <journal offset of the 1st journal record>^
+ ;           <cluster sequence # of 1st journal offset>^
+ ;           <timestamp on block containing 1st journal record>^
+ ;           <journal offset of the last journal record>^
+ ;           <cluster sequence # of last journal offset>^
+ ;           <timestamp on block containing last journal record>^
+ ;           <clumstarttime in $H format>
+ ;    As this routine restores journal files it removes entries from 
+ ;    clumember(id,"files") and addes them to clumember(id,"rest") 
+ ;    clumember(id,"rest") is then used for transation rollback.
+ ;   
+ ; Outputs:
+ ;     transopen() and badtrans() arrays containing any unterminated
+ ;     transactions we encountered.
+ ;
+ n jrnseq,clumstart,index,id,tstamp,restmaxseq,seq,chan,line,adr,n
+ n erchan,a,modify,type,recseq,progmsg,totbytes,sumbytes,flag
+ ;
+ s chan=-1,totbytes=0,sumbytes=0
+ i checkerr s $zt="resterr"
+ w !
+ ;
+ ; Build the clumstart(tstamp,id) array so we can group the journal
+ ; files by the cluster instantiation that they come from. If there
+ ; are multiple journal files from a single "tstamp" we only record
+ ; the first one. Don't record journal files with tstamp=0 in
+ ; the clumstart() array. These will be handled as we come across
+ ; them during the restore.
+ ;
+ f id=0:1:numclu d
+ . s index=""
+ . f  s index=$O(clumember(id,"files",index)) q:index=""  d
+ . . s tstamp=$P(clumember(id,"files",index),"^",9)
+ . . i tstamp,'$D(clumstart(tstamp,id)) s clumstart(tstamp,id)=index
+ ;
+ ; Now build the jrnseq(seq,id) array for the set of journal files
+ ; from the 1st timestamp to be restored.
+ s tstamp=$O(clumstart(""))
+ d cluopen(tstamp)
+ ;
+ ; If a minimum sequence # was specified for this restore then
+ ; go through the jrnseq() array and adjust the beginning offsets
+ ; for the journal files to exclude records below the minimum.
+ ;
+ s flag=0
+ d:minseq cluadjstartpos^JRNRESTB  ;In JRNRESTB for performance reasons
+ ;
+ s restmaxseq=0
+ f  q:tstamp=""  d  
+ . ; Before restoring the files from the cluster mstart, deal with 
+ . ; the case where we have a journal file from a system that was not
+ . ; part of the cluster. Do this before removing clumstart(tstamp)
+ . ; for the cluster we're about to restore.
+ . d nonclurestore^JRNCLUREST2
+ . k clumstart(tstamp)  ; remove this now
+ . ;
+ . ; Before starting this cluster restore check to see whether this
+ . ; is the last cluster mstart we're restoring. If so then we need
+ . ; to see if we have to apply maxseq as the upper limit of
+ . ; journal records to restore. We let clurestore handle this but
+ . ; we have to tell it to impose the limit.
+ . i '$D(clumstart) s restmaxseq=maxseq
+ . ; 
+ . ; restore the contents of jrnseq() including any subsequent 
+ . ; clumember() entries with this tstamp. clurestore leaves the 
+ . ; journal files closed. As journal files are restored they are
+ . ; removed from clumember(id,"files") and stored in clumember(id,
+ . ; "rest)
+ . d clurestore^JRNRESTB(restmaxseq)
+ . s tstamp=$O(clumstart(""))
+ . i tstamp'="" d cluopen(tstamp)
+ ; 
+ ; Before we can finish, check to see whether there's anything
+ ; left in the clumember(id,"files") list. If so, these are probably
+ ; journal files with a timestamp of 0 which come after the last
+ ; cluster mstart.
+ d nonclurestore^JRNCLUREST2
+ ;
+ i $g(shrid,-1)'<0,$zu(78,49,shrid)<0 ztrap "SYNC"
+ i '$d(sortcnt) w !!,"[journal operation completed]"
+ q        
+ ;
+resterr ;
+ ; chan if non-negative is an open journal file
+ ; jrnseq() may also have open journal files
+ ; chan may or may not be in jrnseq
+ ; 
+ S $ZT=""
+ u 0
+ i '$$askabort^JRNRESTB() s $ze="" q
+ i chan'<0 s chan=$zu(78,7,chan),chan=-1
+ i $d(jrnseq) f  s seq=$O(jrnseq("")) q:seq=""  d
+ . f  s erchan=$O(jrnseq(seq,"")) q:erchan=""  d
+ . . i chan'=erchan,$zu(78,7,erchan)
+ . . k jrnseq(seq,erchan)
+ ztrap $ze
+ ;
+cluopen(tstamp) ;
+ ; Open the journal files and setup the jrnseq() array for the
+ ; next cluster timestamp
+ ;
+ ; Inputs:
+ ;     clumember() array
+ ;     clumstart() array
+ ; Outputs:
+ ;     jrnseq(seq,chan)=offset^$$$JRNTYPE(offset)^id^index
+ ;     chan = $ZU(78) file number for opened file (or -1 if not open)
+ ;
+ n id,index,seq,adr,clu,%jrnfile,line,type
+ ;
+ q:tstamp=""  ; nothing to do
+ k jrnseq 
+ s id="" f  s id=$O(clumstart(tstamp,id)) q:id=""  d
+ . s index=clumstart(tstamp,id)
+ . s line=clumember(id,"files",index)
+ . s %jrnfile=$P(line,"^",1)
+ . d open^JRNRESTO g:adr=-1 openerr  ; shouldn't happen
+ . s chan=clu
+ . ; open uses %jrnfile and returns the channel in "clu"
+ . s jrnfile=$e(index,1,$L(index)-1)_","_id
+ . s adr=$P(line,"^",3)
+ . ; Make sure we start with a record to be dejournaled.
+ . s progmsg="Skipping empty journal file: "
+ . s adr=$zu(78,18,adr) d nxtcluupd^JRNRESTB
+ . i type'=-1 d
+ . . s seq=$zu(78,11,adr)
+ . . s jrnseq(seq,chan)=adr_"^"_type_"^"_id_"^"_index
+ q
+ ;
+openerr ;
+ ; Failed to open a journal file. Shouldn't happen because we've
+ ; already opened them all once when we were building the clumember()
+ ; array. Something must have happened to them. This routine should
+ ; be executed (eg. either via a GOTO or a DO so that if we quit from
+ ; it we skip that journal file and go onto the next one).
+ ;
+ s $zt="jrnfileE^JRNRESTB"
+ s resterr="ERROR OPENING JOURNAL FILE "_%jrnfile
+ ztrap "OPEN"
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R

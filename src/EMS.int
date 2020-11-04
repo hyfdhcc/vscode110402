@@ -1,0 +1,197 @@
+ROUTINE EMS [Type=INT]
+EMS ; Enterprise Manager Managed Instance
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+	Quit
+Unlock
+	New instance,ns,error,sc,success
+	Set instance=##class(EMS.Instance).Open()
+	If instance="" Write !,"This instance is not configured as a Managed Instance." Quit
+	Set ns=instance.Services.GetAt("Namespace")
+	If ns="" Write !,"This instance is not managed for the Namespace Service." Quit
+	If 'ns.SystemLock Write !,"The Namespace SystemLock flag is already clear." Quit
+	Write !,"The Namespace SystemLock is set, which indicates that a Namespace change was"
+	Write !,"ready to be activated but the system never got confirmation from the other"
+	Write !,"Instances in the Enterprise Manager Group.",!
+	Write !,"YOU SHOULD MAKE SURE THIS INSTANCE IS UP-TO-DATE WITH THE ENTERPRISE MANAGER"
+	Write !,"GROUP BEFORE ALLOWING DATABASE ACCESS.",!
+	Write !,"This will now clear the Namespace SystemLock flag and allow normal startup.",!
+	If $$YN("Do you want to proceed","N")="N" {
+		Write !,"Not unlocked."
+		Quit
+	}
+	Set ns.SystemLock=0 Set sc=ns.%Save(0)
+	If ('sc) Write !,"Unlock failed: ",$system.Status.DisplayError(sc) Quit
+	Quit
+	;
+RESET(noPrompt) public {
+	If ##class(Config.Databases).Exists("CACHEEMS"),##class(Config.Namespaces).Exists("EMS") {
+		If $get(noPrompt) {
+			Write !,"Error: RESET for managed Instance called on Enterprise Manager instance."
+			Quit $$Error^%apiOBJ(1500,"RESET for managed Instance called on Enterprise Manager.")
+		} Else {
+			Write !,"RESET for managed Instance called on apparent Enterprise Manager instance."
+			If $$YN("Are you SURE you want to do this, which will clear the EM security setup?","N")="N" {
+				Write !,"Not reset"
+				Quit 1
+			}
+		}
+	}
+	If '$get(noPrompt) {
+		Write !,"This will reset the Managed Instance."
+		If $$YN("Do you want to reset","N")="N" {
+			Write !,"Not reset"
+			Quit 1
+		}
+	}
+ 	Set sc=##class(EMS.LifeCycle).Uninstall()
+	If (''sc) {
+ 		Set sc=##class(EMS.LifeCycle).Install()
+ 		If (''sc) {
+		 	Write !,"Reset as a Managed Instance"
+		} Else {
+			Write "Install failed: ",!
+		 	Write $system.Status.DisplayError(sc),!,!
+	 	}
+ 	} Else {
+		Write "Uninstall failed: ",!
+	 	Write $system.Status.DisplayError(sc),!,!
+ 	}
+ 	Quit sc
+}
+YN(P,D) public {
+	Set P=$get(P),D=$extract($get(D)_"?")
+	Set D=$select("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+	For {
+		Write !,P_"? "_D
+		Read R
+		Set X=R
+		Set R=$tr($extract(R_D_"?"),"yn","YN")
+ 		If "^YN"[R Quit
+	}
+	Write $extract($select(R="N":"No",R="Y":"Yes",1:""),$length(X)+1,3) 
+	Quit R
+}
+LOAD(loadCS=1,loadSMP=0) [ e ] public { ;
+	If '$system.Security.Check("%Admin_Manage","USE"),
+	   '$system.Security.Check("%Admin_Secure","USE") {
+		   Write !,"EMS operation requires %Admin_Manage:U or %Admin_Secure resource."
+		   Quit
+	}
+	Set sources=$get(^%SYS("SourceRoot","%SYS"),$get(^%SYS("SourceRoot"),"u:/"))
+	Write !,"Loading from: ",sources
+	If "\/"'[$e(sources,$l(sources)) s sources=sources_"/"
+	Set StartTime=$zh
+	Write !,"   Importing localize/Errors.xml"
+	Do Import^%occMsgXML(sources_"databases/sys/localize/Errors.xml")
+	Do GenerateInclude^%occMsgXML("%occErrors",1)
+	Write !
+	Set dups=$$GenerateObjectErrors^%occMsgXML()
+	If dups'="" {
+		Write "ERROR: Duplicate error name(s): "_dups,!
+	}
+	Write !,"   Importing localize/SystemMessages.xml"
+	Do Import^%occMsgXML(sources_"databases/sys/localize/SystemMessages.xml")
+	Kill e
+	Write "Load %ems.inc ...",!
+	Do $system.OBJ.Load(sources_"databases/sys/inc/_ems.inc","ck",.e)
+	Do $system.OBJ.Load(sources_"databases/sys/inc/_syDataMove.inc","ck",.e)
+	Write "Load ^EMS ...",!
+	Do $system.OBJ.Load(sources_"databases/sys/rtn/sysconfig/ems.mac","ck",.e)
+	Write !,"Load EMS classes ..."
+	Do $system.OBJ.LoadDir(sources_"databases/sys/cls/EMS","ck",.e,1)
+	w !,"Load %SYS.EMS and %SYS.Audit ..."
+	Do $system.OBJ.Load(sources_"databases/sys/cls/SYS/EMS.xml","ck",.e)
+	Do $system.OBJ.Load(sources_"databases/sys/cls/SYS/Audit.xml","ck",.e)
+	Do $system.OBJ.Load(sources_"databases/sys/cls/SYS/EManager.xml","ck",.e)
+	If loadCS {
+		w !,"Load Config classes ..."
+		Do $system.OBJ.LoadDir(sources_"databases/sys/cls/config","ck",.e,1)
+		w !,"Load Security classes ..."
+		Do $system.OBJ.LoadDir(sources_"databases/sys/cls/security","ck",.e,1)
+		w !,"Load DataMove classes ..."
+		Do $system.OBJ.LoadDir(sources_"databases/sys/cls/DataMove","ck",.e,1)
+	}
+	w !,"Load EMS UI ..."
+	Do $system.OBJ.Load(sources_"databases/sys/cls/CSP/UI/Portal/EMS.xml","ck",.e)
+	Do $system.OBJ.Load(sources_"databases/sys/cls/CSP/UI/Portal/EMSNotifications.xml","ck",.e)
+	Do $system.OBJ.Load(sources_"databases/sys/cls/CSP/UI/Portal/EMSNotificationNew.xml","ck",.e)
+	Do $system.OBJ.Load(sources_"databases/sys/cls/CSP/UI/Portal/Dialog/EMS.xml","ck",.e)
+	if loadSMP {
+		w !,"Load SMP classes ..."
+		Do $system.OBJ.LoadDir(sources_"databases/sys/cls/ZEN/Portal","ck",.e,1)
+		Do $system.OBJ.Load(sources_"databases/sys/cls/CSP/Portal/standardDialog.xml","ck",.e)
+		Do $system.OBJ.LoadDir(sources_"databases/sys/cls/CSP/UI","ck",.e,1)
+	}
+	Write !!,"EMS load completed in "_($zh-StartTime)_" seconds with "_$case($get(e,0),0:"no",:e)_" errors."
+	If $get(e,0) > 0  w !,"""zw e"" to see errors."
+	Quit
+}
+DEV
+	Write !!,"This will initialize a Cache instance for Enterprise Manager development."
+	Write !,"It will create the EMS database and namespace, and load the EM Manager package,"
+	Write !,"based on the Perforce pointer in ^%SYS(""SourceRoot"")."
+	Write !!,"Do you want to proceed? <Y>" Read yn Set:yn="" yn="Y"
+	If "Yy"'[ yn quit
+	Set EMSDir=##class(%Library.File).SubDirectoryName($zu(12),"ems",1)
+	If ##class(%Library.File).Exists(EMSDir_"CACHE.DAT") w !,"Database in "_EMSDir_" already exists." q
+	If ##class(Config.Databases).Exists("CACHEEMS") w !,"Database "_"CACHEEMS"_" already exists." q
+	Write !!,"Creating EM Database and Namespace ...",!
+	If '##class(%Library.File).DirectoryExists(EMSDir) {
+		If '##Class(%Library.File).CreateDirectory(EMSDir) w !,"Unable to create directory "_EMSDir q
+ 	}
+	Set sc=##class(SYS.Database).CreateDatabase(EMSDir,,,,"%DB_CACHEEMS",3)
+	If ('sc) w !,"Error creating database: " zw sc q
+	Set sc=##class(Config.Databases).Create("CACHEEMS",EMSDir)
+	If ('sc) w !,"Error creating database Config: " zw sc q
+	If ##class(Config.Namespaces).Exists("EMS",.namespaceObj) w !,"Namespace "_"EMS"_" already exists." q
+	Kill Properties
+	Set Properties("Globals")="CACHEEMS"
+	Set sc=##class(Config.Namespaces).Create("EMS",.Properties )
+	If ('sc) w !,"Error creating Namespace: " zw sc q
+	Set perforce=^%SYS("SourceRoot")
+	zn "EMS"
+	do $system.OBJ.Load(perforce_"databases\ems\build\build.rtn","ck")
+	do dev^build
+	do RESET^EMS(1)
+	Set ^ISC.EMS("ManagerSMP")=1
+	Q
+	;	
+log(file,level,soap,marker,maxfilesize,daystokeep) public {
+	if $get(file)="" set file=$zu(12)_"sys.log"
+	do ##class(%Library.File).Delete(file)
+	Set ^ISC.EMS("Log")=$get(level,4),^ISC.EMS("LogFile")=file
+	Set ^ISC.EMS("LogFileMaxSize")=$get(maxfilesize,50)
+	Set ^ISC.EMS("LogFileDaysToKeep")=$get(daystokeep,7)
+	set soap=$get(soap,"ios")
+	If soap'="" {
+		set ^ISCSOAP("Log")=soap
+		set ^ISCSOAP("LogFile")=file
+	} else {
+		kill ^ISCSOAP("Log"),^ISCSOAP("LogFile")
+	}
+	set ^ISC.EMS("LogMarker")=$get(marker,"##")
+	quit
+}
+klog() public {
+	Kill ^ISC.EMS("Log"),^ISC.EMS("LogFile"),^ISC.EMS("LogMarker"),^ISC.EMS("LogFileMaxSize"),^ISC.EMS("LogFileDaysToKeep")
+	kill ^ISCSOAP("Log")
+	kill ^ISCSOAP("LogFile")
+	Kill ^ISC.EMS("LogFileMaxSize")
+	Kill ^ISC.EMS("LogFileDaysToKeep")
+	quit
+}

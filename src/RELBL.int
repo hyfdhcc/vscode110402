@@ -1,0 +1,79 @@
+ROUTINE RELBL [Type=INT]
+RELBL(DIR) ; Set into MUMPS.DAT label block ;JO2141 4/11/08
+ ;SET ANYREPLICATION BITS IN LABEL BLOCK
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;
+ ;  Returns: OLDIMPL=value of ANYIMPL bit prior to changing [always 0],
+ ;           NEWIMPL=value of ANYIMPL bit after changing [always 0],
+ ;           OLDREPL=value of ANYREPL bit prior to changing,
+ ;           NEWREPL=value of ANYREPL bit after changing.
+ ;
+ ;  Called By: 'GIMPLICI','REPL'
+ ;
+ ;=====================================================================
+ ;
+1 N GLO,J S NEWIMPL=0,NEWREPL=0,GLO=""
+GO n NSP s NSP="^^"_DIR
+ F J=0:0 S GLO=$O(^[NSP]SYSDIR("GLOBAL",GLO)) Q:GLO=""  D GLOBAL
+ ;
+ ;READ LABEL BLOCK INTO VIEW-BUFFER, CHANGE ANYREPL,NOMOUNT BITS, AND WRITE OUT LABEL BLOCK
+ O 63:"^^"_DIR V 1 D GFS^ST N nomnt,repl,offset,size,oldmnt
+ S nomnt=%ST("GFNOMOUNT"),repl=%ST("GFREPL")
+ I $V(%ST("GFOFFSET")+%ST("gfformat"),0,%ST("szformat")) S offset=%ST("GFOFFSET")+%ST("gfattrib"),size=%ST("szattrib")
+ E  S offset=%ST("GFOFFSET")+%ST("gfuse"),size=%ST("szuse")
+ S V=$V(offset,0,size)
+ S OLDIMPL=0,OLDREPL=V\repl#2,oldmnt=V\nomnt#2,NOMOUNT=NEWREPL
+ S V=V-(OLDREPL*repl)-(oldmnt*nomnt)
+ S V=V+(NEWREPL*repl)+(NOMOUNT*nomnt)
+ V offset:0:size:V V -1 C 63
+K q   ; MRP Could remove K
+ ;
+GLOBAL n NSP s NSP="^^"_DIR
+ I 'NEWREPL,$D(^[NSP]SYSDIR("GLOBAL",GLO,"REPL")),$$DEFINE(GLO) S NEWREPL=1
+ Q
+ ;
+ ; $$DEFINE(GLO) = 1 if the global is actually defined, otherwise = 0
+ ; and kill ^SYSDIR("GLOBAL",GLO,"REPL").  Will = 0 if someone kills
+ ; an entire replicated global.
+ ;
+DEFINE(GLO) S $ZT="DEFERR" 
+ n NSP s NSP="^^"_DIR
+ I @("'$D(^[NSP]"_GLO_")") K ^[NSP]SYSDIR("GLOBAL",GLO,"REPL") Q 0  ;GLOBAL UN
+DEFINED 
+ Q 1
+DEFERR Q 1 ;IF IN DOUBT, LEAVE ALONE.
+ ;
+ ; ENTRY POINT.  $$ANYIMPL(DIR) = value of ANYIMPL, always returns 0
+ ;
+ANYIMPL(DIR) 
+ Q 0
+ ;
+ ; ENTRY POINT.  $$ANYREPL(DIR) = value of ANYREPL, 1 iff at least
+ ; one global in DIR is replicated.
+ ;
+ANYREPL(DIR) 
+ Q $$ANYBIT(DIR,"GFREPL")
+REPLQ S $ZT="" C 63 Q ANYREPL
+ ;
+ANYBIT(DIR,BIT) ;
+ if BIT="GFIMPL" Q 0  ; never set (doesn't exist)
+ N X S $ZT="ANYQ",X="" O 63:"^^"_DIR S $ZT="" V 1 D GFS^ST
+ I $V(%ST("GFOFFSET")+%ST("gfformat"),0,%ST("szformat")) S X=$V(%ST("GFOFFSET")+%ST("gfattrib"),0,%ST("szattrib"))
+ E  S X=$V(%ST("GFOFFSET")+%ST("gfuse"),0,%ST("szuse"))
+ S X=X\%ST(BIT)#2
+ANYQ S $ZT="" C 63 Q X

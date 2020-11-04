@@ -1,0 +1,207 @@
+ROUTINE GLOSTAT [Type=INT]
+GLOSTAT ;Global Statistics - JLC1894 07/21/15
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ New
+ Set client=$D(^NET(2,$P($ZU(86),"*",2),"DV","ECPNET1"))
+ Set dskbase=$ZU(40,2,86) ;zero -> no detailed disk stats
+ Set jrnbase=$ZU(40,2,94),xjwrites=0,xjents=1
+ Set ecpcstat=$ZU(40,2,148)
+ask Read !,"Should detailed statistics be displayed for each block type? No =>",ans
+ Set ans=$TR($e(ans),"ynq","YNQ") Goto quit:ans="Q"
+ If "YN"'[ans Write !?5,"Please enter Yes, No or Quit",! Goto ask
+ Set detail=ans="Y" Write ! Do static
+choice Read !,"Continue (c), zero statistics (z), timed stats (# sec > 0), quit?  ",act
+ If "Qq"'[act Goto action
+quit Write ! Quit
+action If "Cc"[act Do static Goto choice
+ If "Zz"[act W ! Do zero Goto choice
+ If act?1n.n,act>0 Do timing Goto choice
+ Write " ???" Goto choice
+static Write ! Do get,show(0)
+ Quit
+zero ;
+	Do $ZU(190,6,0) ; zeroes glostat and diskstat counters
+	View xjwrites*4+jrnbase:-2:4:0,xjents*4+jrnbase:-2:4:0
+	Quit
+Zero ;
+ new
+ Set jrnbase=$ZU(40,2,94),xjwrites=0,xjents=1
+ d zero
+ q
+timing Write !!,"Counts per Second for ",act," Seconds...",!! Do get Hang act
+ new gstats,dstats
+ s gstats=$ZU(190,6,1) ; glostat data
+ if dskbase {
+    s dstats=$ZU(190,6,2) ; diskstats data
+    Set logrd=counts(6)
+    For i=0:1:20 Set counts(i)=$p(gstats,",",i+1)-counts(i)/act
+    For i=0:1:20 s dsknow(i)=$P(dstats,",",i+1)
+    For i=0:3:18 s dsknow(i)=dsknow(i)+dsknow(i+1)
+    For i=0:1:20 s dskcounts(i)=dsknow(i)-dskcounts(i)/act
+    Set cntnow(6)=0 
+    For i=0:3:18 Set cntnow(6)=cntnow(6)+dsknow(i)
+    Set blqnow=0 For i=2:3:20 Set blqnow=blqnow+dsknow(i)
+    Set counts(6)=cntnow(6)-logrd/act
+    Set blq=blqnow-blq/act
+ } else {
+    For i=0:1:20 Set counts(i)=$p(gstats,",",i+1)-counts(i)/act
+ }
+ Set jrnwrites=$V(xjwrites*4+jrnbase,-2,4)-jrnwrites/act
+ Set jrnents=$V(xjents*4+jrnbase,-2,4)-jrnents/act
+ Set ecpreads=$V(4+ecpcstat,-2,4)-ecpreads/act
+ Set ecpnotmods=$V(0+ecpcstat,-2,4)-ecpnotmods/act
+ Do show(1)
+ Quit
+get ;
+ n stats
+ s stats=$ZU(190,6,1) ;glostats
+ For i=0:1:20 Set counts(i)=$P(stats,",",i+1)
+ If dskbase {
+   s stats=$ZU(190,6,2) ;diskstats
+   For i=0:1:20 Set dskcounts(i)=$P(stats,",",i+1)
+   For i=0:3:18 Set dskcounts(i)=dskcounts(i)+dskcounts(i+1)
+   Set counts(6)=0 
+   For i=0:3:18 Set counts(6)=counts(6)+dskcounts(i)
+   Set blq=0 For i=2:3:20 Set blq=blq+dskcounts(i)
+ }
+ Set jrnwrites=$V(xjwrites*4+jrnbase,-2,4),jrnents=$V(xjents*4+jrnbase,-2,4)
+ Set ecpreads=$V(4+ecpcstat,-2,4)
+ Set ecpnotmods=$V(0+ecpcstat,-2,4)
+ Quit
+show(dec) New bl,blrl,blrr,blrt,effl,effr,i,indl,indr,indt,n,u1,u2,long,xlf
+ ;32-bit platforms and timed stats need less space
+ Set bl=$S(dec!($ZU(40,0,76)=4):15,1:26)
+ Set counts(21)=counts(0)+counts(1)
+ Set counts(22)=counts(2)+counts(3)
+ Set counts(23)=counts(4)+counts(5)
+ Set counts(24)=counts(9)+counts(10)
+ Set blrl=counts(7),blrr=ecpreads,blrt=blrl+blrr
+ Set long=0
+ For i=0:1:24 s:counts(i)>long long=counts(i)
+ For i=jrnwrites,jrnents,blrr,blrt s:i>long long=i
+ If $l(long)<12 s bl=15
+ For i=0:1:24 Set l(i)=$$justify(counts(i),bl,dec)
+ Set jents=$$justify(jrnents,bl,dec),jwrites=$$justify(jrnwrites,bl,dec)
+ If dskbase Set blq=$$justify(blq,bl,dec) For i=0:1:20 Set dcount(i)=$$justify(dskcounts(i),bl,dec)
+ Set n=counts(7)+counts(8)
+ Set effl=$S(n:$$justify(counts(4)/n,bl,dec),1:$J("no i/o",bl))
+ Set n=ecpnotmods
+ Set effr=$S(n:$J(counts(5)-counts(10)/n,bl,0),1:$J("no gets",bl))
+ Set blrl=$$justify(blrl,bl,dec),blrr=$$justify(blrr,bl,dec),blrt=$$justify(blrt,bl,dec)
+ Set indt=79-bl,indr=indt-bl-2,indl=indr-bl-2 Set xlf=$s(client&(bl>15):1,1:0)
+ Set u1="",u2="",$P(u1,"-",15)="",$P(u2,"-",10)=""
+ Write "Statistics" Write:dec " (per second)"
+ If xlf {
+	 Write:client ?indl,$J("Local",bl-$l("Statistics")),?indr,$J("Remote",bl) Write ?indt,$J("Total",bl),!
+	 Write u1 Write:client ?indl,$J(u2,bl-$l(u1)),?indr,$J(u2,bl) Write ?indt,$J(u2,bl),!
+ } Else {
+	 Write:client ?indl,$J("Local",bl),?indr,$J("Remote",bl) Write ?indt,$J("Total",bl),!
+	 Write u1 Write:client ?indl,$J(u2,bl),?indr,$J(u2,bl) Write ?indt,$J(u2,bl),!
+ }
+ Write "Global references (all):" w:xlf ! Write:client ?indl,l(4),?indr,l(5) Write ?indt,l(23),!
+ Write "Global update references:" w:xlf ! Write:client ?indl,l(9),?indr,l(10) Write ?indt,l(24),!
+ Write "Private global references:" w:xlf ! Write:client ?indl,l(19),?indr,$J("n/a",bl) Write ?indt,l(19),!
+ Write "Private update references:" w:xlf ! Write:client ?indl,l(20),?indr,$J("n/a",bl) Write ?indt,l(20),!
+ Write "Routine calls:" w:xlf ! Write:client ?indl,l(0),?indr,l(1) Write ?indt,l(21),!
+ Write "Routine buffer loads & saves:" w:xlf ! Write:client ?indl,l(2),?indr,l(3) Write ?indt,l(22),!
+ Write "Routine commands:" w:xlf ! Write ?indt,l(11),!
+ Write "Routine not cached:" w:xlf ! Write ?indt,l(13),!
+ If 'detail {
+   Write "Logical block requests:" w:xlf ! Write:client ?indl,l(6),?indr,$J("n/a",bl) Write ?indt,l(6),!
+   Write "Block reads:" w:xlf ! Write:client ?indl,blrl,?indr,blrr Write ?indt,blrt,!
+   Write "Block writes:" w:xlf ! Write:client ?indl,l(8),?indr,$J("n/a",bl)  Write ?indt,l(8),!
+   Write "WIJ writes:" w:xlf ! Write:client ?indl,l(12),?indr,$J("n/a",bl)  Write ?indt,l(12),!
+ }
+ Write "Cache Efficiency:" w:xlf ! Write:client ?indl,effl,?indr,effr,! Write:'client ?indt,effl,!
+ Write "Journal Entries:" w:xlf ! Write:client ?indl,jents,?indr,$J("n/a",bl) Write ?indt,jents,!
+ Write "Journal Block Writes:" w:xlf ! Write:client ?indl,jwrites,?indr,$J("n/a",bl) Write ?indt,jwrites,!
+ If detail {
+   Set rc=$s(bl>15:38,1:30)
+   Write "Logical Block Requests",?rc,"Data:      ",dcount(9),!
+   Write ?3,"Dir:  ",dcount(0),?rc,"Upper ptr: ",dcount(3),!
+   Write ?3,"BData:",dcount(12),?rc,"Bottom ptr:",dcount(6),!
+   Write ?3,"Map:  ",dcount(15),?rc,"Other:     ",dcount(18)
+   Write:bl>15 ! Write ?indt,l(6),!
+   Write "Physical Block Reads",?rc,"Data:      ",dcount(10),!
+   Write ?3,"Dir:  ",dcount(1),?rc,"Upper ptr: ",dcount(4),!
+   Write ?3,"BData:",dcount(13),?rc,"Bottom ptr:",dcount(7),!
+   Write ?3,"Map:  ",dcount(16),?rc,"Other:     ",dcount(19)
+   Write:bl>15 ! Write ?indt,l(7),!
+   Write "Database Physical Block Writes",?indt,l(8),!
+   Write "WIJ Physical Block Writes",?indt,l(12),!
+   Write "Blocks Queued to be Written",?rc,"Data:      ",dcount(11),!
+   Write ?3,"Dir:  ",dcount(2),?rc,"Upper ptr: ",dcount(5),!
+   Write ?3,"BData:",dcount(14),?rc,"Bottom ptr:",dcount(8),!
+   Write ?3,"Map:  ",dcount(17),?rc,"Other:     ",dcount(20)
+   Write:bl>15 ! Write ?indt,blq,!
+   Write "Object cache",!
+   Write ?3,"Hit:  ",l(14),!
+   Write ?3,"Miss: ",l(15),!
+   Write ?3,"Load: ",l(16),!
+   Write "Object references (OREFs)",!
+   Write ?3,"Newed:",l(17),!
+   Write ?3,"Del:  ",l(18),!
+ }
+ Quit
+ ;
+justify(num,len,dec) Quit $S(num:$J($FN(num,",",dec),len),1:$J("0",len))
+GUIstat() ;
+ New
+ Set dskbase=$ZU(40,2,86),jrnbase=$ZU(40,2,94),xjwrites=0,xjents=1
+ Set ecpcstat=$ZU(40,2,148)
+ Do get
+ Set counts(21)=counts(0)+counts(1)
+ Set counts(22)=counts(2)+counts(3)
+ Set counts(23)=counts(4)+counts(5)
+ Set counts(24)=counts(9)+counts(10)
+ Set blrl=counts(7),blrr=$V(4+$ZU(40,2,148),-2,4),blrt=blrl+blrr
+ ;
+ Set del1="^",del2=";"
+ Set ret=counts(4)_del2_counts(5)_del2_counts(23)_del1
+ Set ret=ret_counts(9)_del2_counts(10)_del2_counts(24)_del1
+ Set ret=ret_counts(0)_del2_counts(1)_del2_counts(21)_del1
+ Set ret=ret_counts(2)_del2_counts(3)_del2_counts(22)_del1
+ Set ret=ret_counts(6)_del2_"---"_del2_counts(6)_del1
+ Set ret=ret_blrl_del2_blrr_del2_blrt_del1
+ Set ret=ret_counts(8)_del2_"---"_del2_counts(8)_del1
+ Set ret=ret_counts(12)_del2_"---"_del2_counts(12)_del1
+ Set ret=ret_jrnents_del2_"---"_del2_jrnents_del1
+ Set ret=ret_jrnwrites_del2_"---"_del2_jrnwrites_del1
+ Set ret=ret_counts(11)_del2_"---"_del2_counts(11)_del1
+ Set ret=ret_counts(13)_del2_"---"_del2_counts(13)_del1
+ Quit ret
+glostat(sel) ;
+ n (sel)
+ Set lines=0,d=$$del2^%Wprim
+ Set base=$ZU(40,2,47)
+ Set maxpid=$v($zu(40,2,118),-2,4)
+ Set sw10='$SYSTEM.Util.CheckSwitch(10),sw10pid=""
+ For i=1:1:maxpid-1 Set pid=$View($View($ZU(40,2,47)+((i\$zu(40,0,102))*$zu(40,0,25)),-2,$zu(40,0,25))+((i#$zu(40,0,102))*$s($ZBITGET($ZVERSION(0),40):$zu(40,28,79)*2,1:4)),-2,4) If pid Set lines=lines+$p($$getinfo^JOBEXAM(i,pid,-1,sw10),d,6)
+ Set data=$$GUIstat,sel=$g(sel,2)+1
+ Set ret=$P($h,",",2)_";9,1"                 ;time of day in seconds;# metrics,# special metrics (cache efficiency)
+ Set ret=ret_";10238;"_$p($p(data,"^",4),";",sel)            ;routine loads and save
+ Set ret=ret_";10244;"_$p($p(data,"^",1),";",sel)            ;global references
+ Set ret=ret_";10247;"_$p($p(data,"^",2),";",sel)            ;global sets and kills
+ Set ret=ret_";10239;"_$p($p(data,"^",5),";",sel)            ;logical block reads
+ Set ret=ret_";10240;"_$p($p(data,"^",6),";",sel)            ;physical block reads
+ Set ret=ret_";10241;"_$p($p(data,"^",7),";",sel)            ;block writes
+ Set ret=ret_";10242;"_$p($p(data,"^",8),";",sel)              ;journal entries
+ Set ret=ret_";10243;"_$p($p(data,"^",9),";",sel)             ;journal writes
+ Set ret=ret_";2063;"_$p(lines_";---;"_lines,";",sel)          ;+each pid
+ Set ret=ret_";10155;5|6|2"             ;cache efficiency (6+7/3)
+ Quit ret        

@@ -1,0 +1,6 @@
+ROUTINE badroutine
+badroutine ; a simple error
+start ;
+	set a=1
+	set b=2
+	write c

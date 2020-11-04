@@ -1,0 +1,15 @@
+ROUTINE loopend
+loopend ; loop through last names
+ read "Search for: ",sub
+ set ln = $order( ^PersonI("Name", sub), -1)
+ for {
+     set ln = $order( ^PersonI("Name", ln) )
+     quit:( $extract(ln, 1, $length(sub)) '= sub )
+     write !, ln
+ }
+     
+ 
+ 
+ 
+ 
+ 

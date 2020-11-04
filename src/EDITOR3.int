@@ -1,0 +1,45 @@
+ROUTINE EDITOR3 [Type=INT]
+EDITOR3 ;(PTR,PK) Edit comments (nullified for M/VX)
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;Comments are stored in
+ ;      ^COMMENT(Routine Name, tag, offset, line number)
+ ;                      ^(0) = # comment lines for this tag
+ ;Presently, only offset 0 is permissible.
+ ;The sequential line number of the tag is variable %I.
+ ;M/VX includes comments in source code, so this can be bypassed
+A F %I=1:1 S %A=$T(%+%I),%T=$P(%A," "),%B=$P(%A," ;;",2,256) Q:%T="END"  I $L(%T) S ^%(%T)=%B
+ G ^EDITOR4
+% ;
+300 ;;S %NX=999,%A=$E(%X,2,*),%T=$S(%A]"":%A,$D(%TG):$P(%TG,"+"),$D(%CTG):%CTG,1:"") X ^%("TAG") Q:%L=""!%E  S %NX=$S($D(^COMMENT($T(+0),%T,0)):320,1:308),%CTG=%T W:%X=";" %T S:'$D(%TG) %TG=%T I $P(%TG,"+")'=%T S %TG=%T
+ ;SEE IF THERE IS A LINE WITH WHICH TO ASSOCIATE THE TAG.
+305 ;;S %I=^COMMENT($T(+0),%CTG,0,0)+1,%NX=310
+307 ;;S %I=+%I,%L=^COMMENT($T(+0),%CTG,0,%I),%NX=328 X $S(XY]"":^%("EDXY"),1:^%("ED"))
+308 ;;S %I=1,%NX=310
+310 ;;S %NX=1 R !,"Insert Comment: ",%L Q:%L=""  S ^COMMENT($T(+0),%CTG,0,0)=%I,^(%I)=%L,%I=%I+1,%NX=310
+ ;INSERT FIRST LINE OF TAG COMMENT.
+320 ;;S %A=^COMMENT($T(+0),%CTG,0,0),%NX=321 W ! F %I=1:1:%A W "  ",%I,") ",^(%I),!
+321 ;;W "Comment no.(" W:%A-1 "1-" W %A_" or I): " R %I S %NX=$S(%I="":1,%I="I"!(%A+1=%I):305,%I'?.N:999,%I<1:999,%I>%A:999,1:307)
+322 ;;R " R ",%R S %NX=$S(%R="":328,%R="END":326,%L[%R:324,%R["...":330,1:327)
+324 ;;S %NX=322 R " W ",%W S %L=$P(%L,%R)_%W_$P(%L,%R,2,999)
+326 ;;S %NX=322 R " W ",%W S %L=%L_%W
+327 ;;S %NX=322 W " ???"
+328 ;;S %A=^COMMENT($T(+0),%CTG,0,0),%NX=$S(%L]"":321,1:329) S ^COMMENT($T(+0),%CTG,0,%I)=%L W:%L]""&(XY="") !,"  "_%I_")  "_%L W !
+329 ;;S %NX=321 W " (deleted)",! I $D(^COMMENT($T(+0),%CTG,0,%I)) F %I=%I:1:%A S:%I<%A ^(%I)=^(%I+1) I %I=%A K ^(%A) S %A=%A-1,^(0)=%A I '%A K ^COMMENT($T(+0),%CTG,0) S %NX=1
+330 ;;S %E=$P(%R,"..."),%B=$P(%R,"...",2,999),%J=$F(%L,%E),%C=%J-1-$L(%E),%D=$S(%B="":999,1:$F(%L,%B,%J)),%NX=$S(%C<0!(%D<0)&(%R'="..."):327,1:331)
+331 ;;S %NX=322 R " W ",%W S %L=$E(%L,0,%C)_%W_$E(%L,%D,*) K %E
+END ;;

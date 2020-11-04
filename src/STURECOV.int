@@ -1,0 +1,1205 @@
+ROUTINE STURECOV [Type=INT]
+STURECOV ;Recover from errors during startup;;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/sysconfig/sturecov.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+	; This routine is invoked by the user when Cache' is in single user
+	; mode (enter with -B) due to errors during startup. These errors
+	; are recorded in ^%SYS("STARTUPERROR"). The error type is in
+	; ^%SYS("STARTUPERROR","TYP")=<type> and after that the data is
+	; facility dependent. The purpose of this routine is to help the user
+	; recover from the errors and get Cache' back up. It is difficult
+	; to communicate with the user during cstart (because there may not
+	; be a user, Cache' can be started during system boot) so this routine
+	; give us a place to have a dialogue.
+	i $zu(80,40)||$$HasMismatch() { ;is startup aborted on MISMATCH.WIJ?
+		d $zu(80,40,1)
+		do $zu(163,(2**31))  ;let us use a large partition
+		d $zu(68,69,1) ;enable logn string if the job started with -B
+		s errtype="MISMATCHWIJ" ;used in jrnstu
+		g MISMATCHWIJ
+	}
+	n BLOCKFLG,errtype,POP
+	S BLOCKFLG=$V($ZU(40,2,93),-2,1)
+	k transactive,transpending
+	if 'BLOCKFLG {
+		do getTransactionStatus^JRNROLL(.transactive,.transpending)
+		if transactive || transpending {
+			w !,"Transaction rollback is pending or in progress"
+			if $$YN("Do you wish to run Manage^JRNROLL","Y")="Y" {
+				do Manage^JRNROLL()
+				quit
+			}
+		}
+	}
+	if 'BLOCKFLG d  q:$$YN("Do you want to continue ","N")="N"
+	. w !,"Logins are not disabled. This routine is designed to run"
+	. w !,"when Cache' is in single user mode due to a problem running"
+	. w !,"the STU startup routine."
+	if 'BLOCKFLG d
+	. w !,"Warning: Misuse of this utility can harm your system"
+	. do $ZU(9,"","STURECOV running while the system is not in single-user mode")
+	do $zu(163,(2**31))  ;let us use a large partition
+	d $zu(68,69,1)
+TOP ;
+	s errtype=$G(^%SYS("STARTUPERROR","type"))
+	if (errtype="") && ('$D(transactive)) {
+		do getTransactionStatus^JRNROLL(.transactive,.transpending)
+		if transactive || transpending {
+			w !,"Transaction rollback is pending or in progress"
+			if $$YN("Do you wish to run Manage^JRNROLL","Y")="Y" {
+				do Manage^JRNROLL()
+				quit
+			}
+		}
+	}
+	if errtype="" d  q:$$YN("Do you want to continue ","N")="N"
+	. w !,"There is no record of any errors during the prior startup"
+	. w !,"This could be because there was a problem writing the data"
+	. w !,"to disk or because the system failed to start for some other"
+	. w "reason."
+1	;
+	if $G(errtype)="" d  g:POP TOP
+	. do ASKSET("Enter error type (? for list)",.errtype,1,"*")
+	. q:POP
+	. s errtype=$zcvt(errtype,"u")
+	goto:errtype="JRN" JRNERR
+	goto:errtype="CLUJRN" JRNERR
+	goto:errtype="DBENCKEY" JRNERR
+	goto:errtype="ECPTRANS" JRNERR
+	goto:errtype="MISMATCHWIJ" MISMATCHWIJ
+	if errtype="?" do  s errtype="" g 1
+	. w !,"Supported error types are:"
+	. w !,?5,"JRN - Journal restore and transaction rollback"
+	. w !,?5,"CLUJRN - Cluster journal restore and transaction rollback"
+	. w !,?5,"DBENCKEY - Database encryption key activation"
+	. w !,?5,"ECPTRANS - ECP Transaction processing"
+	. w !,?5,"MISMATCHWIJ - Mismatched WIJ blocks"
+	. w !
+	w !,"Unrecognized error type: ",errtype
+	s errtype=""
+	g 1
+JRNERR ;
+	; Come here for journaling and transaction rollback errors
+	; during startup for both standalone and clustered systems.
+	; 	
+	n maxopt,resp,opt,iswin
+	s iswin=($zversion(1)=2)
+jrnmenu	;
+	w !!,$s(errtype="JRN":"Journal",errtype="DBENCKEY":"Database encryption key activation",errtype="ECPTRANS":"ECP Transaction Processing",1:"Cluster journal")," recovery options"
+	w !,"--------------------------------------------------------------"
+	w !,"1) Display the list of errors from startup"
+	w !,"2) Run the journal restore again"
+	if (errtype="JRN")!(errtype="DBENCKEY")!(errtype="ECPTRANS") {
+		i ($zversion(1)=2)  w !,"3) Bring down the system prior to a normal startup"
+		i '($zversion(1)=2) w !,"3) Bring up the system in multi-user mode (includes journal restore)"
+	}
+	w !,"4) Dismount a database"
+	w !,"5) Mount a database"
+	w !,"6) Database Repair Utility"
+	w !,"7) Check Database Integrity"
+	if (errtype="JRN")!(errtype="DBENCKEY")!(errtype="ECPTRANS") {
+		w !,"8) Reset system so journal is not restored at startup"
+	}
+	w:'iswin !,"9) Display instructions on how to shut down the system"
+	w !,"10) Display Journaling Menu (^JOURNAL)"
+	if errtype="DBENCKEY" {
+	   w !,"11) Activate database encryption key now"
+	   w !,"12) Configure database encryption startup options"
+	}
+	if errtype="ECPTRANS" { 
+	   w !,"14) Force rollback of  pending ECP transactions"
+	   w !,"15) Discard pending ECP transactions and allow system to start"
+	}
+	w !,"--------------------------------------------------------------"
+	w !,"H) Display Help"
+	w !,"E) Exit this utility"
+	w !,"--------------------------------------------------------------"
+	s maxopt=$s((errtype="ECPTRANS"):15,(errtype="DBENCKEY"):12,1:10)
+	;
+	w !!,"Enter choice (1-",maxopt,") or [Q]uit/[H]elp? "
+	r resp
+	; "^" also exits and "?" also displays help
+	if "^QqEe"[$E(resp_"x") w !,"Exiting" q
+	if "?Hh"[$E(resp_"x") d jrnusage g jrnmenu
+	s opt=+resp
+	if (opt'=resp)!(opt<1)!(opt>maxopt) d  g jrnmenu
+	. w !,"Invalid choice - ",resp
+	. w !,"Choose an option from 1 to ",maxopt," or enter E to exit or"
+	. w " H for help"
+	;
+	s POP=0 
+	if opt=1 d jrnerrdisp g jrnmenu
+	if opt=2 d jrnreplay g jrnmenu
+	if opt=3 d jrnstu g jrnmenu
+	if opt=4 d DISMOUNT^DATABASE() g jrnmenu
+	if opt=5 d MOUNT^DATABASE() g jrnmenu
+	if opt=6 d ^REPAIR g jrnmenu
+	if opt=7 d ^INTEGRIT g jrnmenu
+	if opt=8 d jrnreset g jrnmenu
+	if opt=9,'iswin d  g jrnmenu
+	. w !,"Halt out of the system and use"
+	. w !,?5,"ccontrol stop ",$P($ZU(86),"*",2)," bypass"
+	. w !,"to shut down the system. Then run ccontrol start to bring it up"
+	if opt=10 d ^JOURNAL g jrnmenu
+	if opt=11 {
+		d ActivateInt^EncryptionKey(1)
+		s enckeyid=$System.Security.System.GetDBEncKeyID()
+		i enckeyid'="" k ^%SYS("STARTUPERROR",errtype)
+		g jrnmenu
+	}
+	if opt=12 {
+		w !,"WARNING:  If you disable database encryption key activation at startup,"
+		w !,"the system will be unable to do journal restore or transaction rollback"
+		w !,"from encrypted journal files, or to mount encrypted databases, at startup."
+		d ConfigStartInt^DATABASE1()
+		k ^%SYS("STARTUPERROR",errtype)
+		g jrnmenu
+	}
+	if opt=14 d ecprollback g jrnmenu
+	if opt=15 d ecpdiscard g jrnmenu
+	w !,"Option ",resp," is not available at the moment."
+	w !,"Choose an option listed in the menu or enter E to exit or"
+	w " H for help"
+	g jrnmenu
+	q
+jrnusage	;
+	n resp
+	w !,"--------------------------------------------------------------"
+	w !,"Before running ^STURECOV you should have corrected the"
+	w !,"errors that prevented the journal restore or transaction rollback"
+	w !,"from completing. Here you have several options regarding what"
+	w !,"to do next."
+	w !
+	w !,"Option 1: The journal restore and transaction rollback procedure"
+	w !,?5,"tries to save the list of errors in ^%SYS(). This is not always"
+	w !,?5,"possible depending on what is wrong with the system. If this "
+	w !,?5,"information is available, this option displays the errors."
+	w !,"Option 2: This option performs the same journal restore and "
+	w !,?5,"transaction rollback which was performed when the system was"
+	w !,?5,"started. The amount of data is small so it should not be"
+	w !,?5,"necessary to try and restart from where the error occurred."
+	if (errtype="JRN")!(errtype="DBENCKEY")!(errtype="ECPTRANS") {
+ 	  w !,"Option 3: When you are satisified that the system is ready for use"
+	  i '($zversion(1)=2) w !,?5,"use this option to complete the startup procedure and bring"
+	  i '($zversion(1)=2) w !,?5,"the system up as if startup had completed normally."
+	  i ($zversion(1)=2) w !,?5,"use this option to shut the system down, after which"
+	  i ($zversion(1)=2) w !,?5,"you can start the system from the cube."
+	} else {
+	  w !,"Option 3 is not enabled for cluster recovery"
+	}
+	w !,"Option 4: This lets you dismount a database. Generally this"
+	w !,?5,"would be used if you want to let users back on a system but"
+	w !,?5,"you want to prevent them from accessing a database which still"
+	w !,?5,"has problems (^DISMOUNT utility)."
+	w !,"Option 5: This lets you mount a database (^MOUNT utility)."
+	w !,"Option 6: This lets you edit the database structure (^REPAIR utility)."
+	w !,"Option 7: This lets you validate the database structure (^INTEGRIT utility)."
+	if (errtype="JRN")!(errtype="DBENCKEY")!(errtype="ECPTRANS") {
+	  w !,"Option 8: This updates the system so that it does not attempt"
+	  w !,?5,"journal restore or transaction rollback at startup. This applies"
+	  w !,?5,"only to the next time the startup process is run. Use this in"
+	  w !,?5,"situations where you cannot get journal recovery to complete"
+	  w !,?5,"and you need to allow users on the system anyway. Consider"
+	  w !,?5,"dismounting the databases which have not been recovered."
+	  w !,?5,"This operation is not reversable. You can perform journal"
+	  w !,?5,"restore manually using ^JRNRESTO."
+	} else {
+	  w !,"Option 8 is not enabled for cluster recovery. Shut the system "
+	  w !,"  down using the bypass option with ccontrol stop and then start it"
+	  w !,"  with ccontrol start. During startup answer YES when asked if you "
+	  w !,"  want to continue after it displays the message related to errors "
+	  w !,"  during recovery."
+	}
+	d:'iswin
+	. w !,"Option 9: It is not possible to shut down the system from this"
+	. w !,?5,"utility but this option displays instructions on how to shut"
+	. w !,?5,"the system down from the Unix or VMS command line."
+    w !,"Option 10: Brings up the journaling menu which allows you to"
+    w !,?5,"browse and restore journal files. There are options which"
+    w !,?5,"start and stop journaling but these are not generally of interest"
+    w !,?5,"when resolving problems with journaling at startup."
+    if errtype="DBENCKEY" {
+      w !,"Option 11: Activate database encryption key now.  This will allow encrypted"
+      w !,?5,"databases to be mounted and encrypted journal files to be processed."
+      w !,"Option 12: Re-configure database encryption startup options."
+	  w !,?5,"WARNING:  If you disable database encryption key activation at startup,"
+	  w !,?5,"the system will be unable to do journal restore or transaction rollback"
+	  w !,?5,"from encrypted journal files, or to mount encrypted databases, at startup."
+    }
+	if errtype="ECPTRANS" {
+	  w !,"Option 13: This runs the code to recover the state of pending"
+	  w !,?5,"ECP Transactions. This may involve rollback if ECP is not"
+	  w !,?5,"configured or establishing lock state while the system"
+	  w !,?5,"waits for clients to reconnect."
+	  w !,"Option 14: Force system to rollback pending ECP transactions."
+	  w !,"Option 15: Force system to start up discarding pending ECP"
+	  w !,?5,"transactions."
+	}
+	r !!,"Press <enter> continue",resp
+	q
+jrnerrdisp ;
+	n errcnt,db,i,err,jrnfile,jrnadr,errtxt,globref,dbcnt
+	n id,curjrnfile
+	s id=-1,curjrnfile=""
+	s $zt="jrnerrdispER"
+	; display the errors recorded in ^%SYS("STARTUPERROR",errtype).
+	s errcnt=$G(^%SYS("STARTUPERROR",errtype))
+	if 'errcnt d  q
+	. w !,"No errors have been recorded in ^%SYS(). There should be"
+	. w !,"a list of errors logged in the cconsole.log file."
+	w !,"A total of ",errcnt," errors were encountered"
+	s dbcnt=$G(^%SYS("STARTUPERROR",errtype,"db"))  ;# of db's with errors
+	f i=1:1:dbcnt s db=^%SYS("STARTUPERROR",errtype,"db",dbcnt) d
+	. s errcnt=^%SYS("STARTUPERROR",errtype,"db",db)
+	. w !,+errcnt," recorded for ",db
+	. if $P(errcnt,"^",2) d
+	. . w !,"     ...max # of errors exceeded, db not entirely restored"
+	. for i=1:1:errcnt do
+	. . s err=^%SYS("STARTUPERROR",errtype,"db",db,i)
+	. . s jrnfile=$LIST(err,1),jrnadr=$LIST(err,2),errtxt=$LIST(err,3)
+	. . if curjrnfile'=jrnfile do
+	. . . do:id>-1 $zu(78,7,id)
+	. . . s id=$zu(78,5,jrnfile,0)
+	. . . do:id>-1 $zu(78,6,id)
+	. . . s curjrnfile=jrnfile
+	. . s globref=$S(id>-1:$$getjrnent(jrnadr),1:"")
+	. . w !,?5,errtxt," at offset ",jrnadr," in "
+	. . w:(75-$X)<$L(jrnfile) !,?10 
+	. . w jrnfile
+	. . w:(75-$X)<$L(globref) !,?10
+	. . w:$L(globref) globref
+	do:id>-1 $zu(78,7,id) s id=-1
+	; 
+	; There may also be some other errors recorded in "misc"
+	; 
+	s errcnt=$G(^%SYS("STARTUPERROR",errtype,"misc"),0)
+	if errcnt do
+	. w !,errcnt," errors were recorded that relate to accessing the"
+	. w !,?5,"journal file(s)"
+	. for i=1:1:errcnt do
+	. . s err=^%SYS("STARTUPERROR",errtype,"misc",i)
+	. . s jrnfile=$LIST(err,1),jrnadr=$LIST(err,2),errtxt=$LIST(err,3)
+	. . if $L(jrnadr) w !,?5,errtxt," at offset ",jrnadr," in "
+	. . e  w !,?5,errtxt," in "
+	. . w:(75-$X)<$L(jrnfile) !,?10
+	. . w jrnfile
+	; 
+	; There may also be some "other" errors which are pure text (not $list)
+	; 
+	s errcnt=$G(^%SYS("STARTUPERROR",errtype,"other"),0)
+	if errcnt do
+	. w !,errcnt," general errors were recorded"
+	. for i=1:1:errcnt do
+	. . s errtxt=^%SYS("STARTUPERROR",errtype,"other",i)
+	. . w !,?5,errtxt
+	r !!,"Press <Enter> to continue...",i
+	q
+jrnerrdispER ;
+	s $ZT=""
+	do:id>-1 $zu(78,7,id) s id=-1
+	w !,"Unexpected error encountered: ",$ZE
+	q
+getjrnent(adr) ;
+ ; returns the current global reference with operation type from
+ ; the open journal file.
+ s $ZT="getjrnentER"
+ n globref,jrntype
+ s globref=$zu(78,13,jrnadr)
+ s jrntype=$$Type^JRNDUMP($zu(78,8,jrnadr))
+ quit jrntype_" "_globref
+getjrnentER ;
+ s $ZT=""
+ q $ZE
+jrnreplay ;
+ n origfilefull
+ s $zt="jrnreplayER"
+ d $zu(9,"","STURECOV: re-running journal restore",0,0  /* Informational message */)
+ k ^%SYS("STARTUPERROR",errtype)
+ s:$G(^%SYS("STARTUPERROR","type"))=errtype ^%SYS("STARTUPERROR")=""
+ set origfilefull=$ZU(68,58,1)  ;Set the PSW3NOFILEFULL flag to prevent <FILEFULL> errors
+ d:errtype="JRN"
+ . n jrnenabled s jrnenabled=$$CURRENT^%SYS.NOJRN()
+ . d
+ . . n ;protect all variables from JRNRESTO
+ . . S QUIETLY=1 ;no need to ask questions
+ . . i ($$JRNREST^STU(1)) do $ZU(78,58)
+ . i jrnenabled d ENABLE^%SYS.NOJRN()
+ d:errtype="CLUJRN"
+ . n ;protect all variables from CLURECOV
+ . S QUIETLY=0
+ . d CLURECOVINT^STU(1)
+ do $ZU(68,58,origfilefull)
+ i '$G(^%SYS("STARTUPERROR",errtype),0) d  q
+ . w !,"Success - no errors during the last run"
+ w !,"There were ",^%SYS("STARTUPERROR",errtype)," errors encountered"
+ w !," during the last run."
+ r !,"Press <enter> to continue: ",resp
+ q
+jrnreplayER ;
+ s $ZT=""
+ w !,"Unexpected errror: ",$ZE
+ q
+jrnstu ; 
+ s $ZT="jrnstuER"
+ if (errtype="CLUJRN") do  quit
+ . w !,"You cannot bring the system up using this menu during cluster"
+ . w !,"recovery. Use ""ccontrol stop ",$P($ZU(86),"*",2)," bypass"" to shut"
+ . w !,"down Cache' and then use ""ccontrol start ",$P($ZU(86),"*",2),""""
+ . w !,"to bring it up."
+ ;When we fail during journal restore we haven't done anything
+ ;in STU/STU1 that can't be repeated
+ if $G(^%SYS("STARTUPERROR",errtype),0) do  
+ . w !,"There are still unresolved errors recorded. If you try to"
+ . w !,"run the startup procedure it will probably fail."
+ if $$YN("Are you sure you want to do this","N")="N" w !,"[Aborted]" q
+ i ($zversion(1)=2) d  q
+ .w !!,"Cache will now shut down."
+ .w !,"Use the cube or 'ccontrol start ",$p($zu(86),"*",2),"' to start the system after shutdown.",!
+ .d VERBOSE^SHUTDOWN
+ w !!,"If startup runs into an error it may halt the process"
+ w !,"instead of returning to this routine."
+ w !
+ d $zu(9,"","STURECOV: Bringing up the system in multi-user mode",0,0  /* Informational message */)
+ n jrnenabled s jrnenabled=$$CURRENT^%SYS.NOJRN()
+ d
+ . n ;protect all variables from ^STU
+ . d ^STU
+ i jrnenabled d ENABLE^%SYS.NOJRN()
+ w !,"Startup completed, users are now allowed on the system."
+ r !,"Press <enter> to continue: ",resp
+ q
+jrnstuER ;
+ s $ZT=""
+ w !,"Unexpected errror: ",$ZE
+ q
+jrnreset ;
+ ; erase the error information
+ if (errtype="CLUJRN") do  quit
+ . w !,"You cannot reset the journaling information using this menu during"
+ . w !,"cluster recovery. Use ""ccontrol stop ",$P($ZU(86),"*",2)," bypass"""
+ . w !,"to shut down Cache' and then use ""ccontrol start ",$P($ZU(86),"*",2),""""
+ . w !,"to bring it up. When cconrol start displays the message that there"
+ . w !,"was an error during cluster recovery and it asks:"
+ . w !,"   Do you want to continue <No>?"
+ . w !,"answer yes and it will bring the system up ignoring the error. If "
+ . w !,"there is still an error you can run ^STURECOV again and you will be"
+ . w !,"in local recovery mode and you can use this option if it is still"
+ . w !,"necessary."
+ w !,"If you erase this information then journal restore and transaction"
+ w !,"rollback will not occur when the system is brought up in multi-user"
+ w !,"mode. Use this if you are going to restore the journal manually after"
+ w !,"users are allowed on the system. The console log will contain the current"
+ w !,"journal file name and the position in the journal file to start the"
+ w !,"restore (the number preceding the journal file name)."
+ if $$YN("Are you sure you want to do this","N")="N" w !,"[Aborted]" q
+ d $zu(9,"","Erasing journaling information in the WIJ",0,0  /* Informational message */)
+ do $ZU(78,57)
+ ; kill off the info in ^%SYS() now so that if they use the option
+ ; to run STU and bring the system up, they don't get a note about
+ ; unrecovered errors. The errors are all logged in the console log if
+ ; they want to see the list.
+ k ^%SYS("STARTUPERROR",errtype)
+ s:$G(^%SYS("STARTUPERROR","type"))=errtype ^%SYS("STARTUPERROR")=""
+ ; Set the nodes in ^SYS("SHUTDOWN") which indicate that its ok
+ ; to bring up the system if there isn't any journaling information
+ ; in the WIJ
+ s ^SYS("SHUTDOWN","JRNCLEAN")=$ZTIMESTAMP_"^"_"STURECOV"
+ s ^SYS("SHUTDOWN","TPCLEAN")=$ztimestamp_"^"_"SHUTDOWN" 
+ q
+ecprollback ;Force rollback of pending ecp transactions
+    if (errtype='"ECPTRANS") w !,"Invalid option" quit
+    w !,"If ECP is configured and starts succesfully this will result"
+    w !,"in client systems delivering errors to open transactions."
+    w !
+ 	if $$YN("Are you sure you want to do this","N")="N" w !,"[Aborted]" q
+ 	d $zu(9,"","STURECOV Forcing ECP transaction rollback",0,0  /* Informational message */)
+    k ^%SYS("STARTUPERROR",errtype) ;reset error list
+    n QUIETLY s QUIETLY=0
+	Do RollbackAllClientRecovery^ECPRecovery()
+	q
+ecpdiscard ;Discard pending ECP transactions and flag which
+    if (errtype='"ECPTRANS") w !,"Invalid option" quit
+    w !,"This will discard pending ECP transactions which were created"
+    w !,"during the transaction rollback phase. This can be reversed "
+    w !,"by running transaction rollback again. After using this option"
+    w !,"use option #8 to update the system so that it does not attempt"
+    w !,"journal restore/transaction rollback at startup. Option #3"
+    w !,"can then be used to allow users onto the system."
+    ;
+ 	if $$YN("Are you sure you want to do this","N")="N" w !,"[Aborted]" q
+	; stops system from starting due to pending ECP transaction 
+	; rollback	
+	d DiscardECPPendingTrans^ECPRecovery()
+	q
+warnincwij ;
+ w !
+ w !,"WARNING: MISMATCH.WIJ is NOT complete and might not contain all the"
+ w !,"blocks that are different between CACHE.WIJ and databases! Applying" 
+ w !,"mismatched blocks to databases could result in database corruption.",!
+ q
+MISMATCHWIJ ;
+ n (errtype)
+ i $$HasMismatch(.hdr) { ;is there a valid MISMATCH.WIJ?
+ w !,"The system crashed and some database blocks do not match what was"
+ w !,"expected based on the contents of write image journal (the WIJ)."
+ w !,"The WIJ blocks have been placed in the MISMATCH.WIJ file.  If any"
+ w !,"database files, or the WIJ, were modified or replaced since the"
+ w !,"crash, you should delete the MISMATCH.WIJ.  Otherwise, MISMATCH.WIJ"
+ w !,"probably contains blocks that were lost due to a disk problem.  You"
+ w !,"can view those blocks and apply them if necessary.  When finished,"
+ w !,"delete the MISMATCH.WIJ in order to continue startup.",!
+   s incwij=(hdr<0)
+   i incwij d warnincwij
+ }
+ s iswin=($zversion(1)=2)
+ s flagsView=8+4+512+32
+wijmenu	;
+ s haswij=$$HasMismatch() ;does MISMATCH.WIJ still exist?
+ s na=$s(haswij:"",1:" (disabled)")
+ w !,"--------------------------------------------------------------"
+ w !,"1) List Affected Databases and View Blocks"_na
+ w !,"2) Apply mismatched blocks from WIJ to databases"_na
+ w !,"3) Delete MISMATCH.WIJ"_na
+ w !,"4) Dismount a database"
+ w !,"5) Mount a database"
+ w !,"6) Database Repair Utility"
+ w !,"7) Check Database Integrity"
+ i iswin w !,"8) Bring down the system prior to a normal startup"
+ i 'iswin {
+   w !,"8) Bring up the system in multi-user mode"
+   w !,"9) Display instructions on how to shut down the system"
+ }
+ w !,"--------------------------------------------------------------"
+ w !,"H) Display Help"
+ w !,"E) Exit this utility"
+ w !,"--------------------------------------------------------------"
+ s maxopt=$s(iswin:8,1:9)
+ ;
+ w !!,"Enter choice (1-",maxopt,") or [Q]uit/[H]elp? "
+ r resp
+ ; "^" also exits and "?" also displays help
+ if "^QqEe"[$E(resp_"x") w !,"Exiting" q
+ if "?Hh"[$E(resp_"x") d wijusage g wijmenu
+ s opt=+resp
+ if (opt'=resp)!(opt<1)!(opt>maxopt) d  g wijmenu
+ . w !,"Invalid choice - ",resp
+ . w !,"Choose an option from 1 to ",maxopt," or enter E to exit or"
+ . w " H for help"
+ ;
+ s POP=0 
+ if 'haswij,1<=opt,opt<=3 {
+   w !,"Option ",resp," is disabled at the moment."
+   g wijmenu
+ }
+ if opt=1 d wijdisp g wijmenu
+ if opt=2 d wijapply g wijmenu
+ if opt=3 d wijclean g wijmenu
+ if opt=4 d DISMOUNT^DATABASE() g wijmenu
+ if opt=5 d MOUNT^DATABASE() g wijmenu
+ if opt=6 d ^REPAIR g wijmenu
+ if opt=7 d ^INTEGRIT g wijmenu
+ if opt=8 d wijstu g wijmenu
+ if opt=9,'iswin d  g wijmenu
+ . w !,"Halt out of the system and use"
+ . w !,?5,"ccontrol stop ",$P($ZU(86),"*",2)," bypass"
+ . w !,"to shut down the system. Then run ccontrol start to bring it up"
+ w !,"Option ",resp," is not available at the moment."
+ w !,"Choose an option listed in the menu or enter E to exit or"
+ w " H for help"
+ g wijmenu
+ q
+wijusage	;
+ n resp
+ w !,"--------------------------------------------------------------"
+ w !,"The system crashed and some database blocks do not match what was"
+ w !,"expected based on the contents of write image journal (the WIJ)."
+ w !,"The WIJ blocks have been placed in the MISMATCH.WIJ file.  If any"
+ w !,"database files, or the WIJ, were modified or replaced since the"
+ w !,"crash, you should delete the MISMATCH.WIJ.  Otherwise, MISMATCH.WIJ"
+ w !,"probably contains blocks that were lost due to a disk problem.  You"
+ w !,"can view those blocks and apply them if necessary.  When finished,"
+ w !,"delete the MISMATCH.WIJ in order to continue startup."
+ w !
+ w !,"Option 1 lists affected databases and blocks and lets you view the blocks"
+ w !,?5,"in MISMATCH.WIJ and affected databases in hex and text forms."
+ w !,"Option 2 lets you apply all or some of the blocks in MISMATCH.WIJ"
+ w !,?5,"to corresponding databases. You are also given an option to delete"
+ w !,?5,"MISMATCH.WIJ in the end."
+ w !,"Option 3 lets you delete MISMATCH.WIJ."
+ w !,"Option 4 lets you dismount a database. Generally this"
+ w !,?5,"would be used if you want to let users back on a system but"
+ w !,?5,"you want to prevent them from accessing a database which still"
+ w !,?5,"has problems (^DISMOUNT utility)."
+ w !,"Option 5 lets you mount a database (^MOUNT utility)."
+ w !,"Option 6 lets you edit the database structure (^REPAIR utility)."
+ w !,"Option 7 lets you validate the database structure (^INTEGRIT utility)."
+ w !,"Option 8: When you are satisified that the system is ready for use,"
+ i ($zversion(1)=2) {
+   w !,?5,"use this option to shut the system down, after which"
+   w !,?5,"you can start the system from the cube."
+ } else {
+   w !,?5,"use this option to complete the startup procedure and bring"
+   w !,?5,"the system up as if startup had completed normally."
+   w !,"Option 9: It is not possible to shut down the system from this"
+   w !,?5,"utility, but this option displays instructions on how to shut"
+   w !,?5,"the system down from the Unix command line."
+ }
+ r !!,"Press <enter> continue",resp
+ q
+wijdisp ;
+ i '$g(iswijinit) d wijinit i '$g(iswijinit) q
+ i '$d(DBPaths) w !,"No blocks in MISMATCH.WIJ",! q  ;should never happen
+ s $zt="exitw2"
+ w !,"MISMATCH.WIJ contains blocks from the following databases:"
+ s prompt="List and view mismatched blocks of which database?"
+ s dir=""
+ s Status=##Class(%Library.Prompt).GetArray(prompt,.dir,.DBPaths,,,,flagsView+128)
+ f  {
+ 	i (+Status=0)||(Status=2)||(dir="") q
+	s sfn=SFNs(dir) ;source sfn in WIJ
+	d ListBlocksBySFN(sfn)
+ 	s prompt="List and view mismatched blocks of which database?"
+	s dir=""
+	s Status=##Class(%Library.Prompt).GetArray(prompt,.dir,.DBPaths,,,,flagsView)
+ }
+ s $zt=""
+ d exitw2
+ q
+wijdispE s $zt="" 
+wijinit ;
+ s w2=$zu(80) ;default path
+ s rc=$zu(80,1,w2)
+ i rc'>0 w !,"error ",rc," opening ",w2,! q
+ s $zt="exitw2"
+ s hdr=$zu(80,3) ;numblk,filesize,buffsize,blkcnt{,idx:sfn:blk#:blksiz:off}
+ i hdr="" w !,"invalid ",w2,! g exitw2
+ s incwij=$g(incwij,hdr<0)
+ s filesize=$p(hdr,",",2),buffsize=$p(hdr,",",3) ;both in # of 512 bytes
+ s sfnstr=$zu(80,4)
+ s pos=0,cnt=0 f  {
+   s pos=$f(sfnstr,"1",pos)
+   i 'pos q
+   s sfn=pos-2 ;pos is post the number 1 and the position of 1 is sfn+1
+   s dir=$zu(80,4,sfn)
+   s DBPaths($i(cnt))=dir
+   s SFNs(dir)=sfn ;source sfn in WIJ; might be different from current sfn
+ }
+ s iswijinit=1
+ q
+exitw2 s $zt="closew2" i $ze'["TEST" w !,$ze,! s $ze=""
+ i $g(dismntdir)'="" d remount s dismntdir=""
+closew2 s $zt="" i $zu(80,2) w !,"ERROR: unable to close ",w2,! q
+ k iswijinit
+ q
+ListBlocksBySFN(sfn) ;
+ k Blocks,blksiz,blkoff s fileoff=0,blknum=0,cnt=0
+ s hdr=$zu(80,3) ;numblk,filesize,buffsize,blkcnt{,idx:sfn:blk#:blksiz:off}
+ s dbpath=$zu(80,4,sfn) ;database directory path
+ s cursfn=$zu(49,dbpath) ;different from the sfn of the database in WIJ
+ i '$$getenckey(cursfn,.enckeyslot) q
+ s rc=$$SetDatabaseVariables^%SYS.DATABASE(dbpath,.%BLKSIZ,.%UIC,.%FILSIZ,.%EXP,.%MAX,.%GD,.%GP,.%GG,.%RD,.%RG,.%TOTVOL,.%BIG,.%CURBLKS,.%MAPSZ,.%CURMAPS,.%FREEZE)
+ s filesize=$p(hdr,",",2),buffsize=$p(hdr,",",3) ;both in # of 512 bytes
+ s wijscanned=1
+ try {
+   f  {
+     s blks=$p(hdr,",",5,$l(hdr)),slot=1,numslots=$l(blks,",")
+     f  {
+       s blk=$p(blks,",",slot)
+       i $p(blk,":",2)=sfn {
+         s blknum=$p(blk,":",3) 
+         s blksiz=$p(blk,":",4) 
+         s blkoff=$p(blk,":",5) 
+         s Blocks($i(cnt))=blknum
+         s blksiz(blknum)=blksiz
+         s blkoff(blknum)=blkoff
+       }
+       i $i(slot)>numslots q
+     }
+     i $i(fileoff,buffsize)>=filesize q  ;in # of 512 bytes
+     s hdr=$zu(80,3,fileoff)
+     i hdr<0 w !,"error ",hdr," reading section ",fileoff/buffsize,! zt "TEST"
+   } 
+ } catch {
+   i $ze'["ZTEST" {
+     w !,"error ",$ze," reading section ",fileoff/buffsize,!
+   }
+   s incwij=1
+   s $ze=""
+   w "WARNING: MISMATCH.WIJ might be corrupted!",!
+ }
+ s promptView="View block:"
+ s blknum=""
+ s Status=##Class(%Library.Prompt).GetArray(promptView,.blknum,.Blocks,,,,flagsView+128)
+ f  {
+ 	i (+Status=0)||(Status=2)||(blknum="") q
+ 	i (-1<cursfn)&&(cursfn<$zu(40,0,41)) {
+		d CompareBlocksMntdDB(dir,enckeyslot) 
+	} else {
+		d Compare(dbpath,blkoff(blknum),blksiz(blknum),blknum,enckeyslot) 
+	}
+ 	s blknum=""
+	s Status=##Class(%Library.Prompt).GetArray(promptView,.blknum,.Blocks,,,,flagsView)
+ }
+ q
+getenckey(zu49,enckeyslot) ;
+ s enckey=$Piece(zu49,",",26)
+ s enckeyslot=$zu(80,30,enckey) ;-1 if enckey=""
+ i enckey'="",enckeyslot<0 {
+   s $zt="wijenckeyE" ;trap CTRL-C
+   f  {
+     w !!,"The database is encrypted and encryption key is not activated."
+     w !,"Provide encryption key info below or press CTRL-C to skip compare."
+     d ActivateInt^EncryptionKey(1)
+     s enckeyslot=$zu(80,30,enckey)
+     i enckeyslot>=0 q  ;key activated
+   }
+ }
+ q 1 ;OK (including the case where the database is not encrypted)
+wijenckeyE s $zt="" w ! i $ze'["INTERRUPT" w $ze,!
+ s $ze=""
+ q 0
+Compare(dir,blkoff,blksiz,blknum,enckeyslot) ;
+ s rc=$zu(80,5,blkoff,blksiz,blknum,enckeyslot) ;set up the block for $view()'ing
+ i rc<0 w !,"error ",rc," reading WIJ block @",blkoff,! zt "TEST" 
+ w !!,"[WIJ Block]"
+ d showblk(blknum)
+ s rc=$zu(80,11,dir,1) ;open db read-only
+ i rc'>0 w !,"error ",rc," opening database file in ",dir,! zt "TEST"
+ s $zt="exitdb"
+ i rc'=blksiz w !,"database block size ",rc," is different",! zt "TEST"
+ s rc=$zu(80,15,blknum,enckeyslot) ;set up the block for $view()'ing
+ i rc'>0 w !,"error ",rc," reading database block ",blknum,! zt "TEST" 
+ w !!,"[Database Block]" 
+ d showblk(blknum)
+closedb s $zt="" i $zu(80,12) w !,"ERROR: database file in ",$g(dir)," NOT closed",! zt "TEST"
+ q
+exitdb s $zt="" i $ze'["TEST" w !,$ze,! s $ze=""
+ g closedb
+CompareBlocksMntdDB(dir,enckeyslot) ;
+ o 63:"^^"_dir
+ s $zt="closeviewdb"
+ s rc=$zu(80,5,blkoff,0,blknum,enckeyslot) ;set up the block for $view()'ing
+ i rc<0 w !,"error ",rc," reading WIJ block @",blkoff,! zt "TEST" 
+ w !!,"[WIJ Block]"
+ d showblk(blknum,dir)
+ v blknum
+ w !!,"[Database Block]" 
+ d showblk(blknum,dir)
+ c 63
+ q
+closeviewdb s $zt="" w !,$ze,! s $ze=""
+ c 63
+ q
+HasMismatch(hdr) ;
+ n w2,rc
+ s w2=$zu(80) ;default path
+ try {
+   s rc=$s($zu(140,4,w2):0,1:$zu(80,1,w2))
+ } catch {
+   s rc=0
+ }
+ i rc'>0 q 0
+ try {
+   s hdr=$zu(80,3)
+ } catch {
+   s hdr=""
+ }
+ i $zu(80,2) d logerr("ERROR: unable to close "_w2)
+ q $g(hdr)'=""
+wijapply ;
+ i '$g(iswijinit) d wijinit i '$g(iswijinit) q
+ n i,dir,dbidx  ;reverse lookup of DBPaths array
+ s i="" f  {
+   s i=$o(DBPaths(i),1,dir) q:i=""
+   s dbidx(dir)=i
+ }
+ n flagsApp s flagsApp=flagsView+1024
+ s dismntdir=""
+ s $zt="exitw2"
+ w !,"The following databases have mismatched blocks in the WIJ:"
+ f  {
+ 	k listlen,dirlist s dirlist=""
+	s Status=##Class(%Library.Prompt).GetArray("Apply mismatched blocks to which database(s)?",.dirlist,.DBPaths,,,,flagsApp+128)
+ 	i (+Status=0)||(Status=2)||(dirlist="") q
+	i $lv(dirlist) {
+	  s listidx=""
+	  s listlen=$ll(dirlist)
+	  i 'listlen w "No database selected",! continue  ;should not happen
+	  w !,"You have selected the following databases to apply mismatched blocks to:",!!
+	  s dirnum=0 f  {
+	    i $i(dirnum)>listlen q
+	    s dir=$li(dirlist,dirnum)
+	    w dir,!
+	  }
+	} else {	; selected items are stored in an array of lists
+	  s i=""
+	  f  {
+	    s i=$o(dirlist(i)) q:i=""  
+	    s listlen(i)=$ll(dirlist(i))
+	    i 'listlen(i) q  ;should not happen
+	    i i=1 w !,"You have selected the following databases to apply mismatched blocks to:",!!
+	    s dirnum=0 f  {
+	      i $i(dirnum)>listlen(i) q
+	      s dir=$li(dirlist(i),dirnum)
+	      w dir,!
+	    }
+	  }
+	  s listidx=$o(dirlist(""),1,dirlist) ;get first list
+	  s listlen=listlen(listidx)
+	  i 'listlen w "No database selected",! continue  ;should not happen
+	}
+	w !!,"Warning! If you have made any modifications to these databases since the"
+	w !,"crash, it may not be safe to apply blocks.",!
+	i '$g(incwij),'$g(wijscanned) d wijscan
+	i $g(incwij) d warnincwij
+	s applyAll=0
+	s Status=##class(%Library.Prompt).GetYesNo("Do you want to apply all blocks in the selected databases?",.applyAll,8) 
+ 	i (+Status=0) q
+	w !
+	s dirnum=0 f  {
+	  i $i(dirnum)>listlen {
+	    s listidx=$o(dirlist(listidx),1,dirlist) ;get next list if any
+	    i listidx {
+	      s dirnum=0
+	      s listlen=listlen(listidx)
+	      continue  ;retest $i(i)>listlen at the beginning of the loop
+	    }
+	    q
+	  }
+	  s dir=$li(dirlist,dirnum)
+	  s sfn=SFNs(dir) ;source sfn in WIJ
+	  s applystatus=0
+          s dstsfn=$zu(49,dir) 
+          i -1<dstsfn,dstsfn<$zu(40,0,41) {
+   	    s dbattrib=+$p(dstsfn,",",17),mirrorbit=+$ZU(40,8,28)
+            i $zb(dbattrib,mirrorbit,1) { ;mirrored db
+              s rc=$zu(3,dir)
+              i rc<0 {
+                w !,"Cannot apply blocks to ",dir,": error ",rc," dismounting database",!
+                continue  ;move on to next database if any
+              }
+              s dismntdir=dir ;mirrored db to be remounted after update
+            }
+	  }
+	  i applyAll {
+            s dstsfn=$zu(49,dir) 
+            i -1<dstsfn,dstsfn<$zu(40,0,41) {
+	      d ApplyAllBlocksToMntdDB(sfn,dir) 
+            } else {
+	      d ApplyAllBlocks(sfn,dir) 
+	    }
+	  } else {
+	    w !,"To update database ",dir," --",!
+	    d ApplyBlocksBySFN(sfn,dir) 
+	  }
+	  i $g(dismntdir)'="" d remount s dismntdir=""
+	  i applystatus {
+   	    w !,"Database ",dir," updated",!
+   	    d $zu(9,"","Database "_dir_" updated")
+	  }
+	}
+ }
+ d exitw2
+ q
+logappcnt(cnt) ;
+ d $zu(9,"",cnt_" blocks applied")
+ w $zdt($h,3),": ",cnt," blocks applied",!
+ q
+logtotcnt(cnt) ;
+ d $zu(9,"",cnt_" blocks applied in total")
+ w !,cnt," blocks applied in total",!
+ q
+wijscan ;
+ s $zt="wijscanE"
+ s wijscanned=1
+ w !,"Reading MISMATCH.WIJ..."
+ s hdr=$zu(80,3) ;numblk,filesize,buffsize,blkcnt{,idx:sfn:blk#:blksiz:off}
+ s filesize=$p(hdr,",",2),buffsize=$p(hdr,",",3) ;both in # of 512 bytes
+ s lasttime=$zh
+ f  {
+   i $i(fileoff,buffsize)>=filesize q  ;in # of 512 bytes
+   s hdr=$zu(80,3,fileoff)
+   i hdr<0 w !,"error ",hdr," reading section ",fileoff/buffsize,! zt "TEST"
+   i $zh-lasttime>=10 {
+     w !,$zdt($h,3),": ",fileoff*512," bytes read (",fileoff*100\filesize,"% complete)"
+     s lasttime=$zh
+   }
+ }
+ w "...done",!
+ s incwij=0
+ q 
+wijscanE s $zt="" 
+ i $ze'["ZTEST" w !,"Error ",$ze," reading mismatched blocks",!
+ s $ze=""
+ w "WARNING: MISMATCH.WIJ might be corrupted!",!
+ s incwij=1
+ q
+ApplyAllBlocks(srcsfn,dir) ;
+ k blksiz,blkoff,blkcnt s fileoff=0,blknum=0,cnt=0
+ s rc=$zu(80,11,dir)
+ i rc'>0 w !,"error ",rc," opening database file in ",dir,! q
+ s $zt="exitdb"
+ s hdr=$zu(80,3) ;numblk,filesize,buffsize,blkcnt{,idx:sfn:blk#:blksiz:off}
+ s filesize=$p(hdr,",",2),buffsize=$p(hdr,",",3) ;both in # of 512 bytes
+ d $zu(9,"","Applying mismatched blocks to "_dir)
+ w !,"Applying mismatched blocks to "_dir,!
+ s lasttime=$zh
+ f  {
+   s blks=$p(hdr,",",5,$l(hdr)),slot=1,numslots=$l(blks,",")
+   f  {
+     s blk=$p(blks,",",slot)
+     i $p(blk,":",2)=srcsfn {
+       s blknum=$p(blk,":",3) 
+       s blksiz=$p(blk,":",4) 
+       s blkoff=$p(blk,":",5) 
+       s rc=$zu(80,5,blkoff,blksiz) ;load the WIJ block into buffer
+       i rc<0 w !,"error ",rc," reading WIJ block #",blknum,", blkoff=",blkoff,! zt "TEST" 
+       s rc=$zu(80,16,blknum) ;write the buffer to database
+       i rc'>0 w !,"error ",rc," writing database block ",blknum,! zt "TEST"
+       i $i(cnt)
+       i $zh-lasttime>=10 {
+         d logappcnt(cnt) 
+	 s lasttime=$zh
+       }
+     }
+     i $i(slot)>numslots q
+   }
+   i $i(fileoff,buffsize)>=filesize q  ;in # of 512 bytes
+   s hdr=$zu(80,3,fileoff)
+   i hdr<0 w !,"error ",hdr," reading section ",fileoff/buffsize,! q
+ }
+ s applystatus=cnt ;success
+ d logtotcnt(cnt)
+ g closedb
+ApplyAllBlocksToMntdDB(srcsfn,dir) ;
+ k blksiz,blkoff,blkcnt s fileoff=0,blknum=0,cnt=0
+ i '$$getenckey($zu(49,dir),.enckeyslot) q
+ o 63:"^^"_dir
+ s $zt="errexitmntddb"
+ s hdr=$zu(80,3) ;numblk,filesize,buffsize,blkcnt{,idx:sfn:blk#:blksiz:off}
+ s filesize=$p(hdr,",",2),buffsize=$p(hdr,",",3) ;both in # of 512 bytes
+ d $zu(9,"","Applying mismatched blocks to "_dir)
+ w !,"Applying mismatched blocks to "_dir,!
+ s lasttime=$zh
+ f  {
+   s blks=$p(hdr,",",5,$l(hdr)),slot=1,numslots=$l(blks,",")
+   f  {
+     s blk=$p(blks,",",slot)
+     i $p(blk,":",2)=srcsfn {
+       s blknum=$p(blk,":",3) 
+       s blkoff=$p(blk,":",5) 
+       s rc=$zu(80,5,blkoff,0,blknum,enckeyslot) ;load the WIJ block into view buffer
+       i rc<0 w !,"error ",rc," reading WIJ block #",blknum,", blkoff=",blkoff,! zt "TEST" 
+       v -blknum
+       i $i(cnt)
+       i $zh-lasttime>=10 {
+         d logappcnt(cnt) 
+	 s lasttime=$zh
+       }
+     }
+     i $i(slot)>numslots q
+   }
+   i $i(fileoff,buffsize)>=filesize q  ;in # of 512 bytes
+   s hdr=$zu(80,3,fileoff)
+   i hdr<0 w !,"error ",hdr," reading section ",fileoff/buffsize,! q
+ }
+ s applystatus=cnt ;success
+ c 63
+ d logtotcnt(cnt)
+ q
+logerr(msg) ;
+ w !,msg,!
+ d $zu(9,"",msg,2)
+ q
+remount s $zt="" i $g(dismntdir)="" q  ;nothing to remount
+ s rc=$zu(17,dismntdir)
+ i rc<0 d logerr("Error "_rc_" remounting "_dismntdir)
+ s dismntdir=""
+ q
+ApplyBlocksBySFN(srcsfn,dir) ;
+ n listlen ;not to be confused with the namesake variable in caller wijapply
+ k Blocks,blksiz,blkoff,blkcnt s fileoff=0,blknum=0,cnt=0
+ s hdr=$zu(80,3) ;numblk,filesize,buffsize,blkcnt{,idx:sfn:blk#:blksiz:off}
+ s incwij=$g(incwij,hdr<0)
+ s filesize=$p(hdr,",",2),buffsize=$p(hdr,",",3) ;both in # of 512 bytes
+ s wijscanned=1
+ try {
+   f  {
+     s blks=$p(hdr,",",5,$l(hdr)),slot=1,numslots=$l(blks,",")
+     f  {
+       s blk=$p(blks,",",slot)
+       i $p(blk,":",2)=srcsfn {
+         s blknum=$p(blk,":",3) 
+         s blksiz=$p(blk,":",4) 
+         s blkoff=$p(blk,":",5) 
+         s Blocks($i(cnt))=blknum
+         s blksiz(blknum)=blksiz
+         s blkoff(blknum)=blkoff
+         s blkcnt(blknum)=cnt ;for reverse look-up in Blocks array
+       }
+       i $i(slot)>numslots q
+     }
+     i $i(fileoff,buffsize)>=filesize q  ;in # of 512 bytes
+     s hdr=$zu(80,3,fileoff)
+     i hdr<0 w !,"error ",hdr," reading section ",fileoff/buffsize,! zt "TEST"
+   }
+ } catch {
+   i $ze'["ZTEST" {
+     w !,"error ",$ze," reading section ",fileoff/buffsize,!
+   }
+   s incwij=1
+   s $ze=""
+   w "WARNING: MISMATCH.WIJ might be corrupted!",!
+ }
+ s dstsfn=$zu(49,dir) 
+ i -1<dstsfn,dstsfn<$zu(40,0,41) d ApplyBlocksToMntdDB(dir) q
+ s rc=$zu(80,11,dir)
+ i rc'>0 w !,"error ",rc," opening database file in ",dir,! q
+ s $zt="exitdb"
+ s promptApp="Apply block(s) (* for all or ? to list):"
+ f  {
+ 	k listlen,blklist s blklist=""
+	s Status=##Class(%Library.Prompt).GetArray(promptApp,.blklist,.Blocks,,,,flagsApp)
+ 	i (+Status=0)||(Status=2)||(blklist="") q
+	i $lv(blklist) {
+	  s listidx=""
+	  s listlen=$ll(blklist)
+	} else {	; selected items are stored in an array of lists
+	  s i="" 
+	  f  {
+	    s i=$o(blklist(i)) q:i=""  
+	    s listlen(i)=$ll(blklist(i))
+	  }
+	  s listidx=$o(blklist(""),1,blklist) ;get first list
+	  s listlen=listlen(listidx)
+	}
+	i 'listlen w "No block to apply",! continue  ;should not happen
+	i $g(incwij) d warnincwij
+	s resp=0
+	s Status=##class(%Library.Prompt).GetYesNo("Are you sure you want to apply mismatched blocks to the database?",.resp,8) 
+ 	i (+Status=0)||'resp q
+	d $zu(9,"","Applying mismatched blocks to "_dir)
+	w !
+        s lasttime=$zh
+	s i=0,appcnt=0 f  {
+	  i $i(i)>listlen {
+	    s listidx=$o(blklist(listidx),1,blklist) ;get next list if any
+	    i listidx {
+	      s i=0
+	      s listlen=listlen(listidx)
+	      continue  ;retest $i(i)>listlen at the beginning of the loop
+	    }
+	    d logtotcnt(appcnt)
+	    q
+	  }
+	  s blknum=+$li(blklist,i)
+	  i '$g(blkcnt(blknum)) continue  ;the block has been applied before
+	  s blkoff=blkoff(blknum)
+          s rc=$zu(80,5,blkoff,blksiz(blknum)) ;load the WIJ block into buffer
+          i rc<0 w !,"error ",rc," reading WIJ block #",blknum,", blkoff=",blkoff,! zt "TEST" 
+          s rc=$zu(80,16,blknum) ;write the buffer to database
+          i rc'>0 w !,"error ",rc," writing database block ",blknum,! zt "TEST"
+	  i $i(appcnt)
+          i $zh-lasttime>=10 {
+            d logappcnt(appcnt) 
+	    s lasttime=$zh
+          }
+	  s cnt=blkcnt(blknum)
+	  k blkcnt(blknum)
+	}
+	i '$d(blkcnt) q  ;all blocks have been applied
+ }
+ s applystatus='$d(blkcnt) ;success
+ g closedb
+ApplyBlocksToMntdDB(dir) ;
+ i '$$getenckey($zu(49,dir),.enckeyslot) q
+ o 63:"^^"_dir
+ s $zt="errexitmntddb"
+ s promptApp="Apply block(s) (* for all or ? to list):"
+ f  {
+ 	k listlen,blklist s blklist=""
+	s Status=##Class(%Library.Prompt).GetArray(promptApp,.blklist,.Blocks,,,,flagsApp)
+ 	i (+Status=0)||(Status=2)||(blklist="") q
+	i $lv(blklist) {
+	  s listidx=""
+	  s listlen=$ll(blklist)
+	} else {	; selected items are stored in an array of lists
+	  s i="" 
+	  f  {
+	    s i=$o(blklist(i)) q:i=""  
+	    s listlen(i)=$ll(blklist(i))
+	  }
+	  s listidx=$o(blklist(""),1,blklist) ;get first list
+	  s listlen=listlen(listidx)
+	}
+	i 'listlen w "No block to apply",! continue  ;should not happen
+	i $g(incwij) d warnincwij
+	s resp=0
+	s Status=##class(%Library.Prompt).GetYesNo("Are you sure you want to apply mismatched blocks to the database?",.resp,8) 
+ 	i (+Status=0)||'resp q
+        s lasttime=$zh
+	s i=0,appcnt=0 f  {
+	  i $i(i)>listlen {
+	    s listidx=$o(blklist(listidx),1,blklist) ;get next list if any
+	    i listidx {
+	      s i=0
+	      s listlen=listlen(listidx)
+	      continue  ;retest $i(i)>listlen at the beginning of the loop
+	    } 
+	    d logtotcnt(appcnt)
+	    q
+	  }
+	  s blknum=+$li(blklist,i)
+	  s blkoff=blkoff(blknum)
+          s rc=$zu(80,5,blkoff,0,blknum,enckeyslot) ;load the WIJ block into view buffer
+          i rc<0 w !,"error ",rc," reading WIJ block #",blknum,", blkoff=",blkoff,! zt "TEST" 
+	  v -blknum
+	  i $i(appcnt)
+          i $zh-lasttime>=10 {
+            d logappcnt(appcnt) 
+	    s lasttime=$zh
+          }
+	  s cnt=blkcnt(blknum)
+	  k blkcnt(blknum)
+	}
+	i '$d(blkcnt) q  ;all blocks have been applied
+ }
+ s applystatus='$d(blkcnt) ;success
+ c 63
+ q
+errexitmntddb s $zt="" i $ze'["TEST" w !,$ze,! s $ze=""
+ c 63
+ q
+wijstu ;
+ i $$HasMismatch() { ;does MISMATCH.WIJ still exist?
+   w !,"There exists a MISMATCH.WIJ file. You must delete the MISMATCH.WIJ"
+   w !,"before running the startup procedure or it will fail."
+   d wijclean ;present the user with an option to delete MISMATCH.WIJ
+   i '($zversion(1)=2),$$HasMismatch() { ;does MISMATCH.WIJ still exist?
+     w !,"[Aborted]"
+     q  ;do not proceed if MISMATCH.WIJ still exits
+   }
+ }
+ w !,"Now proceeding to ",$s(($zversion(1)=2):"shutdown",1:"startup")," procedure"
+ d jrnstu
+ q
+wijclean ;
+ s w2=$zu(80) ;default path
+ i $$YN("Delete "_w2,"Y")="N" q
+ i $zu(80,2) w !,"ERROR: unable to close ",w2,!
+ s rc=$zu(140,5,w2)
+ i rc<0 {
+   w !,"error ",rc," deleting ",w2,!  
+ } else {
+   w !,w2," deleted",!  
+   k ^%SYS("STARTUPERROR","MISMATCHWIJ")
+   s ^%SYS("STARTUPERROR")=""
+ }
+ q
+showblk(BLK,mntddb) ;BLK:block number (used in DISPLAY^REPAIR)
+ n rc,Value,Status,buf
+ n OFF,REPAIR,REPPRINT,REPVAL,REPCCC,REPLEN,REPPAD,REPSUB,REPBIG,REPINFO,N,TYPE,LINK,BIGCOUNT,PNTLEN,NEXTPNTLEN,NEXTPNTVAL,NEXTPNTOFF,PNTREF,NEXTPNTREF,BLINCVER,COLLATE,GARTREE
+ s TYPE=$v($Zutil(40,32,1),0,1)
+ i $zb(+TYPE,32,1) {
+   w !,"*** Block in garbage tree ***",!
+   g dumpblk
+ } 
+ i TYPE-2,TYPE-6,TYPE-8,TYPE-9,TYPE-66,TYPE-70,TYPE-13 {
+   w !,"Cannot display ",$case(TYPE,16:"map",24:"big data",17:"mirror info",:"type "_TYPE)," block in parsed form",!
+   g dumpblk
+ }
+ s rc=$$ParseRepairViewBuf^DMREPAIR("",.OFF,.REPAIR,.REPPRINT,.REPVAL,.REPCCC,.REPLEN,.REPPAD,.REPSUB,.REPBIG,.REPINFO,.N,.TYPE,.LINK,.BIGCOUNT,.PNTLEN,.NEXTPNTLEN,.NEXTPNTVAL,.NEXTPNTOFF,.PNTREF,.NEXTPNTREF,.BLINCVER,.COLLATE,.GARTREE)
+ i rc=1 {
+   d DISPLAY^REPAIR
+ } else {
+   w !,"Cannot display block in parsed form: ",$System.Status.GetErrorText(rc)
+   w !,"You may choose to display block in hex form below",!
+ }
+ i $g(mntddb)'="" {
+   o 63:"^^"_mntddb
+ }
+ s $ze=""
+dumpblk ;option to dump block in hex
+ s Value=0
+ s Status=##Class(%Library.Prompt).GetYesNo("Display block in hex?",.Value,,8)
+ i (Status=2)||(+Status=0)||'Value q
+ i $g(mntddb)="" {
+   s buf=$zu(80,6,0)
+ } else {
+   s buf=$v(0,0,-$Piece($zu(49,mntddb),",",2))
+ }
+ zzdump buf
+ q
+loginmsg ;
+ n msg
+ s msg="Some WIJ blocks do NOT match their database counterparts"_$c(13,10)
+ s msg=msg_"Startup aborted, entering single user mode."_$C(13,10)
+ s msg=msg_"Enter Cache' with "_$C(13,10)
+ s msg=msg_"     csession "_$P($ZU(86),"*",2)_" -B"_$C(13,10)
+ s msg=msg_"and D ^STURECOV for help recovering from this error."_$C(13,10)
+ d $zu(9,"",msg,1 /* broadcast and log message*/,1  /* Warning */)
+ q
+ ;
+ ;----------------------------------------------------------
+ ;Include files which contain subroutines go here
+ ;----------------------------------------------------------
+ASKSET(prompt,val,backup,help,pattern) ;procedure
+ N x,done,def,enahelp,helpavail,backupavail
+ s done=0
+ s def=$G(val)
+ s backup=$G(backup,0) 
+ s enabackup=$S(backup=-1:0,1:1)
+ s backupavail=$S(backup=1:1,1:0)
+ s help=$G(help)
+ s enahelp=$S(help="*":0,1:1) ;there might not be any help though
+ s helpavail=$s(enahelp&($L(help)!($D(help)>1)):1,1:0)
+ if 'enabackup n POP
+ s POP=0
+ f  d  q:done!POP
+ . W !,$G(prompt)
+ . w:($X+$L(def))>65 !,?5
+ . w:$L(def) " <",def,">"
+ . if helpavail!backupavail do
+ . . w " [" w:helpavail "?" w:backupavail "^" w "]"
+ . w:(($X+$L(def))>75) !,?5
+ . W " => " 
+ . R x,!
+ . if x="^" d  q
+ . . if 'enabackup s done=1 q
+ . . if backupavail s POP=1 q
+ . . w "...backup not available here"
+ . if enabackup,x="""^""" s x="^",done=1 q
+ . ;
+ . if x="?" d  q
+ . . if 'enahelp s done=1 q
+ . . if 'helpavail w "...help not available here" q
+ . . if $D(help)=1 w !?5,help q
+ . . s x="" f  s x=$O(help(x)) q:x=""  w !,?5,help(x)
+ . . w !
+ . if enahelp,x="""?""" s x="?",done=1 q
+ . i x]"",$g(pattern)]"",x'?@pattern w !?5,$s(helpavail:help,1:"[bad format]") q
+ . s:'$L(x) x=val 
+ . s done=1
+ s:'POP val=x
+ q
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R

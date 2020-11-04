@@ -1,0 +1,67 @@
+ROUTINE EDITOR1 [Type=INT]
+EDITOR1 ;(PTR,PK,ADF) EDIT SINGLE LINES
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ F %J=1:1 S %A=$T(%+%J),%T=$P(%A," "),%B=$P(%A," ;;",2,256) Q:%T="END"  I $L(%T) S ^%(%T)=%B
+ G ^EDITOR2
+% ;
+GLO ;;S %NX=999 W:%X="^"&$D(%GLO) $E(%GLO,2,99) S:%X="^"&$D(%GLO) %X=%GLO Q:$E(%X,2)="("!(%X="^")  I $D(@%X)#2 S %GLO=%X,%L=@%X W:XY="" "  "_%L,! X $S(XY]"":^%("EDXY"),1:^%("ED")) S @%GLO=%L,%NX=1 W:XY="" !,%L
+900 ;;W "emove lines:" X ^("SELECT") S %NX=999 Q:%POP  R !,"OK to remove lines? ",%R S %NX=$S("Yy"[$E(%R_"?"):910,1:905)
+905 ;;S %NX=1 W " [no change]",!
+910 ;;S %NX=920 F %IED=%A:1:%I S %B=$P($P($T(+%IED)," "),"(") I %B]"" K ^COMMENT($T(+0),%B)
+920 ;;S %NX=1 ZR +%A:+%I W " ...deleted lines",!
+999 ;;W " ??? " S %NX=1
+EDXY ;;S %N="E0",$Y=250 U $I:(%RM:1) F  S %E=$D(%E(%N)) X:%E %E(%N) X:'%E ^(%N) Q:'$D(%N)
+EXY ;;U $I:(%RM:0) S DX=0,DY=%EY X XY K %EX,%EY,%SY,DX,DY,%N Q
+E0 ;;S %N="E1" I '$D(%E("E3")) F %A="E3","E4","EB","ES","EP","EEN","EE1","EE4" S %E(%A)=^(%A)
+E1 ;;W ! S:$Y>%SL $Y=%SL S %SY=$Y W %L S %EX=$X,%EY=$Y,%N="E2",%A=1 I $Y>(%SL) S %SY=%SY+%SL-$Y,$Y=%SL,%EY=$Y
+E2 ;;S DX=%A-1#%RM,DY=%A-1\%RM+%SY,%N="E3"
+E3 ;;S %N="E4" X:DX'<%RM ^("ER") X XY
+E4 ;;R *%X S %X=$S($C(%X)?1L:%X-32,1:%X),%N=$S(%X=69:"EE",%X=8:"EB",%X=13!(%X=10)!(%X=27):"EOL",%A>$L(%L):"E4",%X=32:"ES",%X=46:"EP",%X=127:"ERUB",%X=68:"EDEL",1:"E4")
+EP ;;S %A=%A+1,DX=DX+1,%N="E3"
+ES ;;S %N="E3" F %IED=%A:1:$L(%L) S %A=%A+1,DX=DX+1 Q:" ,"[$E(%L,%A)
+EB ;;S %N="E3" Q:%A=1  S DX=DX-1,%A=%A-1 I DX=-1 S DX=%RM-1,DY=DY-1
+ERUB ;;S %IED=%A+1,%N="EDEL2"
+EDEL2 ;;W $E(%L,%IED,*) S %N="E4",%L=$E(%L,1,%A-1)_$E(%L,%IED,*) S %C=$X,%Y=$Y W:$Y<%EY ?%RM,! W ?%EX S %EY=%Y,%EX=%C X XY
+EDEL ;;S %N="EDEL2" F %IED=%A+1:1 Q:" ,"[$E(%L,%IED)
+EE ;;S %C=%A,%B=$E(%L,%A,*),%Y="",%D=0,%N="EEN"
+EEN ;;R *%X S %N=$S(%X=127&%D:"EER",%X=13!(%X=10)!(%X=27):"EEE",$C(%X)?1C:"EEN",1:"EE1")
+EE1 ;;W $C(%X) S DX=DX+1 X:DX'<%RM ^("ERE") W %B S %N=$S($Y>%SL:"EE2",$Y>%EY:"EE3",1:"EE4")
+EE2 ;;S %N="EEN",%EY=%SL,%SY=%SY-$Y+%EY,%EX=$X,DY=DY-$Y+%EY,%D=%D+1,%Y=%Y_$C(%X) X XY
+EE3 ;;S %N="EEN",%EY=$Y,%EX=$X,%D=%D+1,%Y=%Y_$C(%X) X XY
+EE4 ;;S:($Y=%EY)&(%EX<$X) %EX=$X S %D=%D+1,%Y=%Y_$C(%X),%N="EEN" X XY
+EEE ;;S %L=$E(%L,1,%A-1)_%Y_$E(%L,%C,*),%N="E2",%A=%A+$L(%Y) I $X>%EX,DY=%EY S %EX=$S(%RM>$X:$X,1:%RM)
+EER ;;S %D=%D-1,%Y=$E(%Y,1,%D),%N=$S(DX:"EER1",1:"EER2")
+EER1 ;;W $C(8)_%B_" " S DX=DX-1,%N="EEN" X XY
+EER2 ;;S DX=%RM-1,DY=DY-1,%N="EEN" X XY W %B_" " X XY
+ER ;;X ^("ER1"):DX'<%RM I DY>%SL S %EY=%SL,%SY=%SY+%EY-DY,DY=%EY,%EX=$X
+ER1 ;;S DX=DX#%RM,DY=DY+1 I 'DX W !
+EOL ;;S %N=$S(%A=1:"EXY",1:"E2"),%A=1
+ERE ;;S DX=0,DY=DY+1 I DY>%SL S %EY=%SL,%SY=%SY+%EY-DY,DY=%EY,%EX=$X W ! S $Y=%SL
+D00 ;;S %NX=1 W "isplay" X ^%("SELECT") S:%POP %NX=999 Q:%POP  W ! P +%A:+%I
+G00 ;;S %NX=1 W "et from " X ^%("BUF") Q:%Z=""  S %NX="G01" I '$D(^mtemp1("buffer",%Z,1)) W "  <this buffer does not exist>",!?7,"G" S %NX="G00"
+G01 ;;S %NX=1 R !?7,"Insert after line: ",%T Q:%T=""  X ^%("TAG") Q:%L=""  ZR @%T ZI %L F %IED=1:1 S %A=$G(^mtemp1("buffer",%Z,%IED)) ZI:%A]"" %A I %A="" W !,"(inserted)",! Q
+P00 ;;S %NX=1 W "ut into " X ^%("BUF") Q:%Z=""  S %NX="P01"
+P01 ;;S %NX="P02" I $D(^mtemp1("buffer",%Z)) R !,"This buffer exists.  Do you want to overwrite this buffer? No => ",% I "Yy"'[$E(%_"N") S %NX=1
+P02 ;;S %NX=1 W !?6 X ^%("SELECT") S:%POP %NX=999 Q:%POP  K ^mtemp1("buffer",%Z) S ^(%Z)=$H_","_$J_","_$I,%IED=0 F %A=%A:1 S %IED=%IED+1,^mtemp1("buffer",%Z,%IED)=$T(+%A) I %A=%I W !,"(copied)",! Q
+ ;BUF will allow selection of a buffer & allow listing them
+BUF ;;S %X=$X X ^%("BUFC") F  R "buffer: ",% X ^%("UC") S %Z=% Q:%'["?"  W ! X ^%("BUFL") W !!?%X
+BUFL ;;S (%,%Z)="" F  S %=$O(^mtemp1("buffer",%)) Q:%=""  I $D(^(%,1)) X ^%("BUFS")
+BUFH ;;W !!,"Buffer    # lines   First line text" S %Z=1
+BUFS ;;X:%Z="" ^%("BUFH") W !,$J(%,6)_"    ",$J($O(^mtemp1("buffer",%," "),-1),6)_"    ",$G(^(1))
+BUFC ;;S %="" F  S %=$O(^mtemp1("buffer",%)) Q:%=""  I $G(^(%))-$H K ^(%)
+END ;;

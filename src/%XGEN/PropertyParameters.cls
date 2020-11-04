@@ -1,0 +1,15 @@
+/// Internal.<br/>
+/// Parameter definitions for properties within XGEN classes.
+Class %XGEN.PropertyParameters [ System = 3 ]
+{
+
+/// Set default XMLPROJECTION to attribute.
+Parameter XMLPROJECTION = "attribute";
+
+/// Define this so that super class can set it.
+Parameter XMLELEMENTREF As BOOLEAN;
+
+/// Define this so that super class can set it.
+Parameter XMLTYPECONSTRAINT As STRING;
+
+}

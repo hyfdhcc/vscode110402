@@ -1,0 +1,7 @@
+ROUTINE hello
+hello ; hello world routine
+ write !, "hello world"
+ write !, "bye"
+end quit  ; end 
+ 
+ 

@@ -1,0 +1,208 @@
+ROUTINE JRNOPTS [Type=INT]
+JRNOPTS	;JOURNAL OPTIONS ;  ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/jrnopts.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+ n err,rc
+ s rc=$$work(.err)
+ i 'rc w !,*7,"*** ",err,! q
+ i $d(err) w !,"*** ",err
+ q
+work(err) [] PRIVATE {
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") s err="Operation requires %Admin_Manage:Use privilege" q 0
+ i ##class(EMS.Instance).IsManaged("Config.Journal") s err="Cannot modify journal settings while managed by EMS" q 0
+ s SYSOBJ=##Class(Config.Journal).Open()
+ s (curdir,oldcurdir)=SYSOBJ.CurrentDirectory
+ s (altdir,oldaltdir)=SYSOBJ.AlternateDirectory
+ s (FileSizeLimit,oldFileSizeLimit)=SYSOBJ.FileSizeLimit
+ S (prefix,oldprefix)=SYSOBJ.JournalFilePrefix
+ s (DaysBeforePurge,oldDaysBeforePurge)=SYSOBJ.DaysBeforePurge
+ s (BackupsBeforePurge,oldBackupsBeforePurge)=SYSOBJ.BackupsBeforePurge
+ s Flag=8+512
+ s maxsiz=4079 ;upper bound of journal file max size
+ s dirlen=$ZU(40,0,78)-19 ;DIRLEN - file name length, not counting prefix
+ f  {
+   s Option=""
+   s JrnOptMenu(1)="Primary Journal Directory: "_curdir
+   s JrnOptMenu(2)="Secondary Journal Directory: "_altdir
+   s JrnOptMenu(3)="Journal File Size Limit (MB): "_FileSizeLimit
+   s JrnOptMenu(4)="Journal File Name Prefix: "_prefix
+   s PurgeOptionText=""
+   i DaysBeforePurge {
+     s PurgeOptionText=DaysBeforePurge_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3443784547")," days")
+     i BackupsBeforePurge s PurgeOptionText=PurgeOptionText_" OR "_BackupsBeforePurge_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"825281078")," backups, whichever comes first")
+   } elseif BackupsBeforePurge {
+     s PurgeOptionText=BackupsBeforePurge_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3312038488")," backups")
+   } else {	; both DaysBeforePurge and BackupsBeforePurge are 0s
+     s PurgeOptionText=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"480193647"),"<none>")
+   }
+   s JrnOptMenu(5)="Journal Purge Options: "_PurgeOptionText
+   s Status=##Class(%Library.Prompt).GetMenu("Change Property?",.Option,.JrnOptMenu,,8+128)
+   i (+Status=0)||(Status=2)||(Option="") q
+   k Help
+   i Option=1 {
+     s Value=curdir
+     s Help(1)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"82545520"),"Enter a directory path as the primary location of new journal files")
+     s Help(2)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3489247675"),"There should be no comma (',') in the path")
+     s Status=##Class(%Library.Prompt).GetString("Primary Journal Directory: ",.Value,1,dirlen,.Help,Flag)
+     i (+Status=0)||(Status=2)||(Value="") q
+     i $$ChkDirVALID(Value)="" {
+	     w $get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1393089513"),"<Invalid Directory>"),!
+     } else {
+	     s curdir=Value
+		 if altdir=curdir {
+			 w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4163324898"),"WARNING: Current and alternate journal directories should be different")
+		 }
+     }
+   } elseif Option=2 {
+     s Value=altdir
+     s Help(1)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3049416419"),"Enter a directory path as the alternate location for new journal files")
+     s Help(2)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2524293593"),"to fall back to when there is a problem with the primary location")
+     s Help(3)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3489247675"),"There should be no comma (',') in the path")
+     s Status=##Class(%Library.Prompt).GetString("Secondary Journal Directory: ",.Value,1,dirlen,.Help,Flag)
+     i (+Status=0)||(Status=2)||(Value="") q
+     i $$ChkDirVALID(Value)="" {
+	     w $get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1393089513"),"<Invalid Directory>"),!
+     } else {
+	     s altdir=Value
+		 if altdir=curdir {
+			 w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4163324898"),"WARNING: Current and alternate journal directories should be different")
+		 }
+     }
+   } elseif Option=3 {
+     s Value=FileSizeLimit
+     s Help(1)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"216903088"),"Enter the maximum size of a journal file in MBs, between 1 and ")_maxsiz
+     s Status=##Class(%Library.Prompt).GetNumber("Journal File Size Limit (MB): ",.Value,1,maxsiz,.Help,Flag)
+     i (+Status=0)||(Status=2)||(Value="") q
+     s FileSizeLimit=Value
+   } elseif Option=4 {
+     s Help(1)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3771060137"),"Enter an alphanumeric string ('_' allowed) or . to reset prefix to null")
+     s Value=prefix
+     s Status=##Class(%Library.Prompt).GetString("Journal File Name Prefix: ",.Value,0,dirlen,.Help,,Flag)
+     i (+Status=0)||(Status=2) q
+     i Value="." s prefix="" ;reset to null
+     e  i $tr(Value,"_","")'?.AN w $get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1530009010"),"<Invalid character>"),!
+     e  s prefix=Value
+   } elseif Option=5 {
+     s JrnPurgeMenu(1)="",JrnPurgeMenu(2)=""  ;dummy menu
+     f  {
+       w !!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3104908377"),"A journal file is to be purged if")
+       w !," (1) "_$s(DaysBeforePurge:DaysBeforePurge,1:$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"514147503"),"<unlimited>"))_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3165174402")," days have passed since its completion; OR")
+       w !," (2) "_$s(BackupsBeforePurge:BackupsBeforePurge,1:$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"514147503"),"<unlimited>"))_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3111409830")," successive backups have succeeded since its completion")
+       w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1616709988"),"whichever comes first"),!
+       s PurgeOption=""
+       s Status=##Class(%Library.Prompt).GetMenu("Purge criterion to change?",.PurgeOption,.JrnPurgeMenu,,8+1)
+       i Status=4 continue  ;print the menu again
+       i (+Status=0)||(Status=2)||(PurgeOption="") q
+       i PurgeOption=1 {
+	 s Value=DaysBeforePurge
+         s Help(1)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"910789709"),"Enter the number of days to keep old journal files.")
+         s Help(2)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2882396165"),"Enter 0 to NOT purge based on number of days.")
+         s Status=##Class(%Library.Prompt).GetNumber("#Days Before Purging: ",.Value,0,100,.Help,Flag)
+         i (+Status=0)||(Status=2)||(Value="") q
+	 s DaysBeforePurge=Value
+       } else {
+	 s Value=BackupsBeforePurge
+         s Help(1)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2570670234"),"Enter the number of backups to be performed before old journal files are purged.")
+         s Help(2)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3869926787"),"Enter 0 to NOT purge based on number of backups.")
+         s Status=##Class(%Library.Prompt).GetNumber("#Backups Before Purging: ",.Value,0,100,.Help,Flag)
+         i (+Status=0)||(Status=2)||(Value="") q
+	 s BackupsBeforePurge=Value
+       }
+     }
+   } else {
+     // shouldn't be here
+   }
+ }
+ i DaysBeforePurge'=oldDaysBeforePurge s SYSOBJ.DaysBeforePurge=DaysBeforePurge,revised=1
+ i BackupsBeforePurge'=oldBackupsBeforePurge s SYSOBJ.BackupsBeforePurge=BackupsBeforePurge,revised=1
+ i curdir'=oldcurdir s SYSOBJ.CurrentDirectory=curdir,revised=1
+ i altdir'=oldaltdir s SYSOBJ.AlternateDirectory=altdir,revised=1
+ i FileSizeLimit'=oldFileSizeLimit s SYSOBJ.FileSizeLimit=FileSizeLimit,revised=1
+ I prefix'=oldprefix s SYSOBJ.JournalFilePrefix=prefix,revised=1
+ i +$g(revised)=0 s err="Nothing changed" q 1
+ if SYSOBJ.AlternateDirectory="" {
+	 w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"616216492"),"WARNING: Alternate journal directories is not configured")
+ }	 
+ if SYSOBJ.CurrentDirectory=SYSOBJ.AlternateDirectory {
+	 w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4163324898"),"WARNING: Current and alternate journal directories should be different")
+ }	 
+ s Value=1
+ s Status=##Class(%Library.Prompt).GetYesNo("Save and activate changes?",.Value,,8)
+ i (Status=2)||(+Status=0)||'Value k SYSOBJ q 1
+ s TranMode=$$SetTransactionMode^%apiOBJ(0)
+ Set tSC = SYSOBJ.%Save()
+ s TranMode=$$SetTransactionMode^%apiOBJ(TranMode)
+ ;If error return zero and fill in error message
+ i ('tSC) s err=$System.Status.GetErrorText(tSC) q 0
+ s err = "Journal options updated."
+ i $$curfile()="" s err=err_$c(13,10)_"    Journaling is currently off.  Use ^JRNSTART to start Journaling."
+ q 1
+}
+curfile() S $zt="etcurfile" Q $p($zu(78,4)_","_$zu(78,3),",",2)
+etcurfile Q ""
+loginfo(msg) ;must be called from within INT (JRNSTART, JRNSWTCH)
+ i $d(glo) s @glo=$g(@glo)+1,@glo@(@glo)=msg
+ i $d(io) u io w !,msg
+ q
+ASKSET(prompt,val,backup,help,pattern) ;procedure
+ N x,done,def,enahelp,helpavail,backupavail
+ s done=0
+ s def=$G(val)
+ s backup=$G(backup,0) 
+ s enabackup=$S(backup=-1:0,1:1)
+ s backupavail=$S(backup=1:1,1:0)
+ s help=$G(help)
+ s enahelp=$S(help="*":0,1:1) ;there might not be any help though
+ s helpavail=$s(enahelp&($L(help)!($D(help)>1)):1,1:0)
+ if 'enabackup n POP
+ s POP=0
+ f  d  q:done!POP
+ . W !,$G(prompt)
+ . w:($X+$L(def))>65 !,?5
+ . w:$L(def) " <",def,">"
+ . if helpavail!backupavail do
+ . . w " [" w:helpavail "?" w:backupavail "^" w "]"
+ . w:(($X+$L(def))>75) !,?5
+ . W " => " 
+ . R x,!
+ . if x="^" d  q
+ . . if 'enabackup s done=1 q
+ . . if backupavail s POP=1 q
+ . . w "...backup not available here"
+ . if enabackup,x="""^""" s x="^",done=1 q
+ . ;
+ . if x="?" d  q
+ . . if 'enahelp s done=1 q
+ . . if 'helpavail w "...help not available here" q
+ . . if $D(help)=1 w !?5,help q
+ . . s x="" f  s x=$O(help(x)) q:x=""  w !,?5,help(x)
+ . . w !
+ . if enahelp,x="""?""" s x="?",done=1 q
+ . i x]"",$g(pattern)]"",x'?@pattern w !?5,$s(helpavail:help,1:"[bad format]") q
+ . s:'$L(x) x=val 
+ . s done=1
+ s:'POP val=x
+ q
+ChkDirVALID(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,1)
+ChkDirEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkDirOrSpecEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,3)
+ChkDir(R) N N S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkBad S $ZT="" W !,"<"_$P($P($ZE,"<",2),">")_"> error -- invalid directory"
+ Q ""

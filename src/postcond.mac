@@ -1,0 +1,10 @@
+ROUTINE postcond
+postcond ; postconditionals versus If construct
+ if name="" { quit  }                       ; you should replace this
+ quit:(name = "")                           ; with this postconditional
+ 
+ if name="" { write "...Exiting" quit  }    ; 2 commands after the if, so do this
+ write:name="" "...Exiting" quit:name=""    ; instead of this
+ 
+ 
+ 

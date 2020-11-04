@@ -1,0 +1,261 @@
+ROUTINE %SYS.GXLINF1 [Type=INT]
+%SYSGXLINF1   ; Convenience subroutines for global translation ; STC1841 10/13/10
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ; GXLATE.INC DPB125 06/04/93
+dheader(D) ;Subheader for a directory
+ W !,$$DC("-",79),!,D Q
+footer W !,$$DC("=",79)
+ i $d(repstat) d
+ . w !!,?10,"[<global>] shows redirection scheme for one global;"
+ . w !,?10,"[<global1>:<global2>] shows redirection scheme for a"
+ . w !,?15,"range between 2 globals; a square bracket [] means that"
+ . w !,?15,"left or right margin is inclusive, while a parenthesis"
+ . w !,?15,"means that the margin is exclusive."
+ . w !,?15,"An empty parenthesis before or after ':', that is "
+ . w !,?15,"(: or :) , means that the redirection scheme is "
+ . w !,?15,"effective from the start of alphabet space, or till"
+ . w !,?15,"its end, respectively"
+ . w !
+ . w !,?15,"A subscript mapping is missing if it is the same as "
+ . w !,?15,"the default mapping of the global. The default mapping"
+ . w !,?15,"of a global is missing if it is the same as the default"
+ . w !,?15,"global dataset."
+ . w !
+ W:$D(repstat("->")) !,?10,"->","  implicit"
+ W:$D(repstat("+>")) !,?10,"+>","  replicated"
+ W:$D(repstat("*>")) !,?10,"*>","  lock target"
+ I $D(repstat("P")) D
+ . W !,?10,"*U  unreachable -- at least one destination for this "
+ . w "pattern is not"
+ . w !,?29,"defined in the current MNET configuration."
+ . W !,?29,"Any reference to this pattern will generate a"
+ . W !,?29,"<NOSYS> error.",!
+ I $D(repstat("R")) D
+ . W !,?10,"*R  at least one replication destination for this "
+ . w "pattern is not"
+ . w !,?29,"defined in the current MNET configuration."
+ . W !,?29,"Any reference to this pattern will generate"
+ . w !,?29,"a <NOSYS> error. However replication will have"
+ . w !,?29,"taken place to destinations that precede the "
+ . w !,?29,"unreachable destination when the error is"
+ . w !,?29,"returned."
+ Q  
+ ;
+SLMDUMP() PUBLIC {
+ ; This entry point dumps the SLM keys for one global in raw
+ ; form as opposed to ^%SYS.GXLINFO which formats the data. This is
+ ; not a supported entry point as it may not work in the future.
+ ;
+ s $ZT="SLMDERR"
+read r !,"Namespace (return to exit)? ",nsname
+ q:nsname=""
+ i nsname'["@" s nsname=$zcvt(nsname,"U")
+ r !,"Global (*=object code)? ^",globnam
+ i globnam="*" s globnam="rOBJ"
+ s nspinfo=$zu(90,28,2,nsname)
+ if nspinfo=""||(globnam="") w !,"no mapping found for ^",globnam," in ",nsname g read
+ k gxlatinfo
+ do getgxlatarray^%SYS.GXLINFO(.nspinfo,globnam,.gxlatinfo,2)
+ i '$d(gxlatinfo) w !,"no mapping found for ^",globnam," in ",nsname g read
+ i $list(gxlatinfo,3)="" w !,"^",globnam," is not slmapped in ",nsname g read
+ s defdir=$p($list(gxlatinfo,2),"|",3)
+ i 'defdir s defdir=$p(nspinfo,"|",2)
+ s slm=$list(gxlatinfo,3)
+ s info=$list(slm,1)
+ s nument=+$P(info,"|",1)
+ s colseq=+$P(info,"|",2)
+ w !,"There are ",nument," entries, the collation sequence is ",colseq
+ w !,"Default directory for non % globals: ",$$showgind(defdir)
+ w !,"Entry",?7,"Subscr pattern",?30,"Impl dest",?70,"Repl pat"
+ f i=0:1:nument-1 d
+ . s subscr=$list(slm,i*2+2)
+ . i $L(subscr)=0 s subscr="<nullstr>"
+ . s dstinfo=$list(slm,i*2+3)
+ . s impldst=+$P(dstinfo,"|",1)
+ . i impldst=0 s impldst=defdir
+ . s reppat=+$P(dstinfo,"|",2)
+ . w !,i,?7
+ . f j=1:1:$L(subscr) s ch=$A($E(subscr,j)) d
+ . . i ch>32,ch<127 w $C(ch) q
+ . . w "<$C(",ch,")>"
+ . w ?30,impldst," ",$$showgind(impldst)
+ . w ?75,reppat," ",$$showgind(reppat)
+ w !
+ g read
+SLMDERR ;
+ s $ZT=""
+ w !,"Error: ",$ZE," encountered - exiting"
+ q
+}
+ ;
+showgind(gind) public {
+ Q:gind=0 ""
+ s sys=$ZU(90,6,gind)
+ s dir=$ZU(90,7,gind)
+ i sys'=0 { s dest=$ZU(63,4,sys) } else { set dest="" }
+ Q "^"_dest_"^"_dir
+}
+showslm(d,i,rmap) ;
+ q:'$d(@tran@(d,"#",i,"slm"))
+ ;
+ s:'$d(rmap) rmap=""
+ n p,first s p=@tran@(d,"#",i),first=1
+ n ent,imp,n,rep,replst,sub
+ ;loop through slm entries
+ s ent=""
+ s rep=@tran@(d,"#",i,"slm",0,0,"replid")
+ s imp=@tran@(d,"#",i,"slm",0,0,"implid")
+ w !
+ f  s ent=$o(@tran@(d,"#",i,"slm",0,ent)) q:ent=""  d  q:ent=""
+ . ;get first subscript that does not have last default mapping
+ . s sub(1)=@tran@(d,"#",i,"slm",0,ent,"subscript")
+ . s imp(1)=@tran@(d,"#",i,"slm",0,ent,"implid")
+ . s rep(1)=@tran@(d,"#",i,"slm",0,ent,"replid")
+ . q:'imp(1)&'rep(1)  ;commented out until range symbols are fixed
+ . ;check to see if range set up
+ . s ent=$o(@tran@(d,"#",i,"slm",0,ent))
+ . i ent="" s (sub(2),rep(2),imp(2))=""
+ . e  d
+ . . s sub(2)=@tran@(d,"#",i,"slm",0,ent,"subscript")
+ . . s imp(2)=@tran@(d,"#",i,"slm",0,ent,"implid")
+ . . s rep(2)=@tran@(d,"#",i,"slm",0,ent,"replid")
+ . . ;i sub(2)[$c(1)!(sub(2)=sub(1)) s (sub(2),rep(2),imp(2))="" ;HYY079
+ . . s ent=$o(@tran@(d,"#",i,"slm",0,ent),-1)
+ .  ;display entry as close to possible as entered in by user
+ . i $l(rmap) d
+ . . w:$x>1 ! w "   ["_$tr(sub(1),"""") w:sub(2)'="" ":"_$tr(sub(2),"""") w ")"
+ . . w:$x>23 !
+ . . d:imp(1) 
+ . . . w ?26,rmap
+ . . . s SYSNO=$ZU(90,6,imp(1))
+ . . . i SYSNO d
+ . . . . S SYSNAME=""
+ . . . . F  S SYSNAME=$ZU(63,2,SYSNAME) Q:(SYSNAME="")  Q:$ZU(63,0,SYSNAME)=SYSNO
+ . . . . w ?36,SYSNAME
+ . . . w ?56,$ZU(90,7,imp(1))
+ . e  d
+ . . i first,$O(@$NAME(@tran@(d,p,"R"))@(""))="",$G(@tran@(d,p,"L"))="" W "   "_$tr($p(p,":"),"[("),!
+ . . s first=0
+ . . W ?7,$S(sub(1)[$C(1):"(",1:"[")_"("_$P(sub(1),$C(1),1)_")"
+ . . W ":"
+ . . W "("_$P(sub(2),$C(1),1)_")"_$S(sub(2)[$C(1):"]",1:")")
+ . . ;display data location
+ . . w:$x>23 !
+ . . i imp(1) d
+ . . . w ?23,"->"
+ . . . s SYSNO=$ZU(90,6,imp(1))
+ . . . i SYSNO d
+ . . . . S SYSNAME=""
+ . . . . F  S SYSNAME=$ZU(63,2,SYSNAME) Q:(SYSNAME="")  Q:$ZU(63,0,SYSNAME)=SYSNO
+ . . . . w ?26,SYSNAME
+ . . . w ?36,$ZU(90,7,imp(1))
+ . . ;get and display replication stuff
+ . . i rep(1) d
+ . . . k replst d repset^%SYS.GXLINFO(rep(1),"replst")
+ . . . s n="" f  s n=$o(replst(n)) q:n=""  s PP="" d showpat0^%SYS.GXLINFO("+>",n)
+ . . w !
+ ;
+ q
+ ;getsubmap(nsp) returns a list of global mapping patterns, delimited
+ ;  by ",", for namespace nsp.
+ ;getsubmap(nsp,glo) returns a list of SLM patterns in $LIST format
+ ;  for global glo in namespace nsp
+getsubmap(nsp,glo) public {
+	try {
+		return:$g(nsp)="" ""
+		s nspinfo=$zu(90,28,2,nsp)
+		if nspinfo="" return ""
+		k gxlatinfo
+		do getgxlatarray^%SYS.GXLINFO(.nspinfo,$g(glo),.gxlatinfo,$s($g(glo)="":1,1:0)+2)
+		if '$d(gxlatinfo) return ""
+		i $g(glo)="" {
+			s glo="",ent=""
+			f  s ent=$o(gxlatinfo(ent),1,data) q:ent=""  s glo=glo_$list(data,1)_","
+			return glo
+		}
+		s data=$list(gxlatinfo,3) return:data="" ""     
+		s ent=+$list(data,1)
+		s glo="" f i=0:1:(ent-1) s $li(glo,i+1)=$list(data,i*2+2)
+		return glo
+	} catch {
+		return ""
+	}
+}
+ ;return value is in the form of system^directory
+ ;getdest(nsp) returns the default global location for namespace nsp
+ ;getdest(nsp,glo) returns the location for ^[nsp]glo
+ ;getdest(nsp,glo,sub) returns the location for ^[nsp]glo(sub)    
+getdest(nsp,glo,sub) public {
+	try {
+		return:$g(nsp)="" ""
+		i $e(nsp)'="^" {
+			s nsp=$zcvt(nsp,"u")
+		} else {
+			s nsp=$tr(nsp,"^","@")
+		}
+		s nspinfo=$zu(90,28,2,nsp)
+		if nspinfo="" return ""
+		if $e($g(glo))="^" s glo=$e(glo,2,*)
+		s dest=0 i $g(glo)="",$g(sub)="" g exit
+		return:$g(glo)="" ""
+		k gxlatinfo
+		do getgxlatarray^%SYS.GXLINFO(.nspinfo,glo,.gxlatinfo,0)
+		if '$d(gxlatinfo) {
+			if nspinfo="" return ""
+			g exit
+		}
+		if +$p($list(gxlatinfo,2),"|")<0 s sub="" ;no slm for * match
+		s slmdata=$list(gxlatinfo,3)
+		i $g(sub)'=""&&(slmdata'="") {
+			s nument=+$list(slmdata)
+			i $e(sub)="(",$e(sub,$l(sub))=")" s sub=$e(sub,2,$l(sub)-1)
+			s encrule=$zu(70,1,$p($list(slmdata),"|",2)),encsub=$$encodesub(sub,encrule)
+			f i=0:1 {
+				q:i=nument
+				s pat=$list(slmdata,i*2+2)
+				q:pat=sub
+				i pat]"" {
+					i $e(pat,$l(pat))'=$c(1) {
+						q:$$encodesub(pat,encrule)]encsub
+						continue
+					}
+					s epat=$$encodesub($e(pat,1,*-1),encrule)
+					i epat]encsub||(epat=$e(encsub,1,$l(epat))) q
+				}
+			}
+			i pat'=sub s i=i-1
+			s dest=$p($list(slmdata,i*2+3),"|")
+			i 'dest s dest=$p($list(gxlatinfo,2),"|",3)
+		}
+		i 'dest s dest=$s($list(gxlatinfo)=glo:$p($list(gxlatinfo,2),"|",3),1:$p($list(gxlatinfo,2),"|",6))
+exit 	i 'dest s dest=$p(nspinfo,"|",2)
+		s sys=$ZU(90,6,dest)
+		i sys=0 return "^"_$ZU(90,7,dest)
+		s sys=$zu(63,4,sys)
+		i sys="" ZT "NOSYS"
+		return sys_"^"_$ZU(90,7,dest)
+	} catch {
+		return ""
+	}
+}
+encodesub(sub,rule) ;encode subscripts like "d",9,"foobar" by the given rule
+ n encsub,len,x,vnam,i
+ s encsub="",vnam="x("_sub_")",len=$ql(vnam)
+ f i=1:1:len s encsub=encsub_$zu(70,2,$qs(vnam,i),rule)_$c(0)
+ q encsub
+DC(c,n) Q $TR($J("",n)," ",$E(c_" "))

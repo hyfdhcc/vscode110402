@@ -1,0 +1,366 @@
+ROUTINE JRNINFO [Type=INT]
+JRNINFO ;Journal Info Server ;HYY1551 04/22/10
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+ q
+START(dev,debug) ;
+ n i 
+ i +$g(debug) d jrninfo(dev) q 0
+ j jrninfo(dev)::10 e  l  q "-1,unable to job off jrninfo job" 
+ q 0
+STOP(host) ;
+ s host=$g(host,"127.0.0.1"),dev="|TCP|8888" 
+ o dev:(host):10 e  q "-1,unable to connect to "_host
+ u dev w "STOP",! c dev
+ q 0
+SRVrun(dev,hdr) ;
+ u dev:(::"a")
+ d jrninfo(dev,1)
+ q
+jrninfo(dev,opened) ;
+ n msg,ans,cluid,reqid
+ s cluid=$s($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0):$p($zu(78,20),","),1:"")
+ s $ze="",$zt="exit" s opened=+$g(opened) i 'opened o dev::10 e  ztrap "OPEN" 
+ u dev:(::::65535:65535)
+ n cont f  u dev r msg q:msg="STOP"  d  i opened s cont=1
+ . i $g(cont) s msg=$e(msg,4,$l(msg)) ;strip off "JRN" prefix
+ . s reqid=$p(msg,","),msg=$p(msg,",",2,$l(msg))  ;strip off the cluid field 
+ . i cluid="" s ans=$s(reqid="*":$$answer1(msg),1:"") i 1
+ . e  i reqid]"",reqid'=cluid s ans="" i 1
+ . e  s ans=$$answer(msg)  ;need some error handling here
+ . u dev w cluid,",",ans,! i 'opened w *-2
+exit ;
+ s $zt="" i $ze]"",$ze'["READ" d logerror("jrninfo",$ze) 
+ c dev
+ q
+logerror(rtn,err) ;
+ d $zu(9,"","JRNINFO SERVER ERROR: "_err,(0>0),0)
+ i err["<DATABASE>"!($zu(51,1)<0) d CONLOG^SHDWUTIL() q
+ d ERRLOGGLO^SHDWUTIL(err,$name(^%ISCLOG("JRNINFO","error")),10)
+ d BACK^%ETN
+ q
+ ; msg = msgcode,... in the following forms:
+ ; 1. FOLLOW,seq,cst
+ ;    return (ans): errcode,[errmsg|$LB({jrnf,NodeInfo}(csn), csn=0,1,...)]
+ ; 2. NEXT,jrnf
+ ;    return (ans): errcode,[errmsg|jrnf]
+ ; 3. INFO,jrnf
+ ;    return (ans): errcode,[errmsg|{jrnf,csn,n,cst,begseq,endseq,[NodeInfo]}]
+ ; 4. CLUSEQ
+ ;    return (ans): errcode,{errmsg|{cst,seq}|NodeInfo}
+ ; 5. CURLOC,csn
+ ;    return (ans): errcode,{errmsg|{addr,jrnf}|NodeInfo}
+ ; errcode=0: success, errcode<0: error, errcode=1: refer to another node
+ ; NodeInfo={port,ip|hostname,csn,hostname|ip}
+answer(msg) ;
+ n code,jrninfo,jrninfor,seqinfo,index,rc
+ s code=$p(msg,",")
+ s index=$$initjrninfo() ;define jrninfo, jrninfor, seqinfo
+ i code="NEXT",$$updjrninfo()!1 s rc=$$jrnfnext($p(msg,",",2)) i 1
+ e  i code="INFO",$$updjrninfo()!1 s rc=$$jrnfinfo($p(msg,",",2)) i 1
+ e  i code="FOLLOW" s rc=$$jrnfollow($p(msg,",",2),$p(msg,",",3)) i 1
+ e  i code="CLUSEQ" s rc=$$jrnfcluseq() i 1
+ e  i code="CURLOC" s rc=$$jrnfcurloc($p(msg,",",2)) i 1
+ e  s rc="-1,unkown code"
+ d killjrninfo(index)
+ q rc
+initjrninfo() ;
+ n index s index=$i(^CacheTemp) s ^CacheTempNodes("gbl",$j,$name(^CacheTemp(index)))=$lb($h,$username)
+ s ^CacheTemp(index)="JRNINFO,"_$j
+ s jrninfo=$name(^CacheTemp(index,0))
+ s jrninfor=$name(^CacheTemp(index,1))
+ s seqinfo=$name(^CacheTemp(index,2))
+ q index
+killjrninfo(index) ;
+ k ^CacheTemp(index) k ^CacheTempNodes("gbl",$j,$name(^CacheTemp(index)))
+ q
+answer1(msg) ;non-cluster version
+ n code
+ s code=$p(msg,",")
+ i code="CURLOC" q $$jrnfcurloc1()
+ q "-1,unkown code"
+query(dev,req,srv) ;
+ n ans
+ s $zt="etquery"
+ i $g(srv)]"",$g(dev)]"" o dev:(srv) u dev w req,! r ans c dev s:+$g(^%ISCLOG("JRNINFO")) ^%ISCLOG("JRNINFO","query",$i(^%ISCLOG("JRNINFO","query")))=$zdt($h)_"!"_req_"!"_ans q ans
+ q $$answer($e(req,4,$l(req))) ;get the answer ourselves
+etquery ;
+ s $zt=""
+ i $g(dev)]"" c dev
+ q -1_","_$ze
+GetNodeInfo(ans,code) ;
+ i code="INFO" q $p(ans,",",8,$l(ans))
+ i code="FOLLOW" q $p(ans,",",2,$l(ans))
+ i (code="CLUSEQ")||(code="CURLOC"),+ans>0 q $p(ans,",",2,$l(ans))
+ q ""
+updjrninfo() ;
+ n log,line,csn,idx,jrnf,subs,cst,i,gcst,gjrn,gjrr,gseq
+ s cst=$ZU(78,30,0)
+ s i="" f  s i=$o(^%SYS("JRNINFO",i)) q:i=""  i i'=cst k ^%SYS("JRNINFO",i)
+ s gcst=$name(^%SYS("JRNINFO",cst))
+ s gjrn=$name(@gcst@("jrninfo"))
+ s gjrr=$name(@gcst@("jrninfor"))
+ s gseq=$name(@gcst@("seqinfo"))
+ s log=$s($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0):$p($zu(78,20),",",2),1:"") i log="" d $zu(9,"","JRNINFO SERVER ERROR: not a cluster member",(2>0),2) q ""
+ s $ze="",$zt="exitupd" L +@gcst
+ k @jrninfo,@jrninfor,@seqinfo m @jrninfo=@gjrn,@jrninfor=@gjrr,@seqinfo=@gseq
+ o log:"r"_$s(($zversion(1)=1):"h",1:""):10 e  L -@gcst d $zu(9,"","JRNINFO SERVER ERROR: updjrninfo: unable to open "_log_" in time",(0>0),0) q ""
+ n jrnenabled s jrnenabled=$$CURRENT^%SYS.NOJRN() i jrnenabled d DISABLE^%SYS.NOJRN
+ s $zt="exitupdlogopen"
+ f i=1:1:+$g(@jrninfo) u log r line  ;skip the lines we have read
+ i $zu(68,40,1)  ;read returns null instead of <ENDOFFILE> at end of file
+ f i=1:1 u log r line q:line=""  s line(i)=line
+ c log i $zu(68,40,0)  ;minimize the time when file remains open
+ ; update jrninfo and seqinfo on previously last files for each csn
+ s csn="" f  s csn=$o(@jrninfor@(csn)) q:csn=""  d
+ . s idx=$o(@jrninfor@(csn,""),-1),jrnf=@jrninfor@(csn,idx)
+ . s subs=$p(@jrninfo@(jrnf),",",3,$l(@jrninfo@(jrnf)))
+ . i subs]"" k @("@seqinfo@("_subs_","_csn_","_idx_")"),@($e(gseq,1,$l(gseq)-1)_","_subs_","_csn_","_idx_")")
+ . s i=$$updseqinfo(jrnf,csn,idx) i i="" ztrap:'$ZU(140,4,jrnf) "USQI" d:'$g(@gcst@("lastjrnfgone",jrnf))  q
+ . . d logerror("updjrninfo","Information about "_jrnf_" cannot be updated as the file is gone")
+ . . s @gcst@("lastjrnfgone",jrnf)=1
+ . s (@jrninfo@(jrnf),@gjrn@(jrnf))=csn_","_idx_","_i
+ ; update jrninfo and seqinfo with info on the new files in the log
+ s i="" f  s i=$o(line(i)) q:i=""  d
+ . s line=line(i),csn=+line,jrnf=$p(line,",",2),idx=$i(@jrninfo)
+ . s (@jrninfo@(jrnf),@gjrn@(jrnf))=csn_","_idx_","_$$updseqinfo(jrnf,csn,idx)
+ . s (@jrninfor@(csn,idx),@gjrr@(csn,idx))=jrnf,@gjrn=@jrninfo
+exitupdlogopen ;
+ s $zt="" c log
+ i $g(jrnenabled) d ENABLE^%SYS.NOJRN
+exitupd ;
+ s $zt="" L -@gcst i $ze]"" d logerror("updjrninfo",$ze)
+ q $g(@jrninfo)
+updseqinfo(jrnf,csn,idx) ;
+ n dev,addr,begseq,endseq,cst
+ s dev=$zu(78,5,jrnf,0) q:dev<0 ""  i $zu(78,6,dev)
+ s $ze="",$zt="exitupdseq"
+ s cst=$ZU(78,30,0),addr=0 
+ f  s addr=$zu(78,17,addr) q:addr'>0  s begseq=$zu(78,11,addr) q:begseq>0
+ i addr'>0 s (@seqinfo@(cst,0,0,csn,idx),@gseq@(cst,0,0,csn,idx))="" i $zu(78,7,dev)!1 q cst_",0,0"
+ n eof
+ i $g(dev,-1)<0 s dev=$zu(78,5,jrnf,0) q:dev<0 "" i $zu(78,6,dev)
+ i jrnf=$zu(78,3) s eof=$zu(78,40)
+ i jrnf'=$zu(78,3) s eof=$zu(78,18,0)
+ n last,prev,next,seq
+ s last=$zu(78,18,eof)  ;addr of the last record on disk
+ i last'>0 d  i 1
+ . d $zu(9,"","JRNINFO SERVER: Invalid eof "_eof_" of journal "_jrnf_"; try alternate method...",(0>0),0)
+ . s endseq=begseq f  s next=$zu(78,17,addr) q:next'>0  s addr=next,seq=$zu(78,11,addr) i seq>endseq s endseq=seq
+ e  i last'>addr s endseq=begseq
+ e  f  s endseq=$zu(78,11,last) q:endseq>0  s prev=$zu(78,18,last) q:prev'>0  s last=prev
+ i endseq'>0 ztrap "JRNF"
+ s (@seqinfo@(cst,begseq,endseq,csn,idx),@gseq@(cst,begseq,endseq,csn,idx))=""
+exitupdseq ;
+ s $zt="" i $ze]"" d logerror("updseqinfo",$ze),$zu(78,7,dev) q ""
+ i $g(dev,-1)'<0,$zu(78,7,dev)
+ q cst_","_begseq_","_endseq
+ ; Return, for each csn, name of the journal file and/or the port and ip of
+ ; the owner node that may have created following the given sequence point.
+ ; output: errcode,ans
+ ; where ans = (list format) {{jrnf,NodeInfo}(csn), csn=0,1,...}
+ ; where NodeInfo = {port,ip|hostname,csn,hostname|ip}
+jrnfollow(cst,seq) ;
+ n ans,node,nodelist,jrnf,csn,n,i,info
+ i cst>$ZU(78,30,0) q 0
+ ;for each live node, collect its journal file and port/ip info
+ d ##class(SYS.Cluster).GetNodes(.node)
+ s csn="" f  s csn=$o(node(csn)) q:csn=""  d
+ . s jrnf=$p($zu(78,20,csn),",",2)
+ . s jrnf(csn)=$s(jrnf="":"",1:$zu(12,jrnf))
+ . i jrnf(csn)="" d logerror("jrnfollow","<ZJRNF1>") ztrap "JRNF"
+ . s $li(ans,csn+1)=jrnf(csn)_","_node(csn)
+ i $$updjrninfo()
+ ;for each csn in the log, locate the LAST journal that is entirely BEFORE
+ ;the sequence point (cst,seq). The NEXT journal is what we want.
+ s csn="" f  s csn=$o(@jrninfor@(csn)) q:csn=""  d
+ . s n="" f  s n=$o(@jrninfor@(csn,n),-1) q:n=""  s info=@jrninfo@(@jrninfor@(csn,n)),t=$p(info,",",3) q:t<cst  i t=cst,$p(info,",",5)<seq q
+ . s n=$o(@jrninfor@(csn,n)) q:n=""
+ . i @jrninfor@(csn,n)="" d logerror("jrnfollow","<ZJRNF2>") ztrap "JRNF"
+ . s $li(ans,csn+1)=@jrninfor@(csn,n)_","_$g(node(csn))
+ q "0,"_ans
+jrnfnext(jrnf) ;
+ n csn,idx
+ s:($zversion(1)=1) jrnf=$p(jrnf,";") s jrnf=$zu(12,jrnf)
+ i '$d(@jrninfo@(jrnf)) q "-1,journal file "_jrnf_" not found in log" 
+ s csn=+@jrninfo@(jrnf),idx=$p(@jrninfo@(jrnf),",",2)
+ s idx=$o(@jrninfor@(csn,idx)) i idx="" q 0  ;no file following jrnf
+ q "0,"_@jrninfor@(csn,idx)_","_$$jrnfcurown(csn,idx)
+jrnfcurown(csn,idx) ;
+ n ss,ssi,i
+ i $o(@jrninfor@(csn,idx))'="" q ""
+ i '##class(SYS.Cluster).FindNode(csn,.ssi) q "" ;csn not found (or not alive)
+ q $g(ssi)
+jrnfinfo(jrnf) ;
+ n csn,idx
+ s:($zversion(1)=1) jrnf=$p(jrnf,";") s jrnf=$zu(12,jrnf)
+ i '$d(@jrninfo@(jrnf)) q "-1,journal file "_jrnf_" not found in log" 
+ s csn=+@jrninfo@(jrnf),idx=$p(@jrninfo@(jrnf),",",2)
+ q "0,"_jrnf_","_@jrninfo@(jrnf)_","_$$jrnfcurown(csn,idx)
+jrnfcluseq() ;
+ n mwdstat,mwdcsn,ss,ssi
+ s mwdstat=$zu(59,0) 
+ i $p(mwdstat,",",3) s cst=$ZU(78,30,0),seq=$$synjrnseq() q "0,"_cst_","_seq
+ s mwdcsn=$p(mwdstat,",",6)
+ i '##class(SYS.Cluster).FindNode(mwdcsn,.ssi) q 1 ;mwdcsn not found!!?? ERROR??
+ q "1,"_ssi
+jrnfcurloc(csn) ;
+ n ss,ssi,lastrec,eoj,jrnf,dev
+ s i=##class(SYS.Cluster).FindNode(csn,.ssi) i 'i s ssi=""
+ i ssi]"",i>1 q "1,"_ssi  ;node csn is alive and we are not that node
+ i ssi]"" s jrnf=$zu(12,$zu(78,3))  ;we are node csn
+ e  i $$updjrninfo()!1 s jrnf=@jrninfor@(csn,$o(@jrninfor@(csn,""),-1)) ;node csn is down
+jrnfcurloc0 ;
+ s dev=$zu(78,5,jrnf,0) i dev<0 q dev ;try again
+ i $zu(78,6,dev)
+ s eoj=$zu(78,18,0),lastrec=$zu(78,18,eoj)
+ i $zu(78,7,dev)
+ q "0,"_lastrec_","_jrnf_","_eoj
+jrnfcurloc1() ;
+ n lastrec,eoj,jrnf,dev
+ s jrnf=$zu(12,$zu(78,3))
+ g jrnfcurloc0
+ ; make sure the journal sequence number to return is present in journal file
+ ; that is on disk. On error, return 0 -- it is OK to return sequence number
+ ; that is smaller than what is actually on disk as the shadow (dejrneojt)
+ ; will make sure it is placed at the bottom of existing queue.
+synjrnseq() ;
+ n jrnf,addr,dev,seq,cluseq,old
+ s $zt="etsynjrnseq"
+ s dev=-1,jrnf=$zu(78,3),dev=$zu(78,5,jrnf,0) i dev<0 q 0
+ s cluseq=$zu(78,41,0) i $zu(78,6,dev)
+ s addr=$zu(78,18,0) f  s addr=$zu(78,18,addr) q:addr'>0  s seq=$zu(78,11,addr) q:seq>0
+ d $zu(78,7,dev) s dev=-1
+ i addr'>0 s seq=$zu(78,41,0) ; >= cluseq
+ e  i cluseq-100>seq s seq=$zu(78,41,0) ; >= cluseq
+ e  i $zu(78,29) q seq  ;return the clujrnseq of last journal record
+ e  q 0  ;unable to force journal records to disk (due to ongoing jrnswitch?)
+ ; must get the seq value to return before creating a journal entry for it
+ s old=$zu(68,21,1) ts  s ^%SYS("JRNINFO")="" tc  i $zu(68,21,old)
+ q seq
+etsynjrnseq ;
+ s $zt=""
+ i dev'<0,$zu(78,7,dev)
+ d logerror("synjrnseq",$ze)
+ q 0
+PURGE(verbose) ;
+ n Status
+ i '$s($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0):''$zu(59,0),1:0) {
+   s Status=$$Error^%apiOBJ(5002,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2027728324"),"Not a clustered system"))
+   i $g(verbose) d $System.Status.DisplayError(Status)
+   q Status
+ }
+ n jrninfo,jrninfor,seqinfo
+ s jrninfo=$name(^||jrninfo)
+ s jrninfor=$name(^||jrninfor)
+ s seqinfo=$name(^||seqinfo)
+ i '$$updjrninfo() {
+   s Status=$$Error^%apiOBJ(5002,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3451637435"),"Unable to update JRNINFO table"))
+   i $g(verbose) d $System.Status.DisplayError(Status)
+   q Status
+ }
+ k @jrninfo,@jrninfor,@seqinfo
+ n curcst s curcst=$o(^%SYS("JRNINFO","")) i curcst="" {
+   s Status=$$Error^%apiOBJ(5002,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2105516771"),"JRNINFO table empty"))
+   i $g(verbose) d $System.Status.DisplayError(Status)
+   q Status
+ }
+ L +^%SYS("JRNINFO.PURGE"):0 i '$t {
+   s pid=+$g(^%SYS("JRNINFO.PURGE")),time=$p($g(^%SYS("JRNINFO.PURGE")),",",2)
+   s Status=$$Error^%apiOBJ(5002,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3020246802"),"Purge in progress by another job")_"(PID="_pid_")") 
+   i $g(verbose) d $System.Status.DisplayError(Status)
+   q Status
+ }
+ i '$p($zu(78,22),"^",6) {
+   s Status=$$Error^%apiOBJ(5002,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"226643691"),"Journaling is not enabled system wide"))
+   i $g(verbose) d $System.Status.DisplayError(Status)
+   L -^%SYS("JRNINFO.PURGE")
+   q Status
+ }
+ s $zt="PurgeErr1"
+ n jrnstat s jrnstat=$$CURRENT^%SYS.NOJRN()
+ i 'jrnstat d ENABLE^%SYS.NOJRN
+ s $zt="PurgeErr2"
+ TSTART
+ s ^%SYS("JRNINFO.PURGE")=$j_","_$zdt($h,3)
+ n pathnode s pathnode=$name(^%SYS("JRNINFO",curcst,"jrninfor"))
+ n infnode s infnode=$name(^%SYS("JRNINFO",curcst,"jrninfo"))
+ n seqnode s seqnode=$name(^%SYS("JRNINFO",curcst,"seqinfo"))
+ n LastLine,ExistLine,FirstCst,FirstSeq,PurgeLine 
+ n csn,line,cst,seq,path,info,lastseq ;temporary variables
+ s csn="" f  {
+   s csn=$o(@pathnode@(csn)) q:csn=""
+   s LastLine(csn)=$o(@pathnode@(csn,""),-1)
+   s line="" f  {
+     s line=$o(@pathnode@(csn,line),1,path) q:line=""
+     i line>LastLine(csn) q
+     i $ZU(78,22,path)=1 {
+       s ExistLine(csn)=line
+       s info=@infnode@(path)
+       s cst=$p(info,",",3),seq=$p(info,",",4)
+       i $g(FirstSeq)="" s FirstCst=cst,FirstSeq=seq ;the 1st time
+       e  i cst>FirstCst  ;do nothing (keep FirstCst/FirstSeq)
+       e  i cst=FirstCst,FirstSeq'>seq ;do nothing (keep FirstCst/FirstSeq)
+       e  s FirstCst=cst,FirstSeq=seq ;use a lower FirstCst/FirstSeq
+       q
+     }
+   }
+ }
+ s csn="" f  {
+   s csn=$o(@pathnode@(csn)) q:csn=""
+   s line="" f  {
+     s line=$o(@pathnode@(csn,line),1,path) q:line=""
+     i $g(ExistLine(csn))]"",line'<ExistLine(csn) q
+     s info=@infnode@(path)
+     s cst=$p(info,",",3),lastseq=$p(info,",",5)
+     i (cst>FirstCst)||((cst=FirstCst)&&(lastseq'<FirstSeq)) q
+     s PurgeLine(csn)=line
+   }
+ }
+ s csn="" f  {
+   s csn=$o(PurgeLine(csn)) q:csn=""  
+   s line="" f  {
+     s line=$o(@pathnode@(csn,line),1,path) q:line=""
+     i line>PurgeLine(csn) q
+     s info=@infnode@(path)
+     s cst=$p(info,",",3),seq=$p(info,",",4),lastseq=$p(info,",",5)
+     k @pathnode@(csn,line),@infnode@(path)
+     i cst]"",seq]"",lastseq]"" k @seqnode@(cst,seq,lastseq,csn,line)
+   }
+ }
+ s ^%SYS("JRNINFO.PURGE")=""
+ L -^%SYS("JRNINFO.PURGE")
+ TCOMMIT
+ i 'jrnstat d DISABLE^%SYS.NOJRN
+ q 1
+PurgeErr2 s $zt="PurgeErr1" s Status=$$Error^%apiOBJ(179,$ze)
+ d $zu(9,"","JRNINFO PURGE ERROR: "_$ze,(0>0),0)
+ L -^%SYS("JRNINFO.PURGE") ;lock will be released after rollback
+ TROLLBACK  ;which should restore ^%SYS("JRNINFO.PURGE") to ""
+ i 'jrnstat d DISABLE^%SYS.NOJRN
+ q Status
+PurgeErr1 s $zt="" s Status=$$Error^%apiOBJ(179,$ze)
+ d $zu(9,"","JRNINFO PURGE ERROR: "_$ze,(0>0),0)
+ i 'jrnstat d DISABLE^%SYS.NOJRN
+ q Status
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R

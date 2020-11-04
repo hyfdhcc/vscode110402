@@ -1,0 +1,237 @@
+ROUTINE JRNWUTL [Type=INT]
+JRNWUTL ; support JOURNAL utilities for GUI ; RJW1293 05/01/06
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+GJRNALL(jrnall) ; get flag indicating whether all globals are to be journalled
+ ;inputs:
+ ;  .jrnall = flag to journal all globals (0/1)
+ ;
+ ;return value:
+ ;  status flag (0_message=failure; 1=sucess)
+ s $ZE="",$zt="ERROR^JRNWUTL"
+ S jrnall=$P($G(^%SYS("JOURNAL","LAST")),"^")\2#2
+ Q 1
+GFJRNNAM(jrnnam) ; get current journal file name (in full path)
+ ;inputs:
+ ;  .jrnnam = journal file name
+ ;
+ ;return value:
+ ;  status flag (0_message=failure; 1=sucess)
+ s $ZE="",$zt="ERROR^JRNWUTL"
+ I +$ZU(78,22) S jrnnam=$zu(78,3)
+ E  S jrnnam=""
+ Q 1
+GJRNNAM(jrnnam) ; get current journal file name (in yyyymmdd.nnn form)
+ ;inputs:
+ ;  .jrnnam = journal file name
+ ;
+ ;return value:
+ ;  status flag (0_message=failure; 1=sucess)
+ s $ZE="",$zt="ERROR^JRNWUTL"
+ S jrnnam=$case($ZBITGET($ZVERSION(0),46),0:$case($f($$curfile(),";"),0:$e($$curfile(),*-8-$l($p($$curfile(),".",$l($$curfile(),"."))),*),:$e($$curfile(),*-8-$l($p($$curfile(),".",$l($$curfile(),"."))),$f($$curfile(),";")-2)),:$$curfile())
+ Q 1
+GNJRNNAM(jrnnam) ; get next journal file name (in yyyymmdd.nnn form)
+ ;inputs:
+ ;  .jrnnam = journal file name
+ ;
+ ;return value:
+ ;  status flag (0_message=failure; 1=sucess)
+ s $ZE="",$zt="ERROR^JRNWUTL"
+ N lastfile
+ S lastfile=$ZU(78,3)
+ S:lastfile="" lastfile=$P($G(^%SYS("JOURNAL","LAST")),"^",2)
+ N shortnam S shortnam=$case($ZBITGET($ZVERSION(0),46),0:$case($f(lastfile,";"),0:$e(lastfile,*-8-$l($p(lastfile,".",$l(lastfile,"."))),*),:$e(lastfile,*-8-$l($p(lastfile,".",$l(lastfile,"."))),$f(lastfile,";")-2)),:lastfile) 
+ ;this should take care of the version transition once and for all
+ S jrnnam=$$getname($S(shortnam?8N1"."3N:shortnam,1:"0000000.000"))
+ Q 1
+GPREFIX(prefix) ; get prefix of the journal file name
+ ;inputs:
+ ;  .prefix = prefix to journal file name
+ ;
+ ;return value:
+ ;  status flag (0_message=failure; 1=sucess)
+ s $ZE="",$zt="ERROR^JRNWUTL"
+ S prefix=$G(^%SYS("JOURNAL","PREFIX"))
+ Q 1
+GMAXSIZ(maxsiz) ; get max size of the journal file
+ ;inputs:
+ ;  .maxsiz = maximum size of journal file in bytes
+ ;
+ ;return value:
+ ;  status flag (0_message=failure; 1=sucess)
+ s $ZE="",$zt="ERROR^JRNWUTL"
+ S maxsiz=$G(^%SYS("JOURNAL","MAXSIZE"),1048576)
+ Q 1
+GCURDIR(curdir) ; get directory being used for journal files
+ ;inputs:
+ ;  .curdir = current/primary journal directory
+ ;
+ ;return value:
+ ;  status flag (0_message=failure; 1=sucess)
+ s $ZE="",$zt="ERROR^JRNWUTL"
+ i ($zversion(1)=1) S curdir=$G(^%SYS("JOURNAL","CURDIR"),$ZU(12,"[.journal]"))
+ i '($zversion(1)=1) S curdir=$G(^%SYS("JOURNAL","CURDIR"),$ZU(12)_"journal")
+ Q 1        
+GALTDIR(altdir) ; get directory to be used when CURDIR is full
+ ;inputs:
+ ;  .altdir = alternate journal directory
+ ;
+ ;return value:
+ ;  status flag (0_message=failure; 1=sucess)
+ s $ZE="",$zt="ERROR^JRNWUTL"
+ i ($zversion(1)=1) S altdir=$G(^%SYS("JOURNAL","ALTDIR"),$ZU(12,"[.journal]"))
+ i '($zversion(1)=1) S altdir=$G(^%SYS("JOURNAL","ALTDIR"),$ZU(12)_"journal")
+ Q 1
+GPROPVAL(prop,val) ;get the value of a property
+ ;inputs:
+ ;  prop = property name ("JRNALL", "MAXSIZ", ...)
+ ;output:
+ ;  val = 0 or 1 (prop="JRNALL"), # of bytes (prop="MAXSIZ"), ...
+ ;return value:
+ ;  status flag (0_message=failure; 1=sucess)
+ s $ze="",$zt="ERROR"
+ n curjrnf
+ s curjrnf=$zu(78,3) i curjrnf="" q 0_$$del1^%Wprim_"journaling is off"
+ i prop="JRNALL" s val=0 q 1
+ i prop="MAXSIZ" s val=$P($ZU(78,22,curjrnf,3),",",2) q 1
+ q 0_$$del1^%Wprim_"unknown property"
+JRNSTART(jrnall,jrnnam,prefix,maxsiz,curdir,altdir) ; start journalling
+ ;inputs:
+ ;  jrnall = flag to journal all globals (0/1)
+ ;  jrnname = journal file name
+ ;  prefix = journal file prefix
+ ;  maxsiz = maximum journal file size in bytes
+ ;  curdir = primary journal directory
+ ;  altdir = alternate journal directory
+ ;
+ ;return value:
+ ;  status flag (0=failure; 1=sucess) [ delimiter error_message ]
+ s $ZE="",$zt="ERROR^JRNWUTL"
+ Q:+$zu(78,22) 0_$$del1^%Wprim_"Already journaling"
+ n started,err
+ n expqty s expqty=+$G(^%SYS("JOURNAL","EXPSIZE"))
+ s started=$$INT^JRNSTART(curdir,$g(altdir),jrnnam,$g(prefix),maxsiz,expqty,+$g(jrnall),.err)
+ Q started_$s($g(err)="":"",1:$$del1^%Wprim_err)              
+JRNSWTCH(curdir,altdir,maxsiz,jrnall) ; switch journal files
+ ;inputs:
+ ;  curdir = primary journal directory
+ ;  altdir = alternate journal directory
+ ;  [The following two parameters are optional; value 0 is same as unspecified]
+ ;  maxsiz = max size of journal file (in bytes) (0: no change)
+ ;  jrnall = whether to journal all globals (0: no change, 1/-1: yes/no)
+ ;
+ ;return value:
+ ;  status flag (0=failure; 1=sucess) [ delimiter error_message ]
+ s $ZE="",$zt="ERROR^JRNWUTL"
+ Q:'$zu(78,22) 0_$$del1^%Wprim_"Not journaling"
+ n switched,err s switched=$$INT^JRNSWTCH($g(curdir),$g(altdir),.err,,+$g(maxsiz),+$g(jrnall))
+ q switched_$s($g(err)="":"",1:$$del1^%Wprim_$p(err,",",2,$l(err,",")))
+JRNSTOP() ; stop journalling
+ ;inputs:
+ ;  none
+ ;
+ ;return value:
+ ;  status flag (0_message=failure; 1=sucess)
+ s $ZE="",$zt="ERROR^JRNWUTL"
+ Q:'$zu(78,22) 0_$$del1^%Wprim_"Not journaling"
+ n err,stopped s stopped=$$INT^JRNSTOP(.err)
+ q stopped_$s($g(err)="":"",1:$$del1^%Wprim_$p(err,",",2,$l(err,",")))
+JRNISON() ; whether journalling is on
+ Q +$zu(78,22)
+ERROR ; error trap for journalling calls
+ Q 0_$$del1^%Wprim_"Journal error."_$s($ZE'="":$c(13,10,10)_"$ze="_$ZE,1:"")                
+ ;
+getname(curfile) ;generates journal file names of the following format: YYYYMMDD.NNN
+ q $$getname^JRNSTART(curfile)
+curfile() s $ZT="error" q $p($zu(78,4)_","_$zu(78,3),",",2)
+error q ""
+ ; BITWISE.INC, DPB139 07/09/93
+FIXDIR(dir) ;procedure, dir is passed by reference
+ Q:dir=""
+ i ($zversion(1)=1) d
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ i '($zversion(1)=1) Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))
+ i '($zversion(1)=1) s dir=dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+ Q
+fixdir(dir) ;function
+ Q:dir="" ""
+ i ($zversion(1)=1) d  q dir
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")) dir
+ Q dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+basename(f) ;similar to basename on UNIX
+ Q $P(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),1,$L(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))-1)_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+appdir(d1,d2) ;use $zu(12,d2) to append d2 to canonic dir
+ i ($zversion(1)=1) S $E(d1,$L(d1))="."_d2_"]"
+ i '($zversion(1)=1) S d1=d1_d2
+ Q d1
+VALIDIR(dir) ;validate directory dir and create it if dir doesn't exist
+ new flag
+ s flag=1
+ g vdir2
+validir(dir,flag) ;validate directory dir and optionally create it if it
+vdir2 ; VALIDIR(dir) comes here with flag set to 1
+ quit:$$ChkDirOrSpecEXISTS(dir)'="" 1   ; dir is valid and exists
+ quit:$$ChkDirVALID(dir)="" 0    ; dir is not valid
+ i flag'=1 q 0  ; flag says don't create, return failure
+ new x
+ set x=$$mkdir(dir)  ; returns 0 for success, 1 for failure
+ q:x=1 0  ; failed to create
+ quit:$$ChkDirOrSpecEXISTS(dir)="" 0   ; it doesn't we failed
+ q 1  ; success
+mkdir(dir) ;create a new directory
+ i ($zversion(1)=1) q:$$ChkDirVALID(dir)="" 1  ; dir is invalid, return failure
+ q '##class(%Library.File).CreateDirectoryChain(dir)
+jrnshort(jf,short) ;get/set short form of a journal file name FIXME HYY1999
+         N (jf,short)
+         S len=$L($P(jf,";"))
+         Q:$G(short)="" $E(jf,len-11,len) ;"GET" form
+         S $E(jf,len-11,len)=short ;"SET" form
+         Q jf
+GJrnPrefix(jf) ;extract prefix from the journal file name jf
+         N (jf)
+         S fname=$P(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),$L(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")))       
+         Q $e(fname,1,$l($p(fname,"."))-8)
+GetJrnFileName(path) { 
+	i $f(path,"/") q $p(path,"/",$l(path,"/")) ;presumably a Unix path
+	if $f(path,"\") q $p(path,"\",$l(path,"\")) ;presumably a Windows path
+	s vmsfile=$p(path,"]",2) i vmsfile="" q path ;a name only, not a path
+	q $p(vmsfile,";") ;return name from a VMS path without trailing ";"
+}
+dirinvalidmsg(dir1,dir2) 
+ n valid1,valid2,cnt,msg
+ s valid1=$$VALIDIR(dir1),valid2=$$VALIDIR(dir2)
+ s cnt=valid1+valid2 ; cnt = 0 if both invalid, 1 if one is valid
+ s msg="The following journaling "
+ s:cnt msg=msg_"directory is" 
+ s:'cnt msg=msg_"directories are"
+ s msg=msg_" not valid"_$C(13,10)
+ s:'valid1 msg=msg_"     "_dir1_$C(13,10)
+ s:'valid2 msg=msg_"     "_dir2_$C(13,10)
+ q msg
+ChkDirVALID(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,1)
+ChkDirEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkDirOrSpecEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,3)
+ChkDir(R) N N S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkBad S $ZT="" W !,"<"_$P($P($ZE,"<",2),">")_"> error -- invalid directory"
+ Q ""

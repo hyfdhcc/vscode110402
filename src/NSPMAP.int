@@ -1,0 +1,1243 @@
+ROUTINE NSPMAP [Type=INT]
+NSPMAP ; create a namespace ; RFD1283 10/15/14 
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ; GXLATE.INC DPB125 06/04/93
+assign(nsname,array,loclist) Public {
+ s numl=""
+ f  {
+	s numl=$o(array(numl)) q:numl=""
+	s numr=$o(array(numl))
+	i numr="" d doone(nsname,.loclist,array(numl,"name"),array(numl,"loc"),array(numl,"loc"))
+	i numr]"",array(numr,"name")'=array(numl,"name") d doone(nsname,.loclist,array(numl,"name"),array(numl,"loc"),array(numl,"loc"))
+	i numr]"",array(numr,"name")=array(numl,"name") {
+		d doone(nsname,.loclist,array(numl,"name"),array(numl,"loc"),array(numr,"loc"))
+		k array(numl) s numl=numr
+	}
+	k array(numl)
+ }
+ q
+}
+doone(nsname,loclist,name,ind1,ind2) Private {
+ k ^SYS("NSMAP",nsname,"globmap",name)
+ s loc1=$g(loclist(ind1)),loc2=$g(loclist(ind2))
+ s:$p(loc1,$c(1))'="" ^SYS("NSMAP",nsname,"globmap",name,1,"I")=$p(loc1,$c(1))
+ s:$p(loc1,$c(1),2)'="" ^SYS("NSMAP",nsname,"globmap",name,1,"L")=$p(loc1,$c(1),2)
+ s:$p(loc2,$c(1))'="" ^SYS("NSMAP",nsname,"globmap",name,2,"I")=$p(loc2,$c(1))
+ s:$p(loc2,$c(1),2)'="" ^SYS("NSMAP",nsname,"globmap",name,2,"L")=$p(loc2,$c(1),2)
+ q
+}
+oneglob(globname,Location,LockLocation,slmdef,pairs,loclist) Public { ;
+ s impl=Location_$c(1)_LockLocation
+ i '$d(loclist(impl),curloc) {
+ 	s curloc=$i(loclist)
+ 	s loclist(impl)=loclist
+ 	s loclist(loclist)=impl
+ }
+ i slmdef'="" s gn=globname,globname=slmdef
+ e  s gn=0
+ i $d(pairs(gn,"key",globname),i) {
+	 s pairs(gn,i,1,"loc")=curloc
+	 q
+ }
+ i $e(globname)'="(" {
+	s range=$s($l(globname,":")=2:1,1:0),glob2=""
+	s glob1=$p(globname,":"),wild1=$s(glob1["*":1,1:0)
+	s glob1=$p(glob1,"*")
+	i range {
+		s glob2=$p(globname,":",2),wild2=$s(glob2["*":1,1:0)
+		s glob2=$p(glob2,"*")
+	}
+	s:range wild1=1
+	i glob1="" s glob1="%",glob2="",wild1=0,wild2=0,range=1
+ }  else {
+	s range=0,wild1=0,wild2=0,glob2="",glob2end=0
+	i globname'["):" {
+		s glob1=$e(globname,2,$l(globname)-1)
+	} else {
+ 		f jj=1:1:$l(globname,"):")-1 s glob1=$p(globname,"):",1,jj) s:'($l(glob1)-$l($tr(glob1,""""))#2) range=1 q:range=1
+		 i range {
+			s glob2=$p(globname,"):",jj+1,$l(globname,"):"))
+			i ($zcvt(glob2,"u")="END") {
+				s glob2=""
+			} else {
+				i ($zcvt(glob2,"u")[",END") {
+		 			s glob=$p($tr(glob2,",end",",END"),",END",1)
+					s glob2end=1
+		 			s glob2=$e(glob,2,*)  ; strip of leading "("
+				} else {
+					s glob2=$e(glob2,2,$l(glob2)-1)
+				}
+			}
+		 	s glob1=$e(glob1,2,$l(glob1))
+		 }
+	}
+	s glob1=$$actref(glob1),glob2=$$actref(glob2)
+	if glob2end s glob2=glob2_$c(1)_"*next"
+ }
+ s pairs=$i(pairs(gn))
+ s pairs(gn,"key",globname)=pairs
+ s pairs(gn,pairs,2,"loc")=1
+ i 'range&wild1 {
+	s pairs(gn,pairs,1,"name")=glob1,pairs(gn,pairs,1,"loc")=curloc,pairs(gn,pairs,2,"name")=$$globnext(glob1)
+ } else {
+	i 'range&('wild1) {
+		s pairs(gn,pairs,1,"name")=glob1,pairs(gn,pairs,1,"loc")=curloc,pairs(gn,pairs,2,"name")=glob1
+	} else {
+		i range&('wild2) {
+			s pairs(gn,pairs,1,"name")=glob1,pairs(gn,pairs,1,"loc")=curloc,pairs(gn,pairs,2,"name")=glob2
+		} else {
+			s pairs(gn,pairs,1,"name")=glob1,pairs(gn,pairs,1,"loc")=curloc,pairs(gn,pairs,2,"name")=$$globnext(glob2)
+ 		}
+	}
+ }
+ i (slmdef'=""),(globname'["(") {  
+	f jj=1,2 i pairs(gn,pairs,jj,"name")]"" s pairs(gn,pairs,jj,"name")=""""_pairs(gn,pairs,jj,"name")_""""
+ }
+ q
+}
+globnext(name) Private {
+ f jj=$l(name):-1:1 i $e(name,jj)'="z" q
+ s next=$f("Z9&.",$e(name,jj))
+ i next s next=$e(name,1,jj-1)_$e(" aA./",next)
+ e  s next=$e(name,1,jj-1)_$c($a(name,jj)+1)
+ q next
+}
+updmarg(nsname,globname,col,rmap,pairs,array) [pairs] Public {
+ K array
+ s subm=($l(col)>0),novlp=(subm&&('rmap))
+ s $zt="Err",endon=""
+ s gn=$s(subm:globname,1:0),pairs=pairs(gn)
+ i pairs(gn,1,2,"name")'=""&&($zu(90,23,pairs(gn,1,1,"name"),pairs(gn,1,2,"name"),$s(col="":-1,1:col))) {
+	 d maperr(nsname,globname,1,"endpoint does not follow starting point",.pairs,gn)
+ } elseif pairs(gn,1,1,"name")=pairs(gn,1,2,"name") {
+	 i subm s pairs(gn,1,2,"name")=pairs(gn,1,2,"name")_$c(1)_"*next"
+	 s array(8)="pairs("""_gn_""","_1_","_1/*"pairs(1,1)"*/_")",array(8,"map")=1,array(8,"name")=pairs(gn,1,1/*"pairs(1,1)"*/,"name"),array(8,"loc")=pairs(gn,1,1/*"pairs(1,1)"*/,"loc")
+	 s array(2*8)="pairs("""_gn_""","_1_","_2/*"pairs(1,2)"*/_")",array(2*8,"map")=0,array(2*8,"name")=pairs(gn,1,2/*"pairs(1,2)"*/,"name"),array(2*8,"loc")=pairs(gn,1,2/*"pairs(1,2)"*/,"loc")
+ } else {
+	 s array(8)="pairs("""_gn_""","_1_","_1/*"pairs(1,1)"*/_")",array(8,"map")=1,array(8,"name")=pairs(gn,1,1/*"pairs(1,1)"*/,"name"),array(8,"loc")=pairs(gn,1,1/*"pairs(1,1)"*/,"loc") i pairs(gn,1,2,"name")'="" s array(2*8)="pairs("""_gn_""","_1_","_2/*"pairs(1,2)"*/_")",array(2*8,"map")=0,array(2*8,"name")=pairs(gn,1,2/*"pairs(1,2)"*/,"name"),array(2*8,"loc")=pairs(gn,1,2/*"pairs(1,2)"*/,"loc")
+	 if pairs(gn,1,2,"name")="" s endon=1
+ }
+ q:pairs=1
+ s INT="",jj=1
+errrepeat
+ s $zt="ReIndex"
+ For  {
+	 Quit:$i(jj)>pairs
+	 k maprecov
+	 S (FIRSTL,FIRSTR)=""
+	 i pairs(gn,jj,2,"name")'=""&&($zu(90,23,pairs(gn,jj,1,"name"),pairs(gn,jj,2,"name"),$s(col="":-1,1:col))) {
+		 d maperr(nsname,globname,jj,"endpoint does not follow starting point",.pairs,gn)  ;JAO922
+		 Continue
+	 }
+	 i subm&&(pairs(gn,jj,1,"name")=pairs(gn,jj,2,"name")) s pairs(gn,jj,2,"name")=pairs(gn,jj,2,"name")_$c(1)_"*next"
+	 For  {
+		 s INT=$O(array(INT)) Q:INT=""
+		 S POINT=@(array(INT))@("name")
+		 I FIRSTL=""&&($zu(90,23,POINT,pairs(gn,jj,1,"name"),$s(col="":-1,1:col))) S FIRSTL=INT
+		 I pairs(gn,jj,2,"name")]""&&(FIRSTR="")&&($zu(90,23,POINT,pairs(gn,jj,2,"name"),$s(col="":-1,1:col))) S FIRSTR=INT
+		 if FIRSTL]""&&(pairs(gn,jj,2,"name")=""!(FIRSTR]"")) s INT="" Q
+	 }
+	 S FIRSTL=$O(array(FIRSTL),-1),FIRSTR=$O(array(FIRSTR),-1)
+	 S SET="",samestart=0,begedge="",oldpair=""
+	 I FIRSTL="" {
+		 S NUM=$O(array(""))-(2*8)
+		 s array(NUM)="pairs("""_gn_""","_jj_","_1/*"pairs("_jj_",1)"*/_")",array(NUM,"map")=1,array(NUM,"name")=pairs(gn,jj,1/*"pairs("_jj_",1)"*/,"name"),array(NUM,"loc")=pairs(gn,jj,1/*"pairs("_jj_",1)"*/,"loc")
+		 I FIRSTR="" {
+			 s array(NUM+8)="pairs("""_gn_""","_jj_","_2/*"pairs("_jj_",2)"*/_")",array(NUM+8,"map")=0,array(NUM+8,"name")=pairs(gn,jj,2/*"pairs("_jj_",2)"*/,"name"),array(NUM+8,"loc")=pairs(gn,jj,2/*"pairs("_jj_",2)"*/,"loc")
+			 Continue
+		 }
+		 s LSET=NUM
+	 } else {
+		 I (@array(FIRSTL)@("name")=pairs(gn,jj,1,"name"))&&($p($p(array(FIRSTL),",",3),")")=1)&&novlp {
+			 if @array(FIRSTR)@("name")=pairs(gn,jj,2,"name")&&($p(array(FIRSTL),",",2)=$p(array(FIRSTR),",",2)) {
+				 S (@array(FIRSTL)@("loc"),array(FIRSTL,"loc"))=pairs(gn,jj,1,"loc")
+				 Continue
+			 }
+			 d maperr(nsname,globname,jj,"leading subscript same as a prior mapping",.pairs,gn)
+			 Continue
+		 }
+		 i (FIRSTR<FIRSTL) {
+			 d maperr(nsname,globname,jj,"endpoint precedes start of range (internal error)",.pairs,gn)
+			 Continue
+		 }
+		 s oldloc=array(FIRSTL,"loc"),oldmap=array(FIRSTL,"map")
+		 I @array(FIRSTL)@("name")=pairs(gn,jj,1,"name") {
+			 s oldpair=array(FIRSTL)
+			 if ($p($p(array(FIRSTL),",",3),")")=1) {
+				 s begedge=$p(array(FIRSTL),",",2)
+				 S (@array(FIRSTL)@("loc"),array(FIRSTL,"loc"))=pairs(gn,jj,1,"loc")
+			 } else {
+				 S @array(FIRSTL)@("delete")="pairs("""_gn_""","_jj_","_1_")"
+				 s array(FIRSTL)="pairs("""_gn_""","_jj_","_1_")"
+				 s array(FIRSTL,"loc")=pairs(gn,jj,1,"loc")
+			 }
+			 S array(FIRSTL,"map")=1
+			 s maprecov=FIRSTL ;this is the only array element to recover in reindex
+			 ;SML1136
+			 s LSET=FIRSTL,samestart=1
+			 if pairs(gn,jj,1,"name")=pairs(gn,jj,2,"name") {
+				 s nf=$o(array(FIRSTL),-1,nd)
+				 if nf]""&&(@nd@("name")=pairs(gn,jj,1,"name")) {
+					 S (@array(nf)@("loc"),array(nf,"loc"))=pairs(gn,jj,1,"loc")
+					 S (@array(FIRSTL)@("loc"),array(FIRSTL,"loc"))=oldloc
+					 S array(FIRSTL,"map")=oldmap
+					 Continue
+				 }
+			 }
+		 } else {
+			 S NEXT=$O(array(FIRSTL))
+			 s NUM=$$GetMapIdx(.array,NEXT,FIRSTL,1)
+			 ztrap:NUM="" "INDX"
+			 s array(NUM)="pairs("""_gn_""","_jj_","_1/*"pairs("_jj_",1)"*/_")",array(NUM,"map")=1,array(NUM,"name")=pairs(gn,jj,1/*"pairs("_jj_",1)"*/,"name"),array(NUM,"loc")=pairs(gn,jj,1/*"pairs("_jj_",1)"*/,"loc")
+			 S (LSET,SET)=NUM
+		 }
+	 }
+	 I FIRSTR=FIRSTL {
+		 i pairs(gn,jj,2,"name")="" {
+			 if endon'="" g overlap
+			 s endon=jj
+			 s pairs(gn,jj,2,"delete")=""
+			 Continue
+		 }
+		 S LSET=$S(SET]"":SET,1:FIRSTL)
+		 S NEXT=$O(array(LSET))
+		 s NUM=$$GetMapIdx(.array,NEXT,LSET,2)
+		 ztrap:NUM="" "INDX"
+		 s array(NUM)="pairs("""_gn_""","_jj_","_2/*"pairs("_jj_",2)"*/_")",array(NUM,"map")=0,array(NUM,"name")=pairs(gn,jj,2/*"pairs("_jj_",2)"*/,"name"),array(NUM,"loc")=pairs(gn,jj,2/*"pairs("_jj_",2)"*/,"loc")
+		 s array(NUM,"loc")=oldloc,array(NUM,"map")=oldmap
+		 if begedge'="" {
+			 s array(NUM,"begedge")=begedge
+			 s:$G(array(FIRSTL,"edgend"))'="END" x=$i(array(FIRSTL,"edgend"))
+		 }
+		 Continue
+	 }
+	 s nf=$O(array(LSET),1,nd),ned=array(FIRSTR),sameend=(@ned@("name")=pairs(gn,jj,2,"name"))
+	 s edgeok=('novlp)&&((sameend&&(nf=FIRSTR))||samestart)
+	 if ($p($p(nd,",",3),")")'=1&&('edgeok))||('$s($p($p(ned,",",3),")")=1:sameend,1:('sameend||'novlp))) {
+overlap	 I FIRSTL=""||(@array(FIRSTL)@("name")'=pairs(gn,jj,1,"name")) {
+			 k:LSET'="" array(LSET)
+		 } else {
+			 s:LSET'="" array(LSET,"loc")=oldloc,array(LSET,"map")=oldmap
+		 }
+		 d maperr(nsname,globname,jj,"mapping overlaps with a prior mapping",.pairs,gn)
+		 Continue
+	 }
+	 I pairs(gn,jj,2,"name")=""||(pairs(gn,jj,2,"name")'=@array(FIRSTR)@("name")) {
+		 i pairs(gn,jj,2,"name")="" {
+			 if endon'="" g overlap
+			 s endon=jj
+			 s pairs(gn,jj,2,"delete")=""
+			 S (@array(FIRSTR)@("loc"),array(FIRSTR,"loc"))=pairs(gn,jj,1,"loc")
+			 s array(FIRSTR,"map")=1
+			 if begedge'="" {
+				 S (@array(FIRSTL)@("loc"),array(FIRSTL,"loc"))=oldloc
+				 s array(FIRSTL,"edgend")="END"
+			 }
+		 } else {
+			 S NEXT=$O(array(FIRSTR))
+			 s NUM=$$GetMapIdx(.array,NEXT,FIRSTR,1) 
+			 ztrap:NUM="" "INDX"
+			 s array(NUM)="pairs("""_gn_""","_jj_","_2/*"pairs("_jj_",2)"*/_")",array(NUM,"map")=0,array(NUM,"name")=pairs(gn,jj,2/*"pairs("_jj_",2)"*/,"name"),array(NUM,"loc")=pairs(gn,jj,2/*"pairs("_jj_",2)"*/,"loc")
+			 s oldmapx=array(FIRSTR,"map"),oldlocx=array(FIRSTR,"loc")
+			 S (@array(FIRSTR)@("loc"),array(FIRSTR,"loc"))=pairs(gn,jj,1,"loc")
+			 i oldmapx {
+				 s (@array(NUM)@("loc"),array(NUM,"loc"))=oldlocx
+				 s array(NUM,"map")=1
+			 } else {
+				 s array(FIRSTR,"map")=1
+				 if FIRSTL'="" s array(NUM,"loc")=oldloc,array(NUM,"map")=oldmap
+			 }
+			 if begedge'="" {
+				 s array(NUM,"begedge")=begedge
+				 s:$G(array(FIRSTL,"edgend"))'="END" x=$i(array(FIRSTL,"edgend"))
+			 }
+			 S FIRSTR=NUM
+		 }
+	 } else {
+		 s pairs(gn,jj,2,"delete")=array(FIRSTR)
+	 }
+	 if begedge'=""&&(pairs(gn,jj,2,"name")'="") {
+	 	S NUM=FIRSTL
+	 	For  {
+		 	S NUM=$O(array(NUM),1,nd) Q:NUM=""||(NUM=FIRSTR)
+		 	s edge=$g(array(NUM,"begedge"),"")
+			if ($p($p(nd,",",3),")")=2&&(begedge=edge||(begedge=$p(nd,",",2)))) {
+				S (@array(FIRSTL)@("loc"),array(FIRSTL,"loc"))=oldloc
+				quit
+			}
+	 	}
+	 }
+	 S NUM=LSET
+	 For  {
+		 S NUM=$O(array(NUM),1,nd) Q:NUM=FIRSTR
+nextpoint s beg=$p($p(nd,",",3),")"),index=$p(nd,",",2)
+		 if beg=1 {
+			 if $D(array(NUM,"edgend"),edgecnt) {
+				 Q:edgecnt="END"
+				 s edgecnt=edgecnt+1
+				 s NUM=$O(array(NUM),1,nd) Q:NUM=FIRSTR
+				 for  {
+					 if '$d(array(NUM,"begedge"),cindex) s cindex=$p(nd,",",2)
+					 s:index=cindex edgecnt=edgecnt-1
+					 Q:edgecnt=0
+					 s NUM=$O(array(NUM),1,nd)
+					 Q:NUM=FIRSTR
+				 }
+				 if edgecnt d $zu(9,"","updmarg: could not find a matching end point for begin edge overlap "_pairs(gn,index,1,"name"),0,0) Q
+				 s (@array(NUM)@("loc"),array(NUM,"loc"))=pairs(gn,jj,1,"loc"),array(NUM,"map")=1
+				 continue
+			 }
+			 if $d(pairs(gn,index,2,"delete"),end) {
+				 Quit:end=""
+				 s NUM=$O(array(NUM),1,nd) Q:NUM=FIRSTR
+				 for  Q:nd=end||(NUM=FIRSTR)  s NUM=$O(array(NUM),1,nd)
+				 Q:NUM=FIRSTR
+				 if $p($p(nd,",",3),")")=2 {
+					 s (@array(NUM)@("loc"),array(NUM,"loc"))=pairs(gn,jj,1,"loc"),array(NUM,"map")=1
+					 continue
+				 } else {
+					 goto nextpoint
+				 }
+			 }
+			 s NUM=$O(array(NUM),1,nd) Q:NUM=FIRSTR
+			 for  Q:index=$p(nd,",",2)||(NUM=FIRSTR)  s NUM=$O(array(NUM),1,nd)
+			 if NUM=FIRSTR d $zu(9,"","updmarg: could not find a matching end point for "_pairs(gn,index,1,"name"),0,0) Q
+			 s (@array(NUM)@("loc"),array(NUM,"loc"))=pairs(gn,jj,1,"loc"),array(NUM,"map")=1
+			 continue
+		 }
+		 if '$d(array(NUM,"begedge"))&&(index'=begedge) d $zu(9,"","updmarg: found non-begin-overlap end point for "_pairs(gn,index,1,"name"),0,0) Q
+	 }
+ }
+ q
+Err s ^||SYS.ActivateError($i(^||SYS.ActivateError))=$ze q
+ReIndex ;reindex the array
+ i $ze'["<ZINDX>" s ^||SYS.ActivateError($i(^||SYS.ActivateError))="ERROR: "_$ze_" in reindexing." q
+ s $zt="etReIndex"
+ s pairtodo="pairs("""_gn_""","_jj_",1"
+ k tmp
+ i $g(maprecov)]"" {
+	 s array(maprecov,"map")=$g(oldmap,0) ;this was set to 1 before error
+	 s array(maprecov)=oldpair
+	 s (@array(maprecov)@("loc"),array(maprecov,"loc"))=oldloc
+ }
+ s i="" f n=0:8 s i=$o(array(i)) q:i=""  m:array(i)'[pairtodo tmp(n)=array(i)
+ k array m array=tmp
+ s jj=jj-1 ;retry pairs(jj) that triggered reindexing
+ g errrepeat  ; Go back to FOR loop with jj=jj-1
+etReIndex ;
+ s $zt=""
+ s m=" mappings"
+ s m=$s($g(col)="":"global mappings",+$g(rmap):"routine mappings",1:"subscript mappings of global "_globname)
+ s ^||SYS.ActivateError($i(^||SYS.ActivateError))="ERROR: "_$ze_" in reindexing "_m_" in "_$g(nsname)
+ q
+} ; end updmarg
+GetMapIdx(array,next,first,incr) Private {
+ i next="" q first+(incr*8)
+ s num=$s(incr=1:(first*.5)+(next*.5),1:(first*.25)+(next*.75))
+ i $d(array(num)) q "" ;prevent pairs(jj,1) and (jj,2) from sharing one index
+ i first<num,num<next q num
+ i next<num,num<first q num
+ q "" ;first and next are too close to insert a point between them
+}
+ ;
+maperr(nsname,globname,index,reason,pairs,gn) Private { 
+ s pair1=pairs(gn,index,1,"name")
+ i pair1="" s pair1="BEGIN"
+ e  s pair1="("_pair1_")"
+ s pair2=$P(pairs(gn,index,2,"name"),$C(1)_"*next")
+ i pair2="" s pair2="END"
+ e  s pair2="("_pair2_")"
+ s err="Discarding subscript mapping "_pair1
+ i pair1'=pair2 s err=err_":"_pair2
+ s err=err_" "_reason_" global ^"_globname_" namespace "_nsname
+ d $zu(9,"",err,(1>0),2)
+ q
+}
+FOLLOWS(ga,gb,col) Public {
+ q $zu(90,23,ga,gb,$s(col="":-1,1:col))
+}
+actref(ga) [BEGIN,END] Private {
+ i ga="" q ga
+ i $zcvt(ga,"U")="BEGIN" q """"""
+ i $zcvt(ga,"U")="END" q ""
+ New BEGIN,END
+ s (BEGIN,END)=""
+ k ^||temp
+ s xx=$name(@("^||temp("_ga_")"))
+ s sav=$zu(68,1,1)
+ s @xx=""
+ s res=$q(^||temp)
+ s sav=$zu(68,1,sav)
+ s res=$p(res,"(",2,$l(res,"("))
+ k ^||temp
+ q $e(res,1,$l(res)-1)
+}
+assigslm(nsname,globname,col,loclist,array) Public {
+ q:'$d(array)
+ s $zt="Err"
+ s mapnum=0
+ k ^SYS("NSMAP",nsname,"submap",globname)
+ s ^SYS("NSMAP",nsname,"submap",globname)=col
+ s numl=$o(array(""))
+ s subrefl=array(numl,"name") ; subscripts string
+ i subrefl'="""""" d oneslm(nsname,globname,"""""",1,.loclist,.mapnum)
+ s qll=$ql("xx("_subrefl_")") ; get number of subscripts
+ i qll>1 d slmrange(nsname,globname,.loclist,.mapnum,subrefl,1,qll-1,1)
+ d oneslm(nsname,globname,subrefl,array(numl,"loc"),.loclist,.mapnum)
+ f  s numr=$o(array(numl)) q:numr=""  d  s numl=numr,subrefl=subrefr,qll=qlr
+ . s subrefr=array(numr,"name") ; subscript string
+ . if subrefr[($c(1)_"*next") d oneslm(nsname,globname,subrefr,array(numr,"loc"),.loclist,.mapnum) d  q
+ . . s subrefr=$p(subrefr,$c(1))
+ . . s qlr=$ql("xx("_subrefr_")")
+ . s qlr=$ql("xx("_subrefr_")") ; number of subscripts at the end of interval
+ . i qlr=1 d oneslm(nsname,globname,subrefr,array(numr,"loc"),.loclist,.mapnum) q
+ . f kk=1:1:qlr q:qll<kk  i $qs("xx("_subrefl_")",kk)'=$qs("xx("_subrefr_")",kk) q
+ . i kk<qlr d slmrange(nsname,globname,.loclist,.mapnum,subrefr,kk,qlr-1,array(numl,"loc"))
+ . d oneslm(nsname,globname,subrefr,array(numr,"loc"),.loclist,.mapnum)
+ q
+Err s ^||SYS.ActivateError($i(^||SYS.ActivateError))=$ze q
+}
+slmrange(nsname,globname,loclist,mapnum,subref,beg,end,ind) Private {
+ f jj=beg:1:end s sub=$$extrsub(subref,jj) d oneslm(nsname,globname,sub,ind,.loclist,.mapnum)
+ q
+}
+extrsub(subref,num) Private {
+ s ref=$na(@("xx("_subref_")"),num)
+ s ref=$p(ref,"(",2,$l(ref,"("))
+ q $e(ref,1,$l(ref)-1)
+}
+oneslm(nsname,globname,sub,ind,loclist,mapnum)  Private {
+ s mapnum=mapnum+1
+ s ^SYS("NSMAP",nsname,"submap",globname,mapnum)=sub
+ s loc=$p($G(loclist(ind)),$c(1))
+ i loc="" s $p(loclist(ind),$c(1))="|""^^""|",loc="|""^^""|"
+ s ^SYS("NSMAP",nsname,"submap",globname,mapnum,"I")=loc
+ q
+}
+OneNSP(ConfigName,Namespace,rmtab,extratab) Public {
+ s $zt="Error"
+ k ^||SYS.ActivateError
+ s SysCacheTemp=$p(^SYS("GREDIR","DSLOC","master",ConfigName,"CACHETEMP"),$c(1),3)
+ s SysCacheAudit=$p(^SYS("GREDIR","DSLOC","master",ConfigName,"CACHEAUDIT"),$c(1),3)
+ s SysCacheSys=$p(^SYS("GREDIR","DSLOC","master",ConfigName,"CACHESYS"),$c(1),3)
+ s SysCacheLib=$p(^SYS("GREDIR","DSLOC","master",ConfigName,"CACHELIB"),$c(1),3)
+ s SysCache=$p(^SYS("GREDIR","DSLOC","master",ConfigName,"CACHE"),$c(1),3)
+ s JournalcspSession=^CONFIG("Journal","JournalcspSession")
+ Q:'$D(^CONFIG("Namespaces",Namespace)) 1
+ s Data=^CONFIG("Namespaces",Namespace)
+ s DefDir=$p(Data,",",1)
+ s DefDirN=DefDir
+ s DefDir=$p(^SYS("GREDIR","DSLOC","master",ConfigName,DefDir),$c(1),3)
+ s DefRoDir=$p(Data,",",2)
+ s DefRoDir=$s(DefRoDir="":DefDir,1:$p(^SYS("GREDIR","DSLOC","master",ConfigName,DefRoDir),$c(1),3))
+ s CacheTemp=$p(Data,",",3)
+ s CacheTemp=$s(CacheTemp="":SysCacheTemp,1:$p(^SYS("GREDIR","DSLOC","master",ConfigName,CacheTemp),$c(1),3))
+ s DefSysGl=$p(Data,",",4)
+ s DefSysGl=$s(DefSysGl="":SysCacheSys,1:$p(^SYS("GREDIR","DSLOC","master",ConfigName,DefSysGl),$c(1),3))
+ s DefMgr=$p(Data,",",5)
+ s DefMgr=$s(DefMgr="":SysCacheSys,1:$p(^SYS("GREDIR","DSLOC","master",ConfigName,DefMgr),$c(1),3))
+ s CacheLib=$p(Data,",",6)
+ s CacheLib=$s(CacheLib="":SysCacheLib,1:$p(^SYS("GREDIR","DSLOC","master",ConfigName,CacheLib),$c(1),3))
+ s ^SYS("NSMAP",Namespace,"defglbloc")=DefDir
+ i $p(DefMgr,"^",2)'="" s ^||SYS.ActivateError($i(^||SYS.ActivateError))="Namespace "_Namespace_": dataset "_DefMgr_" for system routines location is not local"
+ s ^SYS("NSMAP",Namespace,"defsysrtn")=DefMgr
+ s StreamLocation=$g(^SYS("DBStreamLocation",DefDirN))
+ i StreamLocation'="" s ^%SYS("StreamLocation",Namespace)=StreamLocation
+ k extratab("rsql")
+ k extratab("pkg")
+ k SubMapCol,pairs,loclist
+ k GlobalMapped,PackageMapped,RoutineMapped
+ s loclist=1,loclist("|""^^""|"_$c(1))=1,loclist(1)="|""^^""|"_$c(1)
+ s Index=""
+ f  {
+	s Index=$o(rmtab("ext",Index),1,Data) q:Index=""
+	s SubMapCol(Data)=$s(Data="rOBJ":133,1:5)
+	d oneglob(Data,DefRoDir,DefRoDir,"",.pairs,.loclist)
+ }
+ s Index="" 
+ f  {
+	s Index=$o(extratab("ext",Index),1,Data) q:Index=""
+	s SubMapCol(Data)=5
+	d oneglob(Data,DefRoDir,DefRoDir,"",.pairs,.loclist)
+ }
+ d oneglob("odd*",DefRoDir,DefRoDir,"",.pairs,.loclist)
+ d oneglob("mtemp*",CacheTemp,CacheTemp,"",.pairs,.loclist)
+ d oneglob("cspRule",DefRoDir,DefRoDir,"",.pairs,.loclist)
+ d oneglob("ISC.oddMETA",SysCache,SysCache,"",.pairs,.loclist)
+ d oneglob("CacheTemp*",CacheTemp,CacheTemp,"",.pairs,.loclist)
+ d oneglob("CacheMsg*",DefRoDir,DefRoDir,"",.pairs,.loclist)
+ i Namespace="%SYS" d oneglob("CacheAudit*",SysCacheAudit,SysCacheAudit,"",.pairs,.loclist)
+ d oneglob("%utility",CacheTemp,CacheTemp,"",.pairs,.loclist)
+ d oneglob("%q*",CacheLib,CacheLib,"",.pairs,.loclist)
+ if Namespace="%SYS" {
+ 	d oneglob("%sqlcq",SysCache,SysCache,"",.pairs,.loclist)
+ } else {
+	d oneglob("%sqlcq",DefSysGl,DefSysGl,"",.pairs,.loclist)
+ }
+ i 'JournalcspSession d oneglob("%cspSession",SysCache,SysCache,"",.pairs,.loclist)
+ d oneglob("%ISCWorkQueue",SysCache,SysCache,"",.pairs,.loclist)
+ d oneglob("%*",DefSysGl,DefSysGl,"",.pairs,.loclist)
+ s Status=$$MapUserGlobals(Namespace,0)
+ i '(''Status) q Status
+ i (",%CACHELIB,SAMPLES,DOCBOOK,"'[(","_Namespace_",")) {
+	s Status=$$MapUserGlobals(Namespace,1)
+	i '(''Status) q Status
+ }
+ i $g(pairs(0)) d updmarg(Namespace,"","",0,.pairs,.array)
+ d assign(Namespace,.array,.loclist)
+ k pairs
+ s Status=$$MapPkg(Namespace,"INFORMATION.SCHEMA",CacheLib,1)
+ i '(''Status) q Status
+ s Status=$$MapSub(Namespace,"%z*","ALL",DefMgr,.rmtab)
+ i '(''Status) q Status
+ k extratab("slm")
+ s extratab("slm","oddCOM")="(""%z""):(""%{"")"
+ s extratab("slm","oddDEF")="(""%z""):(""%{"")"
+ s extratab("slm","oddEXT")="(""%z""):(""%{"")"
+ s extratab("slm","oddEXTR")="(""%z""):(""%{"")"
+ s extratab("slm","oddMAP")="(""%z""):(""%{"")"
+ s extratab("pkg","oddPKG","%z")=DefMgr_$c(1)_"(""%z""):(""%{"")"
+ s extratab("pkg","oddPROC","%z")=DefMgr_$c(1)_"(""%z""):(""%{"")"
+ s extratab("slm","oddSQL")="(""%z""):(""%{"")"
+ s extratab("slm","oddStudioDocument")="(""%z""):(""%{"")"
+ s extratab("slm","oddStudioMenu")="(""%z""):(""%{"")"
+ s extratab("pkg","rINDEXCLASS","%z")=DefMgr_$c(1)_"(""%z""):(""%{"")"
+ s Status=$$MapSub(Namespace,"","ALL",DefMgr,.extratab)
+ i '(''Status) q Status
+ k extratab("slm")
+ s MapNamespace=$s(Namespace="%SYS":"",1:$tr(Namespace,"%_-","pud"))
+ s Status=$$MapPkg(Namespace,"%sqlcq"_$s(MapNamespace="":"",1:"."_MapNamespace),SysCache,1)
+ i '(''Status) q Status
+ s Status=$$MapSub(Namespace,"%sqlcq"_$s(MapNamespace="":"",1:"."_MapNamespace)_".*","ALL",SysCache,.rmtab)
+ i '(''Status) q Status
+ s Status=$$MapPkg(Namespace,"%ZEN",CacheLib,1)
+ i '(''Status) q Status
+ s Status=$$MapSub(Namespace,"%ZEN.*","ALL",CacheLib,.rmtab)
+ i '(''Status) q Status
+ k extratab("slm")
+ s extratab("slm","oddCOM")="(""%Z""):(""%["")"
+ s extratab("slm","oddDEF")="(""%Z""):(""%["")"
+ s extratab("slm","oddEXT")="(""%Z""):(""%["")"
+ s extratab("slm","oddEXTR")="(""%Z""):(""%["")"
+ s extratab("slm","oddMAP")="(""%Z""):(""%["")"
+ s extratab("pkg","oddPKG","%Z")=DefMgr_$c(1)_"(""%Z""):(""%["")"
+ s extratab("pkg","oddPROC","%Z")=DefMgr_$c(1)_"(""%Z""):(""%["")"
+ s extratab("slm","oddSQL")="(""%Z""):(""%["")"
+ s extratab("slm","oddStudioDocument")="(""%Z""):(""%["")"
+ s extratab("slm","oddStudioMenu")="(""%Z""):(""%["")"
+ s extratab("pkg","rINDEXCLASS","%Z")=DefMgr_$c(1)_"(""%Z""):(""%["")"
+ s Status=$$MapSub(Namespace,"","ALL",DefMgr,.extratab)
+ i '(''Status) q Status
+ s Status=$$MapSub(Namespace,"%Z*","ALL",DefMgr,.rmtab)
+ i '(''Status) q Status
+ s Status=$$MapPkg(Namespace,"%SYS",DefMgr,1)
+ i '(''Status) q Status
+ s Status=$$MapSub(Namespace,"%SYS.*","ALL",DefMgr,.rmtab)
+ i '(''Status) q Status
+ k extratab("slm")
+ s extratab("slm","oddCOM")="(""%""):(""&"")"
+ s extratab("slm","oddDEF")="(""%""):(""&"")"
+ s extratab("slm","oddEXT")="(""%""):(""&"")"
+ s extratab("slm","oddEXTR")="(""%""):(""&"")"
+ s extratab("slm","oddMAP")="(""%""):(""&"")"
+ s extratab("pkg","oddPKG","%")=CacheLib_$c(1)_"(""%""):(""&"")"
+ s extratab("pkg","oddPROC","%")=CacheLib_$c(1)_"(""%""):(""&"")"
+ s extratab("slm","oddSQL")="(""%""):(""&"")"
+ s extratab("slm","oddStudioDocument")="(""%""):(""&"")"
+ s extratab("slm","oddStudioMenu")="(""%""):(""&"")"
+ s extratab("pkg","rINDEXCLASS","%")=CacheLib_$c(1)_"(""%""):(""&"")"
+ s Status=$$MapSub(Namespace,"","ALL",CacheLib,.extratab)
+ i '(''Status) q Status
+ s Status=$$MapSub(Namespace,"%*","ALL",CacheLib,.rmtab)
+ i '(''Status) q Status
+ k extratab("slm")
+ s Status=$$MapUserPackages(Namespace,0)
+ i '(''Status) q Status
+ i (",%CACHELIB,SAMPLES,DOCBOOK,"'[(","_Namespace_",")) {
+	s Status=$$MapUserPackages(Namespace,1)
+	i '(''Status) q Status
+ }
+ f ii="oddPKG","oddPROC","rINDEXCLASS" {
+	s Data=""
+	k extratab("slm")
+	f {
+		s Data=$o(extratab("pkg",ii,Data),-1,val) q:Data=""
+		s extratab("slm",ii)=$p(val,$c(1),2,999),col=$p(val,$c(1))
+		s Status=$$MapSub(Namespace,"","ALL",col,.extratab)
+		i '(''Status) q
+	}
+ }
+ i '(''Status) q Status
+ k extratab("slm")
+ f ii="schema","rv","VIEW","TABLE" {
+	s Data=""
+	f {
+		s Data=$o(extratab("rsql",ii,Data),-1,extratab("slm","rINDEXSQL")) q:Data=""
+		s Status=$$MapSub(Namespace,"","ALL",extratab("rsql",0,Data),.extratab)
+		i '(''Status) q
+	}
+	i '(''Status) q
+	s extratab("slm","rINDEXSQL")="("""_ii_""",""INFORMATION_SCHEMA_""):("""_ii_""",""INFORMATION_SCHEMA`"")~("""_ii_""",""INFORMATION_SCHEMA""):("""_ii_""",""INFORMATION_SCHEMA"_$C(0)_""")"
+	s Status=$$MapSub(Namespace,"","ALL",CacheLib,.extratab)
+	i '(''Status) q
+	s extratab("slm","rINDEXSQL")="("""_ii_""",""%z""):("""_ii_""",""%{"")"
+	s Status=$$MapSub(Namespace,"","ALL",DefMgr,.extratab)
+	i '(''Status) q
+	s extratab("slm","rINDEXSQL")="("""_ii_""",""%ZEN_""):("""_ii_""",""%ZEN`"")~("""_ii_""",""%ZEN""):("""_ii_""",""%ZEN"_$C(0)_""")"
+	s Status=$$MapSub(Namespace,"","ALL",CacheLib,.extratab)
+	i '(''Status) q
+	s extratab("slm","rINDEXSQL")="("""_ii_""",""%Z""):("""_ii_""",""%["")~("""_ii_""",""%SYS_""):("""_ii_""",""%SYS`"")~("""_ii_""",""%SYS""):("""_ii_""",""%SYS"_$C(0)_""")"
+	s Status=$$MapSub(Namespace,"","ALL",DefMgr,.extratab)
+	i '(''Status) q
+	i ((ii="VIEW")||(ii="TABLE")) {
+		if MapNamespace="" {
+			s extratab("slm","rINDEXSQL")="("""_ii_""",""%sqlcq_""):("""_ii_""",""%sqlcq`"")~("""_ii_""",""%sqlcq_""):("""_ii_""",""%sqlcq_"_$C(0)_""")"
+		} else {
+			s extratab("slm","rINDEXSQL")="("""_ii_""",""%sqlcq_"_MapNamespace_"_""):("""_ii_""",""%sqlcq_"_MapNamespace_"`"")~("""_ii_""",""%sqlcq_"_MapNamespace_"""):("""_ii_""",""%sqlcq_"_MapNamespace_""_$C(0)_""")"
+		}
+		s Status=$$MapSub(Namespace,"","ALL",SysCache,.extratab)
+		i '(''Status) q
+	} else {
+		if MapNamespace="" {
+			s extratab("slm","rINDEXSQL")="("""_ii_""",""%SQLCQ_""):("""_ii_""",""%SQLCQ`"")~("""_ii_""",""%SQLCQ_""):("""_ii_""",""%SQLCQ_"_$C(0)_""")"
+		} else {
+			s extratab("slm","rINDEXSQL")="("""_ii_""",""%SQLCQ_"_$zcvt(MapNamespace,"U")_"_""):("""_ii_""",""%SQLCQ_"_$zcvt(MapNamespace,"U")_"`"")~("""_ii_""",""%SQLCQ_"_$zcvt(MapNamespace,"U")_"""):("""_ii_""",""%SQLCQ_"_$zcvt(MapNamespace,"U")_""_$C(0)_""")"
+		}
+		s Status=$$MapSub(Namespace,"","ALL",SysCache,.extratab)
+		i '(''Status) q
+	}
+	s extratab("slm","rINDEXSQL")="("""_ii_""",""%""):("""_ii_""",""&"")"
+	s Status=$$MapSub(Namespace,"","ALL",CacheLib,.extratab)
+	i '(''Status) q
+ }
+ i '(''Status) q Status
+ s SubMapCol("%sqlcq")="5,1"
+ d oneglob("%sqlcq",SysCache,SysCache,$s(MapNamespace="":"",1:"("""_Namespace_""")"),.pairs,.loclist)
+ s Status=$$MapUserGlobals(Namespace,2)
+ i '(''Status) q Status
+ i (",%CACHELIB,SAMPLES,DOCBOOK,"'[(","_Namespace_",")) {
+	 s Status=$$MapUserGlobals(Namespace,3)
+	 i '(''Status) q Status
+ }
+ s Status=$$MapUserRoutines(Namespace,0)
+ i '(''Status) q Status
+ i (",%CACHELIB,SAMPLES,DOCBOOK,"'[(","_Namespace_",")) {
+ s Status=$$MapUserRoutines(Namespace,1)
+	i '(''Status) q Status
+ }
+ s Global=""
+ f  {
+	 s Global=$o(SubMapCol(Global),1,col) q:Global=""
+	 i $g(pairs(Global)) d updmarg(Namespace,Global,+col,'$p(col,",",2),.pairs,.array),assigslm(Namespace,Global,col,.loclist,.array)
+ }
+ i $d(^||SYS.ActivateError) f i=1:1:^||SYS.ActivateError s Status=$select(+Status:$$Error^%apiOBJ(5001,$g(^||SYS.ActivateError(i))),1:$$AppendStatus^%occSystem(Status,$$Error^%apiOBJ(5001,$g(^||SYS.ActivateError(i)))))
+ q Status
+Error s $zt=""
+ q $$Error^%apiOBJ(5002,$ze)
+MapSub(Namespace, Subscript, Ext, ImplLoc, maptab)
+ s Status=1
+ if Ext'="ALL" s Ext=$s(Ext'="INT":"r"_Ext,1:"ROUTINE")
+ s II="" 
+ f  {
+	s II=$o(maptab("ext",II),1,Global) q:II=""
+	i (Ext'="ALL"),(Global'[Ext) continue
+	i Subscript="" {
+		s Subscripts = $g(maptab("slm",Global))
+		f i=1:1 {
+			s Subscript=$p(Subscripts,"~",i) q:Subscript=""
+			d oneglob(Global,ImplLoc,ImplLoc,Subscript,.pairs,.loclist)
+		}
+	} else {
+		d oneglob(Global,ImplLoc,ImplLoc,Subscript,.pairs,.loclist)
+		Continue:(Ext="ALL")!(Subscript="rMACSAVE")!(Subscript="rINCSAVE")
+		d oneglob("rINDEX",ImplLoc,ImplLoc,"("_""""_Subscript_""""_","_""""_Ext_""""_")",.pairs,.loclist)
+	}
+ }
+ q Status
+GetSchemaName(Namespace,pkg,ImplLoc)
+ s $zt="GetSchemaNameErr"
+ s sysn=$p(ImplLoc,"^",2)
+ if (sysn'="") {
+	 s sysn=$system.ECP.GetClientIndex(sysn)
+	 i sysn=-1||("3,4,6"[+$system.ECP.GetClientState(sysn)) g GetSchemaNameErr
+	 i $system.Util.GetSwitch(10),+$system.ECP.GetClientState(sysn)'=5 g GetSchemaNameErr
+ }
+ q $g(@("^"_ImplLoc_"oddPKG("""_pkg_""",""sqlname"")"))
+GetSchemaNameErr s $zt=""
+ d $zu(9,"","Failed to find ^oddPKG() for schema name in package "_pkg_", default schema name is used.",1,1)
+ if +$g(sysn)'=-1 {
+	 s ^SYS("NSRELOADRESTART",Namespace)=""
+	 s pkg=$i(^SYS("NSRELOADRESTART"))
+ }
+ q ""
+MapPkg(Namespace, Package, ImplLoc, nosql = 0)
+ s PACKAGE=$zcvt(Package,"u")
+ k Schema2
+ s Schema=$$GetSchemaName(Namespace,PACKAGE,ImplLoc)
+ i Schema="" {
+	 i PACKAGE="USER" {
+		 s Schema="SQLUser",Schema2=Package,SCHEMA2=$zcvt(Schema2,"u")
+	 } else {
+		s Schema=$tr(Package,".","_")
+	 }
+ }
+ s SCHEMA=$zcvt(Schema,"u")
+ s Map = "("""_Package_".""):("""_Package_"/"")"   
+ s Status=$$MapSub(Namespace,Map,"ALL",ImplLoc,.rmtab)
+ i '(''Status) q Status
+ k extratab("slm")
+ s extratab("slm","oddCOM")=Map
+ s extratab("slm","oddDEF")=Map
+ s extratab("slm","oddEXT")=Map
+ s extratab("slm","oddEXTR")=Map
+ s extratab("slm","oddMAP")=Map
+ s extratab("pkg","oddPKG",PACKAGE)=ImplLoc_$c(1)_"("""_PACKAGE_".""):("""_PACKAGE_"/"")~("""_PACKAGE_"""):("""_PACKAGE_$c(0)_""")"
+ s extratab("pkg","oddPROC",SCHEMA)=ImplLoc_$c(1)_"("""_SCHEMA_"_""):("""_SCHEMA_"`"")~("""_SCHEMA_"""):("""_SCHEMA_$c(0)_""")"
+ s extratab("slm","oddSQL")="("""_Schema_"_""):("""_Schema_"`"")~("""_Schema_"""):("""_Schema_$c(0)_""")"_$s($d(Schema2):"~("""_Schema2_"_""):("""_Schema2_"`"")",1:"")
+ if $d(Schema2) {
+ 	s extratab("pkg","oddPROC",SCHEMA2)=ImplLoc_$c(1)_"("""_SCHEMA2_"_""):("""_SCHEMA2_"`"")"
+ }
+ s extratab("slm","oddStudioDocument")=Map
+ s extratab("slm","oddStudioMenu")=Map
+ s extratab("pkg","rINDEXCLASS",PACKAGE)=ImplLoc_$c(1)_"("""_PACKAGE_".""):("""_PACKAGE_"/"")"
+ i 'nosql {
+	 s extratab("rsql",0,Package)=ImplLoc
+	 s extratab("rsql",0,PACKAGE)=ImplLoc
+	 s extratab("rsql","TABLE",Package)="(""TABLE"","""_Schema_"_""):(""TABLE"","""_Schema_"`"")~(""TABLE"","""_Schema_"""):(""TABLE"","""_Schema_$c(0)_""")"_$s($d(Schema2):"~(""TABLE"","""_Schema2_"_""):(""TABLE"","""_Schema2_"`"")",1:"")
+	 s extratab("rsql","VIEW",Package)="(""VIEW"","""_Schema_"_""):(""VIEW"","""_Schema_"`"")~(""VIEW"","""_Schema_"""):(""VIEW"","""_Schema_$c(0)_""")"_$s($d(Schema2):"~(""VIEW"","""_Schema2_"_""):(""VIEW"","""_Schema2_"`"")",1:"")
+	 s extratab("rsql","rv",PACKAGE)="(""rv"","""_SCHEMA_"_""):(""rv"","""_SCHEMA_"`"")~(""rv"","""_SCHEMA_"""):(""rv"","""_SCHEMA_$c(0)_""")"_$s($d(Schema2):"~(""rv"","""_SCHEMA2_"_""):(""rv"","""_SCHEMA2_"`"")",1:"")
+	 s extratab("rsql","schema",PACKAGE)="(""schema"","""_SCHEMA_"_""):(""schema"","""_SCHEMA_"`"")~(""schema"","""_SCHEMA_"""):(""schema"","""_SCHEMA_$c(0)_""")"_$s($d(Schema2):"~(""schema"","""_SCHEMA2_"_""):(""schema"","""_SCHEMA2_"`"")",1:"")
+ }
+ s Status=$$MapSub(Namespace,"","ALL",ImplLoc,.extratab)
+ k extratab("slm")
+ q Status
+MapUserGlobals(Namespace, All)
+ s Status=1
+ s PrevGlobal="",all=All#2,subonly=All\2
+ q:all&&'$d(^CONFIG("Namespaces","%ALL")) Status
+ s mapnam="Map."_$s(all=0:Namespace,1:"%ALL")
+ s start=$o(^CONFIG(mapnam,"Global_999999"),-1)
+ s prevg=""
+ q:start=""||($p(start,"_",1)'="Global") Status
+ s start=+$p(start,"_",2)
+ f Index=start:-1:1 {
+	 s Index1="0000"_Index
+	 s Name=$o(^CONFIG(mapnam,"Global_"_$e(Index1,$l(Index1)-4,*)),1,Data) q:Name=""
+	 i $p(Name,"_",1)'="Global" q
+	 s Global=$p(Name,"_",3,9999)
+	 s Subscript="("_$p(Global,"(",2,9999)
+	 s Global=$p(Global,"(",1)
+	 s:subonly diffg=(Global'=prevg),prevg=Global
+	 i Subscript="(" {
+		 i subonly continue
+		 s Database=$p(Data,",",1)
+		 if all,Database="%DEFAULTDB" s Database=$p(^CONFIG("Namespaces",Namespace),",",1)
+		 s Database=$p(^SYS("GREDIR","DSLOC","master",ConfigName,Database),$c(1),3)
+		 s SlmCol=$p(Data,",",2)
+		 i SlmCol="" s SlmCol=5
+		 s LockDatabase=$p(Data,",",3)
+		 if all,LockDatabase="%DEFAULTDB" s LockDatabase=$p(^CONFIG("Namespaces",Namespace),",",3)
+		 s LockDatabase=$s(LockDatabase="":Database,1:$p(^SYS("GREDIR","DSLOC","master",ConfigName,LockDatabase),$c(1),3))
+		 s IndexNext="0000"_(Index+1)
+		 s NextName=$o(^CONFIG(mapnam,"Global_"_$e(IndexNext,$l(IndexNext)-4,*)))
+		 i (NextName]"")&&($e($p(NextName,"_",3,999),1,$l(Global)+1)=(Global_"(")) {
+			 s SubMapCol(Global)=SlmCol_","_1
+		 } else {
+			 if 'all {
+				 s GlobalMapped(0,Global)=$LB(Database,LockDatabase)
+			 } elseif $d(GlobalMapped(0,Global),dd)&&(dd'=$LB(Database,LockDatabase)) {
+				 d $zu(9,"","Mapping of global '"_Global_"' in namespace '"_Namespace_"' is overriden by same mapping in %ALL",1 /* broadcast and log message*/,2  /* Severe error */)
+			 }
+		 }
+		 d oneglob(Global,Database,LockDatabase,"",.pairs,.loclist)
+	 } else {
+		 i 'subonly||('$d(SubMapCol(Global))) continue
+		 if diffg {
+			 if $d(pairs(Global)) k pairs(Global)
+			 if 'all {
+				 s GlobalMapped(Global)=""
+			 } elseif $d(GlobalMapped(Global)) {
+			 	d $zu(9,"","SLM mapping of global '"_Global_"' in namespace '"_Namespace_"' is overriden by same mapping in %ALL",1 /* broadcast and log message*/,2  /* Severe error */)
+			 }
+		 }
+		 s Data=$p(^SYS("GREDIR","DSLOC","master",ConfigName,Data),$c(1),3)
+		 d oneglob(Global,Data,Data,Subscript,.pairs,.loclist)
+	 }	 	
+ }
+ q Status
+MapUserPackages(Namespace, All = 0)
+ s Status=1
+ q:All&&'$d(^CONFIG("Namespaces","%ALL")) Status
+ s mapnam="Map."_$s(All=0:Namespace,1:"%ALL")
+ s start=$o(^CONFIG(mapnam,"Package_999999"),-1)
+ q:start=""||($p(start,"_",1)'="Package") Status
+ s start=+$p(start,"_",2)
+ f Index=start:-1:1 {
+ 	s Index1="0000"_Index
+ 	s Name=$o(^CONFIG(mapnam,"Package_"_$e(Index1,$l(Index1)-4,*)),1,Data) q:Name=""
+	i $p(Name,"_",1)'="Package" q
+	s Data=$p(^SYS("GREDIR","DSLOC","master",ConfigName,Data),$c(1),3)
+	s pkgname=$p(Name,"_",3,999)
+	if 'All {
+		s PackageMapped(pkgname)=Data
+	} elseif $d(PackageMapped(pkgname),dd)&&(dd'=Data) {
+		d $zu(9,"","Mapping of package '"_pkgname_"' in namespace '"_Namespace_"' is overriden by same mapping in %ALL",1 /* broadcast and log message*/,2  /* Severe error */)
+	}
+	s Status=$$MapPkg(Namespace,pkgname,Data)
+	i '(''Status) q
+ }
+ i '(''Status) q Status
+ k extratab("slm")
+ q Status
+MapUserRoutines(Namespace, All = 0)
+ s Status=1
+ q:All&&'$d(^CONFIG("Namespaces","%ALL")) Status
+ s mapnam="Map."_$s(All=0:Namespace,1:"%ALL")
+ s start=$o(^CONFIG(mapnam,"Routine_99999"),-1)
+ q:start=""||($p(start,"_",1)'="Routine") Status
+ s start=+$p(start,"_",2)
+ f Index=start:-1:1 {
+ 	s Index1="0000"_Index
+ 	s Name=$o(^CONFIG(mapnam,"Routine_"_$e(Index1,$l(Index1)-4,*)),1,Data) q:Name=""
+ 	i $p(Name,"_",1)'="Routine" q
+	s Type=$p(Name,"_",4) i Type="" s Type="ALL"
+	s Data=$p(^SYS("GREDIR","DSLOC","master",ConfigName,Data),$c(1),3)
+	s rtnname=$p(Name,"_",3)
+	if 'All {
+		s RoutineMapped(rtnname)=Data
+	} elseif $d(RoutineMapped(rtnname),dd)&&(dd'=Data) {
+		d $zu(9,"","Mapping of routine '"_rtnname_"' in namespace '"_Namespace_"' is overriden by same mapping in %ALL",1 /* broadcast and log message*/,2  /* Severe error */)
+	}
+	s Status=$$MapSub(Namespace,rtnname,Type,Data,.rmtab)
+	i '(''Status) q
+ }
+ q Status
+ }
+MapDataMove(Namespace, All)
+ s Status=1
+ s PrevGlobal="",all=All#2,subonly=All\2
+ q:all&&'$d(^CONFIG("Namespaces","%ALL")) Status
+ s mapnam="Map."_$s(all=0:Namespace,1:"%ALL")
+ s start=$o(^CONFIG(mapnam,"Global_999999"),-1)
+ s prevg=""
+ q:start=""||($p(start,"_",1)'="Global") Status
+ s start=+$p(start,"_",2)
+ f Index=start:-1:1 {
+	 s Index1="0000"_Index
+	 s Name=$o(^CONFIG(mapnam,"Global_"_$e(Index1,$l(Index1)-4,*)),1,Data) q:Name=""
+	 i $p(Name,"_",1)'="Global" q
+	 s Global=$p(Name,"_",3,9999)
+	 s Subscript="("_$p(Global,"(",2,9999)
+	 s Global=$p(Global,"(",1)
+	 s:subonly diffg=(Global'=prevg),prevg=Global
+	 i Subscript="(" {
+		 i subonly continue
+		 s Database=$p(Data,",",1)
+		 s Database=$p(^SYS("GREDIR","DSLOC","master",ConfigName,Database),$c(1),3)
+		 s SlmCol=$p(Data,",",2)
+		 i SlmCol="" s SlmCol=5
+		 s LockDatabase=$p(Data,",",3)
+		 s LockDatabase=$s(LockDatabase="":Database,1:$p(^SYS("GREDIR","DSLOC","master",ConfigName,LockDatabase),$c(1),3))
+		 s IndexNext="0000"_(Index+1)
+		 s NextName=$o(^CONFIG(mapnam,"Global_"_$e(IndexNext,$l(IndexNext)-4,*)))
+		 i (NextName]"")&&($e($p(NextName,"_",3,999),1,$l(Global)+1)=(Global_"(")) {
+			 s SubMapCol(Global)=SlmCol_","_1
+		 } else {
+			 if 'all {
+				 s GlobalMapped(0,Global)=$LB(Database,LockDatabase)
+			 } elseif $d(GlobalMapped(0,Global),dd)&&(dd'=$LB(Database,LockDatabase)) {
+				 d $zu(9,"","Mapping of global '"_Global_"' in namespace '"_Namespace_"' is overriden by same mapping in %ALL",1 /* broadcast and log message*/,2  /* Severe error */)
+			 }
+		 }
+		 d oneglob(Global,Database,LockDatabase,"",.pairs,.loclist)
+	 } else {
+		 i 'subonly||('$d(SubMapCol(Global))) continue
+		 if diffg {
+			 if $d(pairs(Global)) k pairs(Global)
+			 if 'all {
+				 s GlobalMapped(Global)=""
+			 } elseif $d(GlobalMapped(Global)) {
+			 	d $zu(9,"","SLM mapping of global '"_Global_"' in namespace '"_Namespace_"' is overriden by same mapping in %ALL",1 /* broadcast and log message*/,2  /* Severe error */)
+			 }
+		 }
+		 s Data=$p(^SYS("GREDIR","DSLOC","master",ConfigName,Data),$c(1),3)
+		 d oneglob(Global,Data,Data,Subscript,.pairs,.loclist)
+	 }	 	
+ }
+ q Status
+CheckSLMOverlap(Namespace,Entry,CPFFile,Flags) PUBLIC {
+ s Global=$p(Entry,"(",1),Entry=$e(Entry,$l(Global)+1,*)
+ k ^||SYS.ActivateError
+ s Status=##Class(Config.CPF).FileToName(CPFFile,.CPFName)
+ i '(''Status) q Status
+ s pairs=0
+ if (Entry'="") d oneglobx(Global,Entry,.pairs)
+ i $zb(Flags,1024,1) s CPFName=CPFName_("_"_(+$j))
+ i $d(^|"^^"_$zu(12)|SYS("CONFIG",CPFName,"MapGlobals",Namespace,Global),Record)=0 q 1
+ s col=$li(Record,2)
+ s GlobalName=$o(^|"^^"_$zu(12)|SYS("CONFIG",CPFName,"MapGlobals",Namespace,Global))
+ While ($p(GlobalName,"(")=Global) {
+	d oneglobx(Global,$E(GlobalName,$L(Global)+1,*),.pairs)
+	s GlobalName=$o(^|"^^"_$zu(12)|SYS("CONFIG",CPFName,"MapGlobals",Namespace,GlobalName))
+ }
+ i $g(pairs,0) d updmargx(col,0,.pairs)
+ i $d(^||SYS.ActivateError) f i=1:1:^||SYS.ActivateError s Status=$select(+Status:$$Error^%apiOBJ(5001,$g(^||SYS.ActivateError(i))),1:$$AppendStatus^%occSystem(Status,$$Error^%apiOBJ(5001,$g(^||SYS.ActivateError(i)))))
+ q Status
+ }
+EMSCheckSLMOverlap(index,col) PUBLIC {
+ k ^||SYS.ActivateError
+ s pairs=0,row="",Status=1
+ f  {
+	s row=$o(^||%ISCQueryTemp(index,row),1,entry) q:row=""
+	s global=$p(entry,"(")
+	d oneglobx(global,$e(entry,$L(global)+1,*),.pairs)
+ }
+ i $g(pairs,0) d updmargx(col,0,.pairs)
+ i $d(^||SYS.ActivateError) f i=1:1:^||SYS.ActivateError s Status=$select(+Status:$$Error^%apiOBJ(5001,$g(^||SYS.ActivateError(i))),1:$$AppendStatus^%occSystem(Status,$$Error^%apiOBJ(5001,$g(^||SYS.ActivateError(i)))))
+ q Status
+ }
+CheckGlobalMapOverlap(Namespace,Entry,CPFFile,Flags) PUBLIC {
+ s Status=1
+ k ^||SYS.ActivateError 
+ s Status=##Class(Config.CPF).FileToName(CPFFile,.CPFName)
+ i '(''Status) q Status
+ s pairs=0
+ if ($g(Entry)'="") d oneglobx($p(Entry,"("),"",.pairs)
+ i $zb(Flags,1024,1) s CPFName=CPFName_("_"_(+$j))
+ s Global=$o(^|"^^"_$zu(12)|SYS("CONFIG",CPFName,"MapGlobals",Namespace,""))
+ While (Global'="") {
+	i Global'["(" d oneglobx(Global,"",.pairs)
+ 	s Global=$o(^|"^^"_$zu(12)|SYS("CONFIG",CPFName,"MapGlobals",Namespace,Global))
+ }
+ i $g(pairs,0) d updmargx("",0,.pairs)
+ i $d(^||SYS.ActivateError) f i=1:1:^||SYS.ActivateError s Status=$select(+Status:$$Error^%apiOBJ(5001,$g(^||SYS.ActivateError(i))),1:$$AppendStatus^%occSystem(Status,$$Error^%apiOBJ(5001,$g(^||SYS.ActivateError(i)))))
+ q Status
+}
+EMSCheckGlobalMapOverlap(index) PUBLIC {
+ k ^||SYS.ActivateError
+ s pairs=0,row="",Status=1
+ f  {
+	s row=$o(^||%ISCQueryTemp(index,row),1,global) q:row=""
+	d oneglobx(global,"",.pairs)
+ }
+ i $g(pairs,0) d updmargx("",0,.pairs)
+ i $d(^||SYS.ActivateError) f i=1:1:^||SYS.ActivateError s Status=$select(+Status:$$Error^%apiOBJ(5001,$g(^||SYS.ActivateError(i))),1:$$AppendStatus^%occSystem(Status,$$Error^%apiOBJ(5001,$g(^||SYS.ActivateError(i)))))
+ q Status
+ }
+CheckRoutineMapOverlap(Namespace,Entry,CPFFile,Flags) PUBLIC {
+ s Status=1
+ k ^||SYS.ActivateError
+ s Status=##Class(Config.CPF).FileToName(CPFFile,.CPFName)
+ i '(''Status) q Status
+ s pairs=0
+ s Name=$p(Entry,"_",1)
+ s Type=$p(Entry,"_",2)
+ i Type="ALL" s Type=""
+ d oneglobx("ROUTINE",Name,.pairs)
+ i $zb(Flags,1024,1) s CPFName=CPFName_("_"_(+$j))
+ s Routine=$o(^|"^^"_$zu(12)|SYS("CONFIG",CPFName,"MapRoutines",Namespace,""))
+ While (Routine'="") {
+	s RoutineName=$p(Routine,"_",1)
+	s RoutineType=$p(Routine,"_",2)
+	i (Type="")||(RoutineType="")||(RoutineType=Type)&&('$d(Map(RoutineName))) {
+		s Map(RoutineName)=""
+		d oneglobx("ROUTINE",RoutineName,.pairs)
+	}
+ 	s Routine=$o(^|"^^"_$zu(12)|SYS("CONFIG",CPFName,"MapRoutines",Namespace,Routine))
+ }
+ i $g(pairs,0) d updmargx("",1,.pairs)
+ i $d(^||SYS.ActivateError) f i=1:1:^||SYS.ActivateError s Status=$select(+Status:$$Error^%apiOBJ(5001,$g(^||SYS.ActivateError(i))),1:$$AppendStatus^%occSystem(Status,$$Error^%apiOBJ(5001,$g(^||SYS.ActivateError(i)))))
+ q Status
+}
+EMSCheckRoutineMapOverlap(index) PUBLIC {
+ k ^||SYS.ActivateError
+ s pairs=0,row="",Status=1
+ f  {
+	s row=$o(^||%ISCQueryTemp(index,row),1,routine) q:row=""
+	d oneglobx("ROUTINE",routine,.pairs)
+ }
+ i $g(pairs,0) d updmargx("",1,.pairs)
+ i $d(^||SYS.ActivateError) f i=1:1:^||SYS.ActivateError s Status=$select(+Status:$$Error^%apiOBJ(5001,$g(^||SYS.ActivateError(i))),1:$$AppendStatus^%occSystem(Status,$$Error^%apiOBJ(5001,$g(^||SYS.ActivateError(i)))))
+ q Status
+ }
+oneglobx(globname,slmdef,pairs) Private {
+ i slmdef'="" s globname=slmdef
+ i $e(globname)'="(" {
+	s range=$s($l(globname,":")=2:1,1:0),glob2=""
+	s glob1=$p(globname,":"),wild1=$s(glob1["*":1,1:0)
+	s glob1=$p(glob1,"*")
+	i range {
+		s glob2=$p(globname,":",2),wild2=$s(glob2["*":1,1:0)
+		s glob2=$p(glob2,"*")
+	}
+	s:range wild1=1
+	i glob1="" s glob1="%",glob2="",wild1=0,wild2=0,range=1
+ }  else {
+	s range=0,wild1=0,wild2=0,glob2="",glob2end=0
+	i globname'["):" {
+		s glob1=$e(globname,2,$l(globname)-1)
+	} else {
+ 		f jj=1:1:$l(globname,"):")-1 s glob1=$p(globname,"):",1,jj) s:'($l(glob1)-$l($tr(glob1,""""))#2) range=1 q:range=1
+		 i range {
+			s glob2=$p(globname,"):",jj+1,$l(globname,"):"))
+			i ($zcvt(glob2,"u")="END") {
+				s glob2=""
+			} else {
+				i ($zcvt(glob2,"u")[",END") {
+		 			s glob=$p($tr(glob2,",end",",END"),",END",1)
+					s glob2end=1
+		 			s glob2=$e(glob,2,*)  ; strip of leading "("
+				} else {
+					s glob2=$e(glob2,2,$l(glob2)-1)
+				}
+			}
+		 	s glob1=$e(glob1,2,$l(glob1))
+		 }
+	}
+	s glob1=$$actref(glob1),glob2=$$actref(glob2)
+	if glob2end s glob2=glob2_$c(1)_"*next"
+ }
+ s pairs=$i(pairs,-1)
+ i 'range&wild1 {
+	s pairs(pairs,1,"name")=glob1,pairs(pairs,2,"name")=$$globnext(glob1)
+ } else {
+	i 'range&('wild1) {
+		s pairs(pairs,1,"name")=glob1,pairs(pairs,2,"name")=glob1
+	} else {
+		i range&('wild2) {
+			s pairs(pairs,1,"name")=glob1,pairs(pairs,2,"name")=glob2
+		} else {
+			s pairs(pairs,1,"name")=glob1,pairs(pairs,2,"name")=$$globnext(glob2)
+ 		}
+	}
+ }
+ i (slmdef'=""),(globname'["(") {  
+	f jj=1,2 i pairs(pairs,jj,"name")]"" s pairs(pairs,jj,"name")=""""_pairs(pairs,jj,"name")_""""
+ }
+ q
+}
+updmargx(col,rmap,pairs) [pairs] Private {
+ K array
+ s subm=($l(col)>0),novlp=(subm&&('rmap))
+ s $zt="Err",jj=$o(pairs("")),endon=""
+ i pairs(jj,2,"name")'=""&&($zu(90,23,pairs(jj,1,"name"),pairs(jj,2,"name"),$s(col="":-1,1:col))) {
+	 d maperrx(jj,"endpoint does not follow starting point","",.pairs)
+ } elseif pairs(jj,1,"name")=pairs(jj,2,"name") {
+  	 i '$G(%CPFOLDMAPOVERLAP) i subm s pairs(jj,2,"name")=pairs(jj,2,"name")_$c(1)_"*next"
+	 s array(8)="pairs("_jj_","_1/*"pairs(1,1)"*/_")",array(8,"map")=1,array(8,"name")=pairs(jj,1/*"pairs(1,1)"*/,"name")
+	 s array(2*8)="pairs("_jj_","_2/*"pairs(1,2)"*/_")",array(2*8,"map")=0,array(2*8,"name")=pairs(jj,2/*"pairs(1,2)"*/,"name")
+	 i $G(%CPFOLDMAPOVERLAP) i subm s array(8,"map")=0
+ } else {
+	 s array(8)="pairs("_jj_","_1/*"pairs(1,1)"*/_")",array(8,"map")=1,array(8,"name")=pairs(jj,1/*"pairs(1,1)"*/,"name") 
+	 i pairs(jj,2,"name")'="" s array(2*8)="pairs("_jj_","_2/*"pairs(1,2)"*/_")",array(2*8,"map")=0,array(2*8,"name")=pairs(jj,2/*"pairs(1,2)"*/,"name")
+	 if pairs(jj,2,"name")="" s endon=jj
+ }
+ q:pairs=-1
+ s INT=""
+errrepeat
+ s $zt="ReIndex"
+ For  {
+	 s jj=$o(pairs(jj)) q:jj=""
+	 k maprecov
+	 ;i $G(%CPFOLDMAPOVERLAP)&&($o(pairs(jj))="") s checkoldmapoverlap=1
+	 S (FIRSTL,FIRSTR)=""
+	 i pairs(jj,2,"name")'=""&&($zu(90,23,pairs(jj,1,"name"),pairs(jj,2,"name"),$s(col="":-1,1:col))) {
+		 d maperrx(jj,"endpoint does not follow starting point","",.pairs)  ;JAO922
+		 Continue
+	 }
+	 i '$G(%CPFOLDMAPOVERLAP) i subm&&(pairs(jj,1,"name")=pairs(jj,2,"name")) s pairs(jj,2,"name")=pairs(jj,2,"name")_$c(1)_"*next"
+	 For  {
+		 s INT=$O(array(INT)) Q:INT=""
+		 S POINT=@(array(INT))@("name")
+		 I FIRSTL=""&&($zu(90,23,POINT,pairs(jj,1,"name"),$s(col="":-1,1:col))) S FIRSTL=INT
+		 I pairs(jj,2,"name")]""&&(FIRSTR="")&&($zu(90,23,POINT,pairs(jj,2,"name"),$s(col="":-1,1:col))) S FIRSTR=INT
+		 if FIRSTL]""&&(pairs(jj,2,"name")=""!(FIRSTR]"")) s INT="" Q
+	 }
+	 S FIRSTL=$O(array(FIRSTL),-1),FIRSTR=$O(array(FIRSTR),-1)
+	s x=FIRSTL,overlap=0
+	i x="" s x=$o(array(FIRSTL))
+	i $G(%CPFOLDMAPOVERLAP) {
+	f  {
+		q:(x="")!(x>FIRSTR)!(FIRSTR="")
+		i array(x,"map")=1 {
+			; A:B,B:C end point overlap ok
+			i (@array(x)@("name")'=pairs(jj,2,"name"))||
+			  (@array(x)@("name")=pairs(jj,1,"name")) {
+				s overlap=1
+				s jx=$p($p(array(x),","),"(",2)
+				q
+			}
+		} 
+		elseif @array(x)@("name")=pairs(jj,1,"name") {
+			s y=$o(array(FIRSTL),-1)
+			i @array(y)@("name")=@array(x)@("name") {
+				s overlap=1
+				s jx=$p($p(array(y),","),"(",2)
+				q
+			}
+		}
+		s x=$o(array(x))
+	}
+	} ;End overlap test
+	i overlap {
+		d maperrx(jj,"mapping overlaps with a prior mapping",jx,.pairs)
+		continue
+	}
+	 S SET="",samestart=0
+	 I FIRSTL="" {
+		 S NUM=$O(array(""))-(2*8)
+		 s array(NUM)="pairs("_jj_","_1/*"pairs("_jj_",1)"*/_")",array(NUM,"map")=1,array(NUM,"name")=pairs(jj,1/*"pairs("_jj_",1)"*/,"name")
+		 I FIRSTR="" {
+			 s array(NUM+8)="pairs("_jj_","_2/*"pairs("_jj_",2)"*/_")",array(NUM+8,"map")=0,array(NUM+8,"name")=pairs(jj,2/*"pairs("_jj_",2)"*/,"name")
+			 Continue
+		 }
+		 s LSET=NUM
+	 } else {
+		 I (@array(FIRSTL)@("name")=pairs(jj,1,"name"))&&($p($p(array(FIRSTL),",",2),")")=1)&&novlp {
+			 if @array(FIRSTR)@("name")=pairs(jj,2,"name")&&($p($p(array(FIRSTL),","),"(",2)=$p($p(array(FIRSTR),","),"(",2)) {
+				 Continue
+			 }
+			 d maperrx(jj,"leading subscript same as mapping",$p($p(array(FIRSTL),","),"(",2),.pairs)
+			 Continue
+		 }
+		 i (FIRSTR<FIRSTL) {
+			 d maperrx(jj,"endpoint precedes start of range (internal error)","",.pairs)
+			 Continue
+		 }
+		 s oldmap=array(FIRSTL,"map")
+		 I @array(FIRSTL)@("name")=pairs(jj,1,"name") {
+			 if ($p($p(array(FIRSTL),",",2),")")=1) {
+			 	S pairs(jj,1,"delete")=1
+			 } else {
+				 S @array(FIRSTL)@("delete")="pairs("_jj_","_1_")"
+				 s array(FIRSTL)="pairs("_jj_","_1_")"
+			 }
+			 S array(FIRSTL,"map")=1
+			 s maprecov=FIRSTL ;this is the only array element to recover in reindex
+			 ;SML1136
+			 s LSET=FIRSTL,samestart=1
+			 if pairs(jj,1,"name")=pairs(jj,2,"name") {
+				 s nf=$o(array(FIRSTL),-1,nd)
+				 if nf]""&&(@nd@("name")=pairs(jj,1,"name")) {
+					 S array(FIRSTL,"map")=oldmap
+					 Continue
+				 }
+			 }
+		 } else {
+			 S NEXT=$O(array(FIRSTL))
+			 s NUM=$$GetMapIdx(.array,NEXT,FIRSTL,1)
+			 ztrap:NUM="" "INDX"
+			 s array(NUM)="pairs("_jj_","_1/*"pairs("_jj_",1)"*/_")",array(NUM,"map")=1,array(NUM,"name")=pairs(jj,1/*"pairs("_jj_",1)"*/,"name")
+			 S (LSET,SET)=NUM
+		 }
+	 }
+	 I FIRSTR=FIRSTL {
+		 i pairs(jj,2,"name")="" {
+			 if endon'="" s jx=endon g overlap
+			 s endon=jj
+			 s pairs(jj,2,"delete")=1
+			 Continue
+		 }
+		 S NEXT=$O(array($S(SET]"":SET,1:FIRSTL)))
+		 s NUM=$$GetMapIdx(.array,NEXT,FIRSTL,2) 
+		 ztrap:NUM="" "INDX"
+		 s array(NUM)="pairs("_jj_","_2/*"pairs("_jj_",2)"*/_")",array(NUM,"map")=0,array(NUM,"name")=pairs(jj,2/*"pairs("_jj_",2)"*/,"name")
+		 s array(NUM,"map")=oldmap
+		 Continue
+	 }
+	 s nf=$O(array(LSET),1,nd),ned=array(FIRSTR),sameend=(@ned@("name")=pairs(jj,2,"name"))
+	 s edgeok=('novlp)&&((sameend&&(nf=FIRSTR))||samestart)
+	 if ($p($p(nd,",",2),")")'=1&&('edgeok))||('$s($p($p(ned,",",2),")")=1:sameend,1:('sameend||'novlp))) {
+ovx		 s jx=$s($p($p(nd,",",2),")")'=1:$p($p(nd,","),"(",2),1:$p($p(ned,","),"(",2))
+overlap  I FIRSTL=""||(@array(FIRSTL)@("name")'=pairs(jj,1,"name")) {
+			 k:LSET'="" array(LSET)
+		 } else {
+			 s:LSET'="" array(LSET,"map")=oldmap
+		 }
+		 i +$g(%CPFPRE20091)=0 d maperrx(jj,"mapping overlaps with a prior mapping",jx,.pairs)
+		 Continue
+	 }
+	 I pairs(jj,2,"name")=""||(pairs(jj,2,"name")'=@array(FIRSTR)@("name")) {
+		 i pairs(jj,2,"name")="" {
+			 if endon'="" s jx=endon g overlap
+			 s endon=jj
+			 s pairs(jj,2,"delete")=1
+			 s array(FIRSTR,"map")=1
+		 } else {
+			 S NEXT=$O(array(FIRSTR))
+			 s NUM=$$GetMapIdx(.array,NEXT,FIRSTR,1) 
+			 ztrap:NUM="" "INDX"
+			 s array(NUM)="pairs("_jj_","_2/*"pairs("_jj_",2)"*/_")",array(NUM,"map")=0,array(NUM,"name")=pairs(jj,2/*"pairs("_jj_",2)"*/,"name")
+			 i array(FIRSTR,"map") {
+				 s array(NUM,"map")=1
+			 } else {
+				 s array(FIRSTR,"map")=1
+			 }
+		 }
+	 }
+	 S NUM=FIRSTL
+	 For  {
+		 S NUM=$O(array(NUM)) Q:NUM=FIRSTR
+		 I array(NUM,"map")=0 {
+			 S array(NUM,"map")=1
+		 }
+	 }
+ }
+ q
+Err s ^||SYS.ActivateError($i(^||SYS.ActivateError))=$ze q
+ReIndex ;reindex the array
+ i $ze'["<ZINDX>" s ^||SYS.ActivateError($i(^||SYS.ActivateError))="ERROR: "_$ze_" in reindexing." q
+ s $zt="etReIndex"
+ s pairtodo="pairs("_jj_","
+ k tmp
+ i $g(maprecov)]"" s array(maprecov,"map")=$g(oldmap,0) ;this was set to 1 before error
+ s i="" f n=0:8 s i=$o(array(i)) q:i=""  m:array(i)'[pairtodo tmp(n)=array(i)
+ k array m array=tmp
+ s jj=$o(pairs(jj),-1) ;retry pairs(jj) that triggered reindexing
+ g errrepeat  ; Quit back to FOR loop
+etReIndex ;
+ s $zt=""
+ s m=" mappings"
+ s m=$s($g(col)="":"global mappings",+$g(rmap):"routine mappings",1:"subscript mappings of global "_globname)
+ s ^||SYS.ActivateError($i(^||SYS.ActivateError))="ERROR: "_$ze_" in reindexing "_m
+ q
+} ; end updmarg
+maperrx(index,reason,tidx,pairs) Private { 
+ s pair1=pairs(index,1,"name")
+ i pair1="""""" s pair1="(BEGIN)"
+ e  s pair1="("_pair1_")"
+ s pair2=$P(pairs(index,2,"name"),$C(1)_"*next")
+ i pair2="" s pair2="END"
+ e  s pair2="("_pair2_")"
+ s err="Overlapped mapping "_$c(0)_pair1
+ i pair1'=pair2 s err=err_":"_pair2
+ s err=err_$c(0)_" "_reason
+ i tidx'="" {
+ 	s pair1=pairs(tidx,1,"name")
+ 	i pair1="""""" s pair1="(BEGIN)"
+ 	e  s pair1="("_pair1_")"
+ 	s pair2=$P(pairs(tidx,2,"name"),$C(1)_"*next")
+ 	i pair2="" s pair2="END"
+ 	e  s pair2="("_pair2_")"
+ 	s err=err_" "_$c(0)_pair1
+ 	i pair1'=pair2 s err=err_":"_pair2
+ 	s err=err_$c(0)
+ }
+ s ^||SYS.ActivateError($i(^||SYS.ActivateError))=err
+ q
+}

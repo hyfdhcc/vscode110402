@@ -1,0 +1,11 @@
+ROUTINE aaa
+aaa
+	s a=1
+	b
+	s b=2
+	b
+	w a
+	b 22
+
+	w 333
+	

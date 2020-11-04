@@ -1,0 +1,815 @@
+ROUTINE JRNDUMP [Type=INT]
+JRNDUMP ;dump the contents of a journal file ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/jrndump.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+ ;this section is for level 1 display (a list of journal files)       
+ ;note that the following DIRO/DIRL are redefined further down
+ ;these section is for level 2 display (a list of journal records)
+ ; this section is for both level 1 and level 2 display 
+ ; RECSTART is the row # preceding the first record/journal line
+ ; major entry points for GUI are listjrn, thisrec, and nextrec.
+ ; see individual entry points for documentation.         
+ n
+ s usecluster=$s($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0):''$zu(59,0),1:0)
+INT ;
+ u 0::"^%X364"	; Set mnemonic space
+ q:$zj\2#2
+ s blank=$j("",80),rm=80,rate=5,delim=$$del2^%Wprim
+ s $p(sep,"=",80)=""
+ s endjrn=$zu(78,3)
+ s:endjrn="" endjrn=$p($g(^%SYS("JOURNAL","LAST")),"^",2)
+ i endjrn="" w "no journal file to begin with",! q
+ s inMirror=$SYSTEM.Mirror.IsMember()
+ s mironly=$g(mironly)
+ s refresh=1,origendjrn=endjrn,jf=endjrn,begjrn=$$listjrn(endjrn,.list,-18),i=18
+ f  d  q:'key
+ . i refresh w /ed(2) d listhdr,showlist(.list)
+ . d showcur(i) s refresh=1,jf=list(i)
+ . s key=$$getkey1 q:'key
+ . i key=4 d onejrn(jf) q
+ . i +key=3,$l(key)>1 d onejrn($e(key,2,$l(key))) q
+ . i key=1!(key=5&(i=18)) d  q
+ . . s begjrn=endjrn,endjrn=$$listjrn(begjrn,.list,18),i=1 q
+ . i key=2!(key=6&(i=1)) d  q
+ . . s endjrn=begjrn,begjrn=$$listjrn(endjrn,.list,-18),i=18 q
+ . i key=5,jf'=endjrn d movecur(.i,1) s jf=list(i),refresh=0 q
+ . i key=6,jf'=begjrn d movecur(.i,-1) s jf=list(i),refresh=0 q
+ . i +key=7 k mirname s:$l(key)>1 mirname=$e(key,2,*) s refresh=1,mironly=1,begjrn=$$listjrn("",.list,-18),i=18 s endjrn=$p($SYSTEM.Mirror.GetLastJournalFilename(mirname),",",2) q
+ . i key=8 k mirname s endjrn=origendjrn,refresh=1,mironly=0,begjrn=$$listjrn(origendjrn,.list,-18),i=18 q
+ . i +key=9,$l(key)>1 d jrninfo($e(key,2,$l(key))) q
+ q
+getkey1() ;
+ w /cup(23,1),"Pg(D)n,Pg(U)p,(N)ext,(P)rev,(G)oto,(E)xamine,(I)nfo," 
+ i inMirror { 
+ 	w:'mironly " (M)irror,"
+ 	w:mironly " (A)ll,"
+ }
+ w " (Q)uit => "
+ u 0:(:"+S")
+ i inMirror { f  r key#1  q:"DUNPQEGMAIdunpqegmai"[key }
+ else  { f  r key#1  q:"DUNPQEGIdunpqegi"[key }
+ u 0:(:"-S")
+ i "Qq"[key q 0 ;quit ("Q","q","")
+ i "Dd"[key q 1  ;next page (PgDn)
+ i "Uu"[key q 2  ;prev page (PgUp)
+ i "Gg"[key n jrnfile d  q 3_jrnfile
+ . s row=23+1
+ . w /cup(row,1),"File: " r jrnfile q:jrnfile=""
+ . s jrnfile=$zu(12,jrnfile)
+ . i $zu(78,22,jrnfile)'=1 d 
+ . . d message(jrnfile_" is invalid journal file",2,row)
+ . . s jrnfile=""
+ i "Ee"[key q 4 ;examine
+ i "Nn"[key q 5  ;next row
+ i "Pp"[key q 6  ;prev row
+ i "Ii"[key {
+   s row=23+1
+   w /cup(row,1),"Info on file: [",jf,"] => " r jrnfile q:jrnfile="" 9_jf
+   s jrnfile=$zu(12,jrnfile)
+   i $zu(78,22,jrnfile)'=1 d 
+   . d message(jrnfile_" is invalid journal file",2,row)
+   . s jrnfile=""
+   q 9_jrnfile ;info
+ }
+ i "Mm"[key {
+	 n mlist
+	 s mlist=$p(^SYS("MIRRORSET"),"^",2)
+	 if inMirror=2 {
+		 s row=23+1
+		 if mlist="" d message("No mirror set is configured",2,row) q 100
+		 if mlist'["," q 7_mlist
+		 w /cup(row,1),"Mirror Set Name: " r mirname q:mirname=""
+		 if ","_mlist_","'[(","_mirname_",") d message("Mirror set "_mirname_" is not configured",2,row) q 100
+		 q 7_mirname
+	 } else {
+		 q 7_mlist
+	 }
+ }
+ i "Aa"[key q 8
+ q -1
+progress(f) 
+ i +$zu(78,22) s co=$zu(78,4) d
+ . w /cup(4,(((((1+10+1)+8+1)+2+1)+16+1)+8+1)),$j((co*100)\$p($zu(78,22,f,3),",",2)_"%",8)   
+ q
+listhdr ;
+ i +$g(usecluster) d listhdrclu q
+ w /cup(3-1,1),?3,$j("Journal",12)
+ ;i $$$SYSUSECLUSTER w ?$$$INFO,"[ClusterSessionID]",?$$$DIRCLUO,"Directory"
+ w ?((3+12+1)+10+1),"Directory"
+ w " & prefix"
+ w:+$g(mironly) " (Mirror Journals Only)"
+ q
+showlist(l) ;show directory too??
+ n (l,usecluster)
+ i +$g(usecluster) d showlistclu(.l) q
+ s diroff=((3+12+1)+10+1)
+ s i="" 
+ f  {
+	 s i=$o(l(i)) 
+	 q:i=""
+	 w /cup(i+3,1),?3
+	 if $ZBITGET($ZVERSION(0),46) {
+		 w l(i),?(3+12+1)," ",l(i,"info")
+	 } else {
+		 w $case($ZBITGET($ZVERSION(0),46),0:$case($f(l(i),";"),0:$e(l(i),*-8-$l($p(l(i),".",$l(l(i),"."))),*),:$e(l(i),*-8-$l($p(l(i),".",$l(l(i),"."))),$f(l(i),";")-2)),:l(i))
+ 		 w ?(3+12+1),l(i,"info"),?diroff,$$basename(l(i))
+ 		 w $$GJrnPrefix(l(i))
+	 }
+ }
+ q
+listjrn(f,list,n) ;list at most n journal files from f, return the n-th file
+ n (f,n,list,usecluster,mironly,mirname)
+ i +$g(usecluster) q $$listjrnclu(f,.list,n)
+ s jf=f q:'n 
+ k list
+ s clu=$S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0) i n<0 s i=-n+1 d  q list(i)
+ . i mironly,jf="" { s x=$$PREVJRN^JRNUTIL2(.jf,,,,mironly,$g(mirname)) }
+ . f  s i=i-1,list(i)=jf,list(i,"info")=$$getjrninfo(jf,clu) q:i=1  s x=$$PREVJRN^JRNUTIL2(jf,.jf,,,mironly,$G(mirname)) q:x'>0  q:$ZU(78,22,jf)'=1  
+ s i=0 f  s i=i+1,list(i)=jf,list(i,"info")=$$getjrninfo(jf,clu) q:i=n  s jf=$$NEXTJRN0^JRNUTIL(jf,,,,mironly,$G(mirname)) q:jf=""  q:$ZU(78,22,jf)'=1
+ q list(i)
+getjrninfo(jrnf,clu) ;
+ n info,dev
+ q:$P($zu(78,22,jrnf,1),",",2)]"" "" q:'clu "[JRNSTART]" 
+ i '$g(usecluster) q "[JRNSTART]"
+ s dev=$zu(78,5,jrnf,0) i dev<0 q ""
+ i $zu(78,6,dev) 
+ s info=$ZU(78,30,1),info="["_$s(info:$zdt(info,8),1:"JRNSTART")_"]" 
+ i $zu(78,7,dev)
+ q info
+guijrn(f,list,context) ;gui entry point, fetch last n journal files from f in .list
+ n (f,list,context,files,ordlist)
+ i context<0 d  ;build array of files
+ . k files
+ . i f="" s f=$p($g(^%SYS("JOURNAL","LAST")),"^",2) ;journalling is off, start with last file
+ . Set x=$$listjrn(f,.ordlist,-99999)
+ . Set x="" For  Do  Quit:x=""
+ . . Set x=$o(ordlist(x)) Quit:x=""  Set val=$g(ordlist(x))
+ . . If val'="",$zu(140,4,val)'<0 Do
+ . . . Set val=##class(%Library.File).NormalizeFilename(val),files(val)="",ordlist(x)=val
+ . . Else  Kill ordlist(x)
+ . ;add items from \journal directory that aren't in list
+ . Kill dirlist Set f=##class(%Library.File).GetDirectory(f,1)
+ . Set dirlist(f)=""
+ . Set f=##class(%Library.File).NormalizeFilename(##class(%SYS.Journal.System).GetPrimaryDirectory()),dirlist(f)=""
+ . Set f=##class(%Library.File).NormalizeFilename(##class(%SYS.Journal.System).GetAlternateDirectory()),dirlist(f)=""
+ . Set i="" For  Do  Quit:i=""
+ . . Set i=$o(ordlist(i)) Quit:i=""
+ . . Set f=ordlist(i),dirlist(##class(%Library.File).GetDirectory(f,1))=""
+ . Set path="",i=$o(ordlist("")) For  Do  Quit:path=""
+ . . Set path=$o(dirlist(path)) Quit:path=""
+ . . Set p=path_"*.*"
+ . . For  Set file=$zse(p) Quit:file=""  Do
+ . . . Set p="",file=##class(%Library.File).NormalizeFilename(file)
+ . . . Quit:$d(files(file))
+ . . . If $case($ZBITGET($ZVERSION(0),46),0:$case($f(file,";"),0:$e(file,*-8-$l($p(file,".",$l(file,"."))),*),:$e(file,*-8-$l($p(file,".",$l(file,"."))),$f(file,";")-2)),:file)?8N1"."3.10N Set ordlist($i(i,-1))=file,files(file)=""
+ . Set idx=100000
+ Else  set idx=context
+ Set del=$$del1^%Wprim,list=""
+ Set del2=$$del2^%Wprim
+ For i=1:1 {
+	 Set idx=$o(ordlist(idx),-1) Quit:idx=""
+	 Set list=list_$s(i=1:"",1:del)_ordlist(idx)_del2
+	 Set list=list_($zu(140,1,ordlist(idx))\(1024*1024))_del2_($zu(78,22,ordlist(idx),1)=1)
+	 Set context=idx
+	 Quit:$l(list)>30000
+ }
+ Quit $l(list)
+showcur(i) ;
+ w /cup(i+3,1),">"
+ q        
+movecur(i,n) ;
+ w /cup(i+3,1)," "
+ s i=i+n
+ w /cup(i+3,1),">"
+ q
+onejrn(jf) ;view a journal file
+ s $zt="etonejrn"
+ n (jf,usecluster)
+ i +$g(usecluster),(jf?1.N) q
+ s jf=$zu(12,jf)
+ s dev=$zu(78,5,jf,0) 
+ i dev<0 d  q
+ . w /ed(2) w /cup(1,1),"unable to read records from file "_jf,! 
+ . r "press any key to display journal header info",x#1
+ . d jrninfo(jf)
+ i $zu(78,6,dev)
+ s blank=$j("",80),$p(sep,"=",80)=""
+ d pagehdr(jf)
+ s begaddr=0
+ f  s endaddr=$$onepage(begaddr) d stat(jf) s key=$$getkey q:'key  d:$zu(78,17,0)
+ . i key=1,endaddr s begaddr=endaddr q
+ . i key=2,begaddr s begaddr=$$jump(begaddr,-18) q
+ . i key=3 d goto(.begaddr) q
+ . i key=4 d findrec(.begaddr) q
+ . i key=5 k addr d goto(.addr) d:$d(addr)  q
+ . . d examine(jf,addr)
+ . . d pagehdr(jf)
+ i $d(dev),dev'<0,$zu(78,7,dev)
+ q        
+etonejrn ;
+ s $zt=""
+ i $d(dev),dev'<0,$zu(78,7,dev)
+ w !!,"error: ",$ze,!
+ r " press any key to continue ",x#1,!
+ q
+stat(jf) ;
+ w /cup(23-1,1)
+ w "Last record: ",$j($zu(78,18,$zu(78,18,0)),10)_";   "
+ w "Max size: ",$j($P($ZU(78,22,jf,3),",",2),10)
+ n hh s hh=$ZU(78,30,1) i hh w ";     CluSesID: ",$zdt(hh,8)
+ q
+guistat(jf)     ;
+ ;return last record
+ q $zu(78,18,$zu(78,18,0))
+ ;
+getkey() ;
+ w /cup(23,1),"(N)ext,(P)rev,(G)oto,(F)ind,(E)xamine,(Q)uit => "
+ u 0:(:"+S")
+ f  r key#1  q:"NPQEFGnpqefg"[key
+ u 0:(:"-S")
+ i "Qq"[key q 0 ;quit ("Q","q","")
+ i "Nn"[key q 1 ;next page
+ i "Pp"[key q 2 ;prev page
+ i "Gg"[key q 3 ;goto
+ i "Ff"[key q 4 ;find
+ i "Ee"[key q 5 ;examine
+ q -1
+goto(addr) 
+ n (addr)
+ s row=23+1
+ w /cup(row,1),"Address (0 for first record, -1 for last record): " r x s x=+x
+ i 'x s addr=$zu(78,17,0) ;x=0 (treated as beginning of journal)
+ e  i x<0 s addr=$zu(78,18,$zu(78,18,0)) ;x<0 (treated as end of journal)
+ e  s p=$zu(78,18,x) i p<0 d  i 1  ;x: invalid address
+ . s addr=x\65536*65536 f  s addr=$zu(78,17,addr) q:addr>x  q:addr'>0
+ e  i $zu(78,17,p)=x s addr=x ;x: valid address
+ e  i 'p s addr=$zu(78,17,0) ;x: pseudo-valid address prior to the 1st record
+ e  s addr=p  ;x: pseudo-valid address or beyond end of journa, p: valid
+ i 'addr k addr
+ d message("",0,row)
+ q
+findrec(addr) ;find a 
+ n (addr)
+ s row=23+1
+ w /cup(row,1),"(F)orward/(B)ackward search =>"
+ u 0:(:"+S")
+ f  r x#1 q:"FfBb"[x
+ u 0:(:"-S")
+ w /cup(row,1)
+ i x="" d message("",0,row) q
+ i "Ff"[x r "Forward search for string:    ",str s func=17
+ i "Bb"[x r "Backward search for string:   ",str s func=18
+ d message("",0,row) i str="" q
+ w /cup(row,1),"searching..."
+ s a=addr,found=0 f  s a=$zu(78,func,a) q:a'>0  d  q:found 
+ . s rec=$$thisrec(a,.glo,.val)
+ . i rec'[str,$g(glo)'[str,$g(val)'[str q
+ . s found=1
+ i found s addr=a 
+ e  d message("string not found",1,row)
+ d message("",0,row)
+ q
+guifind(addr,str,case,nrec) ;gui entry point, find str starting at addr
+ n (addr,str,case,nrec)
+ i 'case s ustr=$ZCVT(str,"U")
+ s a=addr,found=0 f i=1:1 s a=$zu(78,17,a) q:a'>0  d  i found!(i'<nrec) q
+ . s rec=$$thisrec(a,.glo,.val)
+ . i 'case,$ZCVT(rec,"U")'[ustr,$ZCVT($g(glo),"U")'[ustr,$ZCVT($g(val),"U")'[ustr q
+ . i case,rec'[str,$g(glo)'[str,$g(val)'[str q
+ . s found=1
+ s addr=a q found
+examine(jf,addr) ;
+ f  d  q:"Qq"[x  s addr=$s("Nn"[x:$zu(78,17,addr),1:$zu(78,18,addr)) q:addr'>0
+ . w /ed(2),/cup(1,1),"Journal: ",jf,!! 
+ . d dumprec(addr)
+ . w /cup(25,1),"(N)ext,(P)rev,(Q)uit => "
+ . u 0:(:"+s")
+ . f  r x#1 q:"QNPqnp"[x
+ . u 0:(:"-s")
+ q 
+dumpjm(addr) ;called from dumprec only (uses offset)
+ n markinfo s markinfo=$ZU(78,35,addr)
+ w "Marker ID: ",?offset,$p(markinfo,",",3),!
+ w "Marker text: ",?offset,$p(markinfo,",",4,$l(markinfo)),!
+ w "Marker seq number: ",?offset,$p(markinfo,",",2),!
+ w "Prev marker address: ",?offset,$p(markinfo,","),!
+ w "Time stamp: ",?offset,$zu(78,24,addr)," - ",$ZDT($zu(78,24,addr)),!
+ w "Prev address: ",?offset,$zu(78,18,addr),!
+ w "Next address: ",?offset,$zu(78,17,addr),!
+ i $ZU(78,30,0) d
+ . w "Cluster sequence #: ",?offset,$zu(78,11,addr),!
+ . w "Cluster started at: ",?offset,$zdt($ZU(78,30,1),8)," (",$ZU(78,30,0),")"
+ q
+dumpbignet(addr) ;called from dumprec only (uses offset)
+ n reqtransinfo
+ s reqtransinfo=$zu(78,45,addr)
+ w "Request Trans Num:",?offset,(reqtransinfo)
+ q
+dumprec(addr,select) ;
+ n (addr,select) w:'$d(select) /cup(3,1) s offset=25
+ w "Address: ",?offset,addr,! s type=$zu(78,8,addr)
+ w "Type: ",?offset,$$Type(type),! s trans=$zu(78,9,addr)
+ i type=13 d dumpjm(addr) q
+ if (type '= 15) {
+	w "In transaction: ",?offset,$s(trans:"Yes",1:"No"),!
+	s hexid=$ZH($zu(78,10,addr))
+	w "Job ID: ",?offset,"0x",$E("0000000",$L(hexid),8),hexid,!
+	w "Process ID: ",?offset,$$getpid(addr),!
+	i (((type'<16)&&(type'>18)) || ((type = 21) && $zu(78,60,addr))) w "Transaction Level: ",?offset,$zu(78,60,addr),!
+ } else {
+	w "In transaction: ",!
+	w "Job ID: ",!
+	w "Process ID: ",!
+ }
+ w "ECP system ID: ",?offset,$zu(34,22,$ZU(78,25,addr)),!
+ w "Time stamp: ",?offset,$zu(78,24,addr)," - ",$ZDT($zu(78,24,addr)),!
+ i type=15 d dumpbignet(addr) q
+ w:(type'=21) "Collation sequence: ",?offset,$ZU(78,27,addr),!
+ w "Prev address: ",?offset,$zu(78,18,addr),!
+ w "Next address: ",?offset,$zu(78,17,addr),!
+ q:(type=21)
+ i $ZU(78,30,0) d
+ . w "Cluster sequence #: ",?offset,$zu(78,11,addr),!
+ . w "Cluster started at: ",?offset,$zdt($ZU(78,30,1),8)," (",$ZU(78,30,0),")"
+ w !
+ s mirdbname=$zu(78,112,addr)
+ i mirdbname'="" w "Mirror Database Name:",?offset,mirdbname,!
+ w "Global:    ",$zu(78,13,addr),! s numdata=$zu(78,14,addr)
+ If type=14 {
+   Write "Position:   ",$zu(78,36,addr),!
+   Write "Old Length: ",$zu(78,39,addr),!
+   Write "New Value:  ",$zu(78,37,addr),!
+   Write "Old Value:  ",$zu(78,38,addr),!
+ } Elseif numdata=2 {
+   Write "New Value: ",$$Format^%qcr($zu(78,15,addr),3),!,"Old Value: ",$$Format^%qcr($zu(78,16,addr),3),!
+ } Elseif numdata>0 {
+   If type-6,type-10,type-19 Write "New Value: ",!,"Old Value: ",$$Format^%qcr($zu(78,16,addr),3),!
+   Else  Write "New Value: ",$$Format^%qcr($zu(78,15,addr),3),!
+ }
+ Quit
+message(msg,hangval,row) 
+ w /cup(row,1),msg,$j("",80-$x) h hangval 
+ w /cup(row,1),$j("",80) 
+ q
+clear(first,last) 
+ n i
+ w /cup(first,1)
+ f i=first:1:last w /cup(i,1),blank 
+ w /cup(1,1)
+ q
+jrninfo(jf) ;show info from journal header
+ n (jf)
+ s jf=$zu(12,jf)
+ s blank=$j("",80),$p(sep,"=",80)=""
+ d clear(1,25)
+ s info=$zu(78,22,jf,99) i info'>0 {
+   w /ed(2) w /cup(1,1),jf," is NOT a valid journal file!",! 
+   r "Press any key to return",x#1
+   q
+ }
+ w /cup(1,1),"Journal: ",jf,!
+ s info=$p(info,",",2,*) ;skip the status field
+ w "File GUID: ",$p(info,",",7),!
+ w "Max Size: ",$p(info,",",3),!
+ s time0=$p(info,",",4)
+ w "Time Created: ",$zdt($zdth(time0,-2),3),!
+ i $p(info,",",5) {
+   w "Encryption Key ID: ",$p(info,",",23),!
+ }
+ w "File Count: ",$p(info,",",12),!
+ w "Min Trans: ",$p(info,",",18),",",$p(info,",",19),!
+ s fcnt=$p(info,",",13)
+ i fcnt {	; a mirror journal file
+   w "Mirror File Count: ",fcnt,!
+   w "Mirror Min Trans: ",$p(info,",",20),",",$p(info,",",21),!
+   w "Mirror File End: ",$p(info,",",16),!
+   w "Mirror GUID: ",$p(info,",",15),!
+   w "System GUID: ",$p(info,",",14),!
+   w "Session GUID: ",$p(info,",",17),!
+ }
+ s file=$p(info,",",1)
+ i file'="" {
+   w "Prev File: ",file,!
+   w "Prev File GUID: ",$p(info,",",6),!
+   w "Prev File End: ",$p(info,",",11),!
+ }
+ s file=$p(info,",",2)
+ i file'="" {
+   w "Next File: ",file,!
+   w "Next File GUID: ",$p(info,",",8),!
+ }
+ w /cup(23,1),"(D)atabases,(Q)uit => "
+ u 0:(:"+S")
+ f  r key#1  q:"DdQq"[key
+ u 0:(:"-S")
+ i "Qq"[key q  ;"Q", "q" or ""
+ d dbpage(jf)
+ q
+dbpage(jf) ;show databases in journal directory block
+ d clear(2,25)
+ s dev=$zu(78,5,jf,0) 
+ i dev<0 {
+   w /ed(2) w /cup(1,1),"Unable to open file ",jf,! 
+   r "Press any key to return",x#1
+   q
+ }
+ s ismirjrn=(+$P($ZU(78,22,jf,13),",",2))
+ try {
+   i $zu(78,6,dev)
+   f sfn=0:1:$zu(40,0,41)-1 {
+     s target=$ZU(78,31,sfn)
+     i (target="")||($a(target)=0) continue 
+     i ismirjrn {
+       s mdn=$zu(78,31,sfn,2)
+       i mdn="" s dirlist(sfn)=target
+       e  s dirlist(sfn)=mdn
+     } else {
+       s dirlist(sfn)=target
+     }
+   }
+   i $zu(78,7,dev)
+ } catch {
+   w "Error: ",$ze,!
+   i $zu(78,7,dev)
+   r "Press any key to return",x#1
+   s $ze=""
+   q
+ }
+ try {
+   w /cup(2,1),$j("sfn",5),?7,"Directory"
+   i ismirjrn w " or Mirror DB Name"
+   w !,sep,!
+   s key=1 f  {
+     i 'key q
+     i key=1 { ;next page
+       s sfn=$o(sfnlist(""),-1),row=1 f  {
+         s sfn=$o(dirlist(sfn),1,target) q:sfn=""
+         s tmplist(sfn)=target
+         i $i(row)>18 q
+       }
+     } else { ;key=2: previous page
+       s sfn=$o(sfnlist("")),row=1 f  {
+         s sfn=$o(dirlist(sfn),-1,target) q:sfn=""
+         s tmplist(sfn)=target
+         i $i(row)>18 q
+       }
+     }
+     i $d(tmplist) {
+       k sfnlist m sfnlist=tmplist k tmplist
+       d showdb(.sfnlist)
+     }
+     s key=$$getkeydb
+   }
+ } catch {
+   w "Error: ",$ze,!
+   r "Press any key to return",x#1
+   s $ze=""
+ }
+ q
+showdb(sfnlist) ;show one page of databases with their sfn's
+ n sfn,target
+ d clear(3+1,23-1)
+ w /cup(4,1)
+ s sfn="" f  {
+   s sfn=$o(sfnlist(sfn),1,target) q:sfn=""
+   w $j(sfn,5)
+   i $l(target)<(80-7) {
+     w ?7,target,!
+   } else { ;a target that is too long to fit in one line -- abbreviate it
+     w ?7,$$abbr(target),!
+   }
+ }
+ q
+abbr(str,siz) ;to fit 'str' in space of 'siz'  by replacing middle with ".."
+ n len,hsiz
+ s len=$l(str),hsiz=(siz-2)\2 ;leave room for ".." in the middle
+ q $e(str,1,hsiz)_".."_$e(str,len-(siz-hsiz-2)+1,len)
+getkeydb() ;
+ w /cup(23,1),"(P)rev,(N)ext,(Q)uit => "
+ u 0:(:"+S")
+ f  r key#1  q:"PpNnQq"[key
+ u 0:(:"-S")
+ i "Qq"[key q 0 ;"Q", "q" or ""
+ i "Nn"[key q 1 ;get next page
+ i "Pp"[key q 2 ;get prev page
+ q -1
+pagehdr(jf) ;
+ d clear(1,25)
+ w /cup(1,1),"Journal: ",jf
+ w /cup(3-1,1),$j("Address",10),?(1+10+1),$j("Proc ID",8)
+ w ?((1+10+1)+8+1),"Op",?(((1+10+1)+8+1)+2+1),"Directory",?((((1+10+1)+8+1)+2+1)+16+1),"Global & Value",!
+ w sep,!
+ q
+onepage(addr) ;assume journal is in use, addr: starting record
+ n (addr,blank)
+ i 'addr s addr=$zu(78,17,addr) q:addr'>0 0
+ s rec=$$thisrec(addr,.glo,.val),i=1 
+ f  q:+rec'>0  d showrec(rec,$g(glo),$g(val),i) q:i=18  d
+ . s addr=+rec,rec=$$nextrec(addr,.glo,.val),i=i+1
+ d clear(3+i,23-1)
+ q +rec
+ ;
+thisrec(addr,glo,val) New d,x,op Set $zt="etrecord"
+dorec Set d=$$del2^%Wprim,op=$$OPER($zu(78,8,addr),$zu(78,9,addr)),val=""
+ If op="M" {
+    Set x=$ZU(78,35,addr),glo=""
+    Quit addr_d_$p(x,",",3)_d_op_d_$p(x,",",4,$l(x))
+ } ElseIf op="NN" {
+    s glo=$zu(78,45,addr)
+    Quit addr_d_"<"_$zu(34,22,$ZU(78,25,addr))_">"_d_op_d_$zu(89,1,2,$zu(34,22,$ZU(78,25,addr)))
+ } ElseIf op="BTL"||(op="PTL")||(op="CTL") {
+    s glo=$zu(78,60,addr)
+ } ElseIf (op="RB") {
+    s lvl=$zu(78,60,addr)
+    s glo=""
+    quit addr_d_$$getpid(addr)_d_op_d_$s(lvl:lvl,1:"")
+ } ElseIf op'="BT",op'="CT" {
+   Set glo=$zu(78,13,addr),glo=$p(glo,"]",$l($qs(glo,-1),"]")+1,999)
+   If $E(op)="b" {						;SJ2943+
+	Set val=$zu(78,36,addr)_","_$zu(78,37,addr)
+	If op="bT" Set val=val_","_$zu(78,39,addr)_","_$zu(78,38,addr)
+   }								;SJ2943-
+   Set:$E(op)="S" val=$zu(78,15,addr)
+   Quit addr_d_$$getpid(addr)_d_op_d_$zu(78,12,addr)_d_$zu(78,112,addr)
+ } Else  { Set glo="" }
+ Quit addr_d_$$getpid(addr)_d_op
+nextrec(addr,glo,val) New d,x,op Set $zt="etrecord"
+ Set addr=$zu(78,17,addr) Quit:addr'>0 addr Goto dorec
+etrecord Set $zt="" Quit 0_$$del1^%Wprim_$zt
+guirecs(addr,data,size,dir) ;gui entry point, fetch screenful
+ ;Detect maxstring before setting. 
+ n (addr,data,size,dir)
+ s del2=$$del2^%Wprim,del1=$$del1^%Wprim
+ s (data,glo,val)=""
+ s stop=0
+ f i=1:1:size d  q:addr=0!(stop=1)
+ . s nextaddr=$$jump(addr,dir)
+ . i nextaddr=addr s addr=0,data=data_"." q
+ . s addr=nextaddr
+ . s rec=$$thisrec(addr,.glo,.val)_del2_glo_del2_$e(val,1,500)
+ . i $l(data)+$l(rec)>10000 s stop=1 q
+ . i dir=1 s data=data_rec_del1
+ . e  s data=rec_del1_data
+ i stop q 2
+ q 1
+OPER(type,trans) Quit:type<4 "*" Quit:type>21 "*"
+ Quit:type=4 "BT" Quit:type=5 "CT"
+ Quit:type=13 "M"
+ Quit:type=15 "NN"
+ Quit:type=21 "RB"
+ Quit:type=16 "BTL" Q:type=17 "PTL"
+ Quit:type=18 "CTL"
+ Quit $CASE(type,7:"K",11:"K",6:"S",10:"S",
+                 9:"k",12:"k",8:"k",
+                 19:"S",20:"k",
+                 14:"b")_$S(trans:"T",1:"")
+showrec(rec,glo,val,n) Quit:'n  New row,d,op,roomleft
+ Set row=n+3,d=$$del2^%Wprim,op=$p(rec,d,3)
+ Write /cup(row,1),$j($p(rec,d),10),?(1+10+1),$j($p(rec,d,2),8)
+ Write ?((1+10+1)+8+1),op,?(((1+10+1)+8+1)+2+1),$$truncate($p(rec,d,4),16)
+ Write ?((((1+10+1)+8+1)+2+1)+16+1),$$truncate(glo,(80-10-8-2-16))
+ Set roomleft=80-$x
+ If $E(op)="S"||($E(op)="b"),roomleft Write " = ",$$truncate($$Format^%qcr(val,1),80-$x)
+ Write $j("",80-$x)
+ Quit
+truncate(str,len) Quit:$l(str)'>len str Quit $e(str,1,len-1)_"+"
+jump(addr,n) ;return address of record n from addr (record 0 at addr)
+ n (addr,n)
+ i 'n q addr
+ i n>0 s func=17
+ e  s func=18,n=-n
+ f i=1:1:n s new=$zu(78,func,addr) q:new'>0  s addr=new
+ q addr
+ ; Entry point for selective journal dump
+ ; Input:
+ ; %jfile: journal file name (default=current journal file)
+ ; %pid: process ID of journal record (default=any process)
+ ; %remsysid: remote system ID of journal record (default=any system)
+ ;   note: if %pid is specified, then %remsysid defaults to local system (0);
+ ;   otherwise, it defaults to any system, same as if it is specified as 0.
+ ;   That is, one CANNOT select journal entries ONLY from local system.
+ ; %dir: directory in journal record (default=any directory)
+ ; %glo: global reference in journal record (default=any global)
+ ; %mdn: mirror db name to match. ("",default=any database)
+ ; %command: type of command (default=any command)
+ ;   "S" or "s" for SET, "K" or "k" for KILL, "ZK" or "zk" for ZKILL
+ ;   or "BS" or "bs" for Set $BIT                            ; RAM990
+ ;   or use the numeric values found in Type() function
+SELECT(%jfile,%pid,%dir,%glo,%gloall,%command,%remsysid,%mdn) 
+ n chan,addr,naddr,gfn,type,pid,dir,glo,node,cmd
+ s $ZT="selerr"
+ s %jfile=$g(%jfile,$zu(78,3)) i %jfile="" w !,"journal file unavailable" q
+ s chan=$zu(78,5,%jfile,0) i chan<0 w !,"Error opening journal file ",%jfile q
+ i $zu(78,6,chan)
+ s %pid=+$g(%pid),%glo=$g(%glo),%gloall=+$g(%gloall),%remsysid=+$g(%remsysid)
+ s %dir=$g(%dir) i %dir]"" s %dir=$zu(12,$g(%dir))
+ s %mdn=$g(%mdn)
+ i %pid'?1.N s %pid=$zh(%pid) ;convert from hex to numeric
+ s gfn=$s(($zversion(1)=1):3,1:2),cmd=$zcvt($g(%command),"U")
+ s %command=$s(cmd="S":6,cmd="K":7,cmd="ZK":9,cmd="BS":14,1:cmd)
+ s addr=0 d ^%IS 
+selloop ;we may continue from here with non-zero addr
+ u IO f  s naddr=$zu(78,17,addr) q:naddr'>0  s addr=naddr d
+ . s type=$zu(78,8,addr) i %command]"",%command'=type q
+ . i type=13 d dumprec(addr,1) w ! q
+ . s remsysid=$zu(34,22,$ZU(78,25,addr)),pid=$$getpid(addr) 
+ . i %pid,((%pid'=pid)!(remsysid'=%remsysid)) q
+ . i '%pid,%remsysid,remsysid'=%remsysid q
+ . i type=15 d dumprec(addr,1) w ! q
+ . s dir=$zu(78,12,addr) i %dir]"",%dir'=dir q
+ . i %mdn'="",$zu(78,112,addr)'=%mdn q
+ . s node=$zu(78,13,addr),glo="^"_$p(node,"]",gfn,$l(node))
+ . i %glo]"" i %gloall=0 i %glo'=glo q
+ . i %glo]"" i %gloall=1 i glo'[%glo q
+ . d dumprec(addr,1) w !
+ i naddr<0 w !,"Invalid address: ",addr,!
+selexit ;
+ s $zt="" i $zu(78,7,chan)
+ c:IO'=$P IO
+ q
+selerr ;
+ i $ze'["<INTER" u 0 w !,$ZE,! g selexit
+ u 0 s x=$$YN("Do you want to continue","Y") w ! g selloop:$g(x)="Y",selexit
+Type(t) ;return the transaction name
+ I t=4 Q "BeginTrans"
+ I t=5 Q "CommitTrans"
+ I t=6 Q "Set"
+ I t=7 Q "KillNode"
+ I t=8 Q "KillDesc"
+ I t=10 Q "NSet"
+ I t=11 Q "NKill"
+ I t=9 q "ZKill"
+ i t=12 q "NZKill"
+ i t=13 q "JrnMark"
+ i t=14 q "BitSet"
+ i t=15 q "NetReq"
+ i t=21 q "Rollback"
+ i t=16 q "BeginTrans with Level"
+ i t=17 q "CommitTrans Pending with Level"
+ i t=18 q "CommitTrans with Level"
+ i t=19 q "Mirror Set"
+ i t=20 q "Mirror Kill"
+ I t=-1 Q "JOURNAL-END"
+ Q "***"
+OLD ;
+ n  d INT q
+listhdrclu ;
+ w /cup(3-1,1)
+ w $j("FirstSeq",11),$j("LastSeq",11),?(11+11+3),"Journal Files"
+ q
+showlistclu(l) ;
+ s i="" f  s i=$o(l(i)) q:i=""  d
+ . w /cup(i+3,1) 
+ . i (l(i)?1.N) w $j("Session",8),$j($zdt($zdth(l(i),-2),8),18) q
+ . w $j($qs(l(i,"info"),2+2),11),$j($qs(l(i,"info"),3+2),11)
+ . w $j($g(l(i,"stat")),2) w ?((11+11+3)+$qs(l(i,"info"),4+2)),l(i)
+ q
+listjrnclu(f,list,n) ;
+ q:'n ""
+ n index,jrninfo,jrninfor,seqinfo
+ s index=$$initjrninfo^JRNINFO()
+ k list i $$updjrninfo^JRNINFO()  ;output: seqinfo, jrninfo, jrninfor
+ i n<0 s i=-n+1,inc=-1,end=1
+ e  s i=0,inc=1,end=n
+ i (f?1.N) s i=i+inc,list(i)=f,q=$q(@seqinfo@(f),inc) g:$e(q,1,$l(seqinfo)-1)'=$e(seqinfo,1,$l(seqinfo)-1) exit s cst=$s(inc>0:f,1:$qs(q,1+2)) i 1  ;q is guaranteed to have cst,seqbeg,seqend,csn,idx subscripts
+ e  s f=$zu(12,f),info=@jrninfo@(f),cst=$p(info,",",3) i +cst s seqbeg=$p(info,",",4),seqend=$p(info,",",5),csn=+info,idx=$p(info,",",2),q=$name(@seqinfo@(cst,seqbeg,seqend,csn,idx))
+ f  s i=i+inc,list(i)=@jrninfor@($qs(q,4+2),$qs(q,5+2)),list(i,"info")=q,list(i,"stat")=$s($zu(140,4,list(i))<0:"D",$P($zu(78,22,list(i),1),",",2)="":"*",1:" ") q:i=end  s q=$q(@q,inc) q:$e(q,1,$l(seqinfo)-1)'=$e(seqinfo,1,$l(seqinfo)-1)  i $qs(q,1+2)'=cst s i=i+inc,list(i)=$s(inc>0:$qs(q,1+2),1:cst),cst=$qs(q,1+2) q:i=end
+ i q="",inc<0 s i=i+inc,list(i)=cst
+exit ;
+ d killjrninfo^JRNINFO(index)
+ q list(i) 
+getpid(addr) {
+	if $ZBITGET($ZVERSION(0),46) {
+		quit $$getpidSub(addr)
+	} else {
+		 quit ##class(%SYS.Journal.Record).PIDLookup(addr)
+	}
+}
+getpidSub(Offset) {
+ /* This is a copy of
+ 		##class(%SYS.Journal.Record).PIDLookup(addr)
+     Given an offsetid
+	   (not the jobid) of the process. If a process id is not available,
+	   <jobid>_"(jid") is returned instead of the pid. 
+ */
+ s pid=$zu(78,100,Offset)  ;pid or 0 if pid is not avalable
+ i pid q pid
+ s jobid=$zu(78,10,Offset)  ;jobid from journal record, <NOTOPEN> if no current file
+ if '$ZBITGET($ZVERSION(0),40) quit jobid  ;This is the pid for non-USETID builds	
+ ;If the jobid is from a remote system, we can't translate it
+ if $zu(34,22,$ZU(78,25,Offset)) quit jobid_"(jid)" 
+ ;
+ if '$D(^SYS("PIDList",jobid)) quit jobid_"(jid)"
+ s rectime=$ZU(78,24,Offset)  ;Timestamp for journal record
+ s day=$P(rectime,",")
+ if $D(^SYS("PIDList",jobid,day)) {
+	 ; We have a record for this day, we must use the time
+	 s time=$P(rectime,",",2)_"X"  ;Add "X" so when we reverse $O, we get <= not just <
+	 s time=$o(^SYS("PIDList",jobid,day,time),-1,pid)
+	 if time="" quit jobid_"(jid)"  ;shouldn't happen, we know jobid/day node exists
+ } else {
+	 ; No record for this day, use the most recent record for this jobid
+	 s day=$o(^SYS("PIDList",jobid,day),-1)
+	 if day="" quit jobid_"(jid)"  ;shouldn't happen, we know jobid node exists
+	 s time=$o(^SYS("PIDList",jobid,day,""),-1,pid)
+	 if time="" quit jobid_"(jid)"  ;shouldn't happen, we know jobid node exists
+	 ; pid is loaded with the pid from the correct record
+ }
+ quit pid
+}
+ ; BITWISE.INC, DPB139 07/09/93
+FIXDIR(dir) ;procedure, dir is passed by reference
+ Q:dir=""
+ i ($zversion(1)=1) d
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ i '($zversion(1)=1) Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))
+ i '($zversion(1)=1) s dir=dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+ Q
+fixdir(dir) ;function
+ Q:dir="" ""
+ i ($zversion(1)=1) d  q dir
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")) dir
+ Q dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+basename(f) ;similar to basename on UNIX
+ Q $P(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),1,$L(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))-1)_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+appdir(d1,d2) ;use $zu(12,d2) to append d2 to canonic dir
+ i ($zversion(1)=1) S $E(d1,$L(d1))="."_d2_"]"
+ i '($zversion(1)=1) S d1=d1_d2
+ Q d1
+VALIDIR(dir) ;validate directory dir and create it if dir doesn't exist
+ new flag
+ s flag=1
+ g vdir2
+validir(dir,flag) ;validate directory dir and optionally create it if it
+vdir2 ; VALIDIR(dir) comes here with flag set to 1
+ quit:$$ChkDirOrSpecEXISTS(dir)'="" 1   ; dir is valid and exists
+ quit:$$ChkDirVALID(dir)="" 0    ; dir is not valid
+ i flag'=1 q 0  ; flag says don't create, return failure
+ new x
+ set x=$$mkdir(dir)  ; returns 0 for success, 1 for failure
+ q:x=1 0  ; failed to create
+ quit:$$ChkDirOrSpecEXISTS(dir)="" 0   ; it doesn't we failed
+ q 1  ; success
+mkdir(dir) ;create a new directory
+ i ($zversion(1)=1) q:$$ChkDirVALID(dir)="" 1  ; dir is invalid, return failure
+ q '##class(%Library.File).CreateDirectoryChain(dir)
+jrnshort(jf,short) ;get/set short form of a journal file name FIXME HYY1999
+         N (jf,short)
+         S len=$L($P(jf,";"))
+         Q:$G(short)="" $E(jf,len-11,len) ;"GET" form
+         S $E(jf,len-11,len)=short ;"SET" form
+         Q jf
+GJrnPrefix(jf) ;extract prefix from the journal file name jf
+         N (jf)
+         S fname=$P(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),$L(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")))       
+         Q $e(fname,1,$l($p(fname,"."))-8)
+GetJrnFileName(path) { 
+	i $f(path,"/") q $p(path,"/",$l(path,"/")) ;presumably a Unix path
+	if $f(path,"\") q $p(path,"\",$l(path,"\")) ;presumably a Windows path
+	s vmsfile=$p(path,"]",2) i vmsfile="" q path ;a name only, not a path
+	q $p(vmsfile,";") ;return name from a VMS path without trailing ";"
+}
+dirinvalidmsg(dir1,dir2) 
+ n valid1,valid2,cnt,msg
+ s valid1=$$VALIDIR(dir1),valid2=$$VALIDIR(dir2)
+ s cnt=valid1+valid2 ; cnt = 0 if both invalid, 1 if one is valid
+ s msg="The following journaling "
+ s:cnt msg=msg_"directory is" 
+ s:'cnt msg=msg_"directories are"
+ s msg=msg_" not valid"_$C(13,10)
+ s:'valid1 msg=msg_"     "_dir1_$C(13,10)
+ s:'valid2 msg=msg_"     "_dir2_$C(13,10)
+ q msg
+ChkDirVALID(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,1)
+ChkDirEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkDirOrSpecEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,3)
+ChkDir(R) N N S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkBad S $ZT="" W !,"<"_$P($P($ZE,"<",2),">")_"> error -- invalid directory"
+ Q ""
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R

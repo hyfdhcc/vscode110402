@@ -1,0 +1,319 @@
+ROUTINE NSPACTIVATE [Type=INT]
+NSPACTIVATE ; Activate a namespace map  ;STC2505 04/19/16
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ; GXLATE.INC DPB125 06/04/93
+Activate() Public {
+ s $zt="Error"
+ l +^%SYS.NAMESPACE
+ k ^||NspError,^||rtab,^SYS("NSMAPSUB")
+ d $zu(9,"","Activating new namespace map",0,0  /* Informational message */)
+ s Status=1
+ s confname=$p($zu(86),"*",2)
+ d SaveImpNsp(.SaveImpNsp)
+ s OldDisconnect=$zu(137,0)
+ s OldSwitch10=$$TurnOnSwitch10(.Status)
+ i '(''Status) g Exit
+ d $zu(5,"^^"_$zu(12))
+ d $zu(90,-1)
+ d REMINI("",1)
+ i +$g(^||NspError)=0 {
+	d $zu(5,"%SYS")
+	s ^SYS("GREDIR","NSACT")=confname
+	d RestoreImpNsp(.SaveImpNsp)
+	d $zu(9,"","Namespace changes have been activated",0,0  /* Informational message */)
+	s Status=1
+ } else {
+	d $zu(5,"^^"_$zu(12))
+	d $zu(90,-1)
+	zn "%SYS"
+	d $zu(9,"","Error activating namespaces",1 /* broadcast and log message*/,3  /* Fatal */)
+ 	f i=1:1:^||NspError {
+	 	s Status=$select(+Status:$$Error^%apiOBJ(5001,^||NspError(i)),1:$$AppendStatus^%occSystem(Status,$$Error^%apiOBJ(5001,^||NspError(i))))
+ 		d $zu(9,"",^||NspError(i),1 /* broadcast and log message*/,2  /* Severe error */)
+ 	}
+ 	k ^||NspError
+ }
+Exit
+ d $SYSTEM.Util.SetSwitch(10,OldSwitch10)
+ i $d(OldDisconnect) d $zu(137,1) ; Unsuspend async tcpdisconnect polling
+ l -^%SYS.NAMESPACE
+ q Status
+Error s $zt=""
+ zn "%SYS"
+ s Status=$$Error^%apiOBJ(5002,$ze)
+ g Exit
+}
+SaveImpNsp(SaveImpNsp) Private {
+ s $zt="Error"
+ k SaveImpNsp
+ For Ns=1:1:$zu(90,0) s Nsp=$zu(90,2,0,Ns) i Nsp]"",$e(Nsp)="@" s SaveImpNsp(Nsp)=""
+ q
+Error q
+}
+RestoreImpNsp(SaveImpNsp) Private {
+ s $zt="Error"
+ s Nsp=$o(SaveImpNsp(""))
+ while (Nsp'="") {
+	s x=$$MAP^%SYS.NAMESPACE(Nsp,$p(Nsp,"@",3),,,$p(Nsp,"@",2))
+	s Nsp=$o(SaveImpNsp(Nsp))
+ }
+ q 
+Error q
+}
+TurnOnSwitch10(Status) Private {
+ s Status=1
+ s OldValue=$SYSTEM.Util.SetSwitch(10,1) ;Set switch 10 to freeze everything while we activate namespaces
+ i OldValue q OldValue
+ f  q:$zu(51,8)  h .01 s WaitTime=$i(WaitTime) i WaitTime=12000 s Status=$$Error^%apiOBJ(453) q
+ q OldValue
+}
+ActivateOne(nspace) Public {
+ s $zt="Error"
+ l +^%SYS.NAMESPACE
+ k ^||NspError,^||rtab
+ s DeleteNS='$D(^SYS("NSMAP",nspace))
+ d $zu(9,"",$s(DeleteNS:"Deleting ",1:"Activating ")_nspace_" namespace map",0,0  /* Informational message */)
+ s OldDisconnect=$zu(137,0)
+ s OldSwitch10=$$TurnOnSwitch10(.Status)
+ i '(''Status) g Exit
+ s ExistingNamespace=$zu(90,10,nspace)
+ D REMINI(nspace,1)
+ k ^||SingleNS
+ i +$g(^||NspError)=0 {
+	i ExistingNamespace d $zu(90,20)
+	d $zu(9,"","Namespace "_nspace_$s('$D(^SYS("NSMAP",nspace)):" has been deleted",1:" changes have been activated"),0,0  /* Informational message */)
+	s Status=1
+ } else {
+	d $zu(9,"","Error activating namespaces "_nspace,1 /* broadcast and log message*/,3  /* Fatal */)
+ 	f i=1:1:^||NspError d $zu(9,"",^||NspError(i),0,0  /* Informational message */) s Status=$select(+Status:$$Error^%apiOBJ(5001,^||NspError(i)),1:$$AppendStatus^%occSystem(Status,$$Error^%apiOBJ(5001,^||NspError(i))))
+ 	k ^||NspError
+ }
+Exit
+ d $SYSTEM.Util.SetSwitch(10,OldSwitch10) ;Let processes back into the global module
+ i $d(OldDisconnect) d $zu(137,1) ; Unsuspend async tcpdisconnect polling
+ l -^%SYS.NAMESPACE
+ q Status
+Error s $zt=""
+ zn "%SYS"
+ s Status=$$Error^%apiOBJ(5002,$ze)
+ g Exit
+}
+ u 0 w !,"Illegal entry point: do not call ^",$ZN," directly."
+ q:$zu(41)'>2  ZTRAP "EP"
+REMINI(nspace="",qflag=1)
+ n errenv,QUIETLY,xx,oldnum,newnum
+ s QUIETLY=$G(qflag)
+ s $zt="remerr"  ;Don't want to abort startup
+ i '$d(@$NAME(^SYS("NSMAP"))) q  ;Silently do nothing if none defined
+ s ^NET(0,"GREDST")=2   ; we're doing the 2nd step
+ s $ze=""				; Important to set this to ""
+ if nspace="" {
+	 d all($NAME(^SYS("NSMAP")))
+	 if $g(errenv)="" d slm($NAME(^SYS("NSMAP")))
+ } elseif '$D(^SYS("NSMAP",nspace)) {
+	 if $zu(90,25,nspace) d errlog("Error deleting namespace "_nspace)
+ } else {
+	 s ^||SingleNS=1
+	 s oldnum=$s($zu(90,10,nspace):$zu(90,0,nspace),1:0)
+	 d:oldnum $zu(90,26,nspace,0)
+	 s newnum=$$OneNSGlobal($NAME(^SYS("NSMAP")),nspace)
+	 i $g(errenv)'="" {
+		 d errlog(errenv)
+	 } else {
+		 d OneNSSubscript($NAME(^SYS("NSMAP")),nspace)
+	 }
+ }
+ k ^||rtab
+remerr s $zt="" i $ze'="" d
+ . i $g(^||SingleNS) s ^||SingleNS=2  ; For single NS, we need to restart with all NS.
+ . d errlog($ZE_" occurred -- aborting redirection setup.")
+ . r:'$g(QUIETLY) "Press RETURN ... ",r:30,!
+ k ^NET(0,"GREDST")
+ q
+errlog(erm) ;
+ i '$D(^||NspError) s ^||NspError=0
+ i $G(qflag) s ^||NspError=^||NspError+1,^||NspError(^||NspError)=$E(erm,1,70)
+ e  d $zu(9,"",erm,(1>0),1) s ^||NspError=1
+ q
+all(tran) 
+ s nspace="" f  s nspace=$o(@tran@(nspace)) q:nspace=""  s xx=$$OneNSGlobal(tran,nspace) q:$g(errenv)'=""
+ i $g(errenv)'="" d errlog(errenv),errlog("Redirection setup is aborted")        
+ q
+OneNSGlobal(tran,nspace) ;
+ n db,bardef,barsys,gindgbl,gindsrtn,pat,x,totnum
+ s db=$g(@tran@(nspace,"defglbloc"))
+ s bardef=db,barsys=$g(@tran@(nspace,"defsysrtn"))
+ s gindgbl=$$addenv(bardef) i gindgbl<0 s errenv=$p(gindgbl,-1,2) q +errenv
+ s gindsrtn=$$addenv(barsys) i gindsrtn<0 s errenv=$p(gindsrtn,-1,2) q +errenv
+ i $ZU(90,3,0,nspace,gindgbl,gindsrtn)<0 s errenv="Error adding namespace "_nspace q -1
+ s totnum=0
+ s pat="" f  s pat=$o(@tran@(nspace,"globmap",pat)) q:pat=""  d  q:x<0
+ . s x=$$install(db,nspace,pat,tran)
+ . i x<0 d  q
+ . . s errenv="Error adding mapping for namespace "_nspace
+ . . d errlog("ERROR processing namespace "_nspace_", pattern "_pat_": ")
+ . . d errlog("    "_$p(x," ",2,$L(x," ")))
+ . . d errlog("Redirection setup is aborted ")
+ . . i $g(^||SingleNS) s ^||SingleNS=2  ; For signle NS, we need to restart with all NS.
+ . . i +$G(^NET(0,"GREDST")) d
+ . . . r:'$g(QUIETLY) !,"Press RETURN to continue ...",r:30
+ . s totnum=totnum+1
+ q totnum
+install(db,nsp,pat,tran) 
+ n before,ii1,li1,ri1,ii2,li2,ri2,result,fakeloc
+ ;s fakeloc="|""^^""|"
+ n tmp
+ s $zt="tranerr"
+ s (ri1,ri2)=0
+ i $g(@tran@(nsp,"globmap",pat,1,"I"))="|""^^""|" s (ii1,ri1,li1)=0 g cont1  ; sorry for 'goto', it's just a few lines ahead
+ s ii1=$s($g(@tran@(nsp,"globmap",pat,1,"I"))=""||((db["^^")&&(db=$g(@tran@(nsp,"globmap",pat,1,"I")))):0,1:$$addenv($g(@tran@(nsp,"globmap",pat,1,"I"))))
+ i ii1<0 q ii1
+ s li1=$s($g(@tran@(nsp,"globmap",pat,1,"L"))=""||((db["^^")&&(db=$g(@tran@(nsp,"globmap",pat,1,"L")))):0,1:$$addenv($g(@tran@(nsp,"globmap",pat,1,"L"))))
+ i li1<0 q li1
+cont1 i $g(@tran@(nsp,"globmap",pat,2,"I"))="|""^^""|" s (ii2,ri2,li2)=0 g cont2
+ s ii2=$s($g(@tran@(nsp,"globmap",pat,2,"I"))=""||((db["^^")&&(db=$g(@tran@(nsp,"globmap",pat,2,"I")))):0,1:$$addenv($g(@tran@(nsp,"globmap",pat,2,"I"))))
+ i ii2<0 q ii2
+ s li2=$s($g(@tran@(nsp,"globmap",pat,2,"L"))=""||((db["^^")&&(db=$g(@tran@(nsp,"globmap",pat,2,"L")))):0,1:$$addenv($g(@tran@(nsp,"globmap",pat,2,"L"))))
+ i li2<0 q li2
+cont2 ;
+ n c s c=","
+ i $d(@tran@(nsp,"submap",pat)) d
+ . new sub
+ . f sub="ri1","ii1","li1","ri2","ii2","li2" s ^||rtab(nsp,pat,sub)=@sub
+ q $ZU(90,0,nsp,pat,ri1,ii1,li1,ri2,ii2,li2)
+tranerr q "-1 "_$ze
+envindex(db,env) 
+ s $zt="errindex"
+ i env="" q 0
+ i db["^^",db=env q 0
+ q $$addenv(env)
+errindex q "-1 "_$ze
+addenv(env) ;Add environment E if not there, return index, -1 if error
+ n found,dset,ret s $zt="NoZu9024"
+ s ret=$zu(90,24,env),dset=$p(ret,"^",3),found=+ret
+ i dset'="" s ^SYS("GREDIR","GINDTARG",dset,$p(ret,"^",4))=$p(ret,"^",1,2)
+ S ^SYS("GREDIR","GINDTAB",found)=$p(ret,"^",2,4)
+ i found>$g(^SYS("GREDIR","GINDTAB")) s ^SYS("GREDIR","GINDTAB")=found  
+ q found
+NoZu9024
+ n remsysnum
+ s $ze=""
+ s dset=$$ENVDSET^%SYS.GXLINFO(env)
+ s dir=$$ENVDIR^%SYS.GXLINFO(env)
+ s remsysnum=$S(dset="":0,1:$ZU(63,0,dset))
+ i 'remsysnum s dir=$ZU(12,dir)   ; canonize local directory names
+ s found=$ZU(90,8,remsysnum,dir)
+ i found'>0 s found=$ZU(90,9,remsysnum,dir)
+ i +found<0 q found  ; ADDPATH returned an error
+ s $ZT=""
+ i dset'="" d   
+ . s ^SYS("GREDIR","GINDTARG",dset,dir)=+found_"^"_remsysnum
+ S ^SYS("GREDIR","GINDTAB",+found)=remsysnum_"^"_dset_"^"_dir
+ i (+found)>$g(^SYS("GREDIR","GINDTAB")) s ^SYS("GREDIR","GINDTAB")=+found  
+ q found
+slm(tran) ; install subscript level mapping
+ new nspace,defloc,coltn
+ s nspace="" f  s nspace=$o(@tran@(nspace)) q:nspace=""  d OneNSSubscript(tran,nspace)
+ q
+OneNSSubscript(tran,nspace)
+ n coltn,defloc,pat,x
+ s pat="" f  s pat=$o(@tran@(nspace,"submap",pat)) q:pat=""  d  q:x<0
+ . s defloc=$g(@tran@(nspace,"globmap",pat,1,"I"))
+ . i defloc="" s defloc=$g(@tran@(nspace,"defglbloc"))
+ . s coltn=$p(@tran@(nspace,"submap",pat),$c(1))
+ . s x=$$instslm(nspace,pat,tran,defloc,coltn)
+ . i x<0 d  q
+ . . d errlog("ERROR processing namespace "_nspace_",subscript mapping for pattern "_pat_": ")
+ . . d errlog("    "_$p(x," ",2,$L(x," ")))
+ . . d errlog("Redirection setup is aborted ")
+ . . i $g(^||SingleNS) s ^||SingleNS=2  ; For signle NS, we need to restart with all NS.
+ . . i +$G(^NET(0,"GREDST")) d
+ . . . r:'$g(QUIETLY) !,"Press RETURN to continue ...",r:30
+ q
+instslm(nsp,pat,tran,defloc,coltn) ;
+ new keyoff,destoff,reploff,keystr,deststr,keyval
+ new tmp,num,mes,string,ex,fakerep,slmkey,kk,tkey,restkey,ckey
+ s $zt="tranerr"
+ s num="",keystr="",deststr="",mes=""
+ s fakerep=1 ; all fake replications flag
+ f num=1:1 {
+	 q:'$d(@tran@(nsp,"submap",pat,num),kk)
+	 if ($l(kk)>480) {
+		 s tkk=$e(kk,1,480),restkk=$e(kk,481,*)
+		 i '$d(^SYS("NSMAPSUB",coltn,tkk)) {
+pnew		 s ex="s keyval=$zu(90,11,coltn,"_$P(kk,$C(1))_")" x ex
+			 i keyval=0 s mes="-1 Not enough room to store subscript for SLM" q
+			 i $p(kk,$c(1),2)="*next" s keyval=$zu(90,19,keyval) i keyval=0 s mes="-1 Not enough room to store subscript(next) for SLM" q
+			 s ^SYS("NSMAPSUB",coltn,tkk,keyval)=restkk
+		 } else {
+			 s keyval="" f  s keyval=$o(^SYS("NSMAPSUB",coltn,tkk,keyval),1,ckk) q:keyval=""  q:restkk=ckk
+			 if keyval="" g pnew
+		 }
+	 } elseif '$d(^SYS("NSMAPSUB",coltn,kk),keyval) {
+		 s ex="s keyval=$zu(90,11,coltn,"_$P(kk,$C(1))_")" x ex
+		 i keyval=0 s mes="-1 Not enough room to store subscript for SLM" q
+		 i $p(kk,$c(1),2)="*next" s keyval=$zu(90,19,keyval) i keyval=0 s mes="-1 Not enough room to store subscript(next) for SLM" q
+		 s ^SYS("NSMAPSUB",coltn,kk)=keyval
+	 }
+	 s keystr=keystr_$s(num>1:",",1:"")_keyval
+	 i @tran@(nsp,"submap",pat,num,"I")="|""^^""|" {
+		 s mes=0
+	 } else {
+		 s mes=$g(@tran@(nsp,"submap",pat,num,"I")),mes=$s(mes=""||((defloc["^^")&&(defloc=mes)):0,1:$$addenv(mes)) q:mes<0
+	 }
+	 s deststr=deststr_$s(num>1:",",1:"")_mes
+ }
+ q:mes<0 mes
+ s num=num-1
+ if ($l(keystr)>400) {
+	 s tkey=$e(keystr,1,400),restkey=$e(keystr,401,*)
+	 i '$d(^SYS("NSMAPSUB","key",tkey)) {
+cnew	 s keyoff=$zu(90,12,keystr)
+		 i keyoff=0 q "-1 Not enough room to store subscript pattern for SLM"
+		 s ^SYS("NSMAPSUB","key",tkey,keyoff)=restkey
+	 } else {
+		 s keyoff="" f  s keyoff=$o(^SYS("NSMAPSUB","key",tkey,keyoff),1,ckey) q:keyoff=""  q:restkey=ckey
+		 if keyoff="" g cnew
+	 }
+ } elseif '$d(^SYS("NSMAPSUB","key",keystr),keyoff) {
+	 s keyoff=$zu(90,12,keystr)
+	 i keyoff=0 q "-1 Not enough room to store subscript pattern for SLM"
+	 s ^SYS("NSMAPSUB","key",keystr)=keyoff
+ }
+ if ($l(deststr)>400) {
+	 s tkey=$e(deststr,1,400),restkey=$e(deststr,401,*)
+	 i '$d(^SYS("NSMAPSUB","dest",tkey)) {
+dnew	 s destoff=$zu(90,13,deststr)
+		 i destoff=0 q "-1 Not enough room to store destination pattern for SLM"
+		 s ^SYS("NSMAPSUB","dest",tkey,destoff)=restkey
+	 } else {
+		 s destoff="" f  s destoff=$o(^SYS("NSMAPSUB","dest",tkey,destoff),1,ckey) q:destoff=""  q:restkey=ckey
+		 if destoff="" g dnew
+	 }
+ } elseif '$d(^SYS("NSMAPSUB","dest",deststr),destoff) {
+	 s destoff=$zu(90,13,deststr)
+	 i destoff=0 q "-1 Not enough room to store destination pattern for SLM"
+	 s ^SYS("NSMAPSUB","dest",deststr)=destoff
+ }
+ s reploff=0  ; all default replications
+ i '$d(^SYS("NSMAPSUB","slmkey",coltn,keyoff,destoff),slmkey) {
+	 s slmkey=$zu(90,15,coltn,num,keyoff,destoff,reploff)
+	 i slmkey=0 q "-1 Not enough room to store SLM entry"
+	 s ^SYS("NSMAPSUB","slmkey",coltn,keyoff,destoff)=slmkey
+ }
+ q $zu(90,0,nsp,pat,slmkey,^||rtab(nsp,pat,"ri1"),^||rtab(nsp,pat,"ii1"),^||rtab(nsp,pat,"li1"),^||rtab(nsp,pat,"ri2"),^||rtab(nsp,pat,"ii2"),^||rtab(nsp,pat,"li2"))

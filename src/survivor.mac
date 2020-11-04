@@ -1,0 +1,9 @@
+ROUTINE survivor
+survivor ; celebrate or complain
+celebrate() PUBLIC
+ { Write !, "Yippee! I won!" }
+ 
+complain() PUBLIC
+ { write !, "Oh well, I lost." }
+                     
+                     

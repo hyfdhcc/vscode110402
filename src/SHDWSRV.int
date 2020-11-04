@@ -1,0 +1,150 @@
+ROUTINE SHDWSRV [Type=INT]
+SHDWSRV ;back-end of server side shadow ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/shdwsrv.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+SETUP1(port,fd,type,cli,pid) 
+	Set $ZT="etSETUP1"
+	new d 
+	Set d=$$del1^%Wprim
+	Set ^SYS("shdwsrv",port)=$G(type) 
+	Set ^SYS("shdwsrv",port,"jrn")=$G(fd)
+	Set ^SYS("shdwsrv",port,"tcp")="|TCP|"_port
+	Set ^SYS("shdwsrv",port,"pid")=$g(pid)      
+	Set ^SYS("shdwsrv",port,"cli")=$G(cli)
+	Quit 1  
+etSETUP1 ;
+	 Set $ZT=""
+	 Quit 0_$$del1^%Wprim_$ZE
+PROXY(port,%Hdr) ;
+	New (port,%Hdr)
+	Set $zt="etPROXY"
+	Do $zu(68,55,1) ;disable TCP X/Y calculation
+	Kill ^SYS("shdwsrv",0,"stop")
+	Do server
+	Close tcp
+	Kill ^SYS("shdwsrv",port)
+	Quit
+server ;
+	Set $zt="etserver"
+	Set IsRequestSession=0 ;if set, suppress error on shadow disconnect
+	Set NONLS=0
+	Set tcp="|TCP|"_port
+	u tcp i $$SetIO^%SYS.NLS("UnicodeLittle") 
+	Use tcp:/KEEPALIVE=30
+	u tcp r cliver:10 e  s shdwzerr=$$Error^%apiOBJ(1071) ztrap "READ"  ;better issue a READ before a WRITE
+	Set cli=$$GCLIIP(tcp)
+	; "exchange versions"
+	Set cliver=%Hdr_cliver
+	Set okver=$$OKVersion^SHDWUTIL(cliver) 
+	If okver="" {
+		d ERRLOG^SHDWUTIL($$Error^%apiOBJ(1023,cliver))
+		Use tcp
+		Write -1,!
+		Quit
+	}
+	; server doesn't decide whether it and client are compatible; client does.
+	Use tcp
+	Write okver,! 
+	s SendQueryRaw=($p(okver,".",2)>4)
+	For { 
+		u tcp r msg:10 e  s shdwzerr=$$Error^%apiOBJ(1071) ztrap "READ"
+		Quit:msg'<0
+		Do SendAnswer^SHDWINFO(tcp,msg) 
+	}  
+	If msg=0 {
+		d ERRLOG^SHDWUTIL($$Error^%apiOBJ(1020,cliver,okver))
+		Quit
+	}
+	If +msg'=1 {
+		d ERRLOG^SHDWUTIL($$Error^%apiOBJ(1026,msg))
+		Quit
+	}
+	If '$g(IsRequestSession) {
+	  Do $zu(9,"","[SHADOWING] "_$s(""="":"DATABASE SERVER",1:"SHADOW SERVER ("_""_")")_": "_"Connection request from shadow server "_cli,(0>0),0)
+	}
+	Set clushdw=$p(msg,",",2)
+        If clushdw {
+                If '$s($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0):''$zu(59,0),1:0) {
+                        d ERRLOG^SHDWUTIL($s(""="":$$Error^%apiOBJ(1027,$s(""="":"",1:^SYS("shdwcli","","ip")_"/"_^SYS("shdwcli","","port"))),1:$$Error^%apiOBJ(1028,$s(""="":"",1:^SYS("shdwcli","","ip")_"/"_^SYS("shdwcli","","port")),"")))
+                        Quit
+                }
+                Set CluNodesInfo=$zu(172,4)
+                If $p(CluNodesInfo,$c(1),2)="" {
+                        d ERRLOG^SHDWUTIL($$Error^%apiOBJ(179,CluNodesInfo))
+                        Quit
+                }
+        }
+	; send an acknowledgement for the $$$QEnd msg if client is waiting for one
+	Set features=$p(msg,",",3)
+	If ((+features)\(1)#2){
+		Use tcp
+		Write 1,!
+	}
+	; We are not really expecting a shadow that doesn't support the LongMsg 
+	; feature to have come this far (it would have aborted earlier due to 
+	; journal version mismatch), but we can accommodate it just in case.
+	If ((+features)\(2)#2){
+		Set MsgLenVar=500
+	} Else {
+		Set MsgLenVar=128
+	}
+	Set SrcSendJrnStat=''((+features)\(4)#2)
+	Set USEGZIP=((+features)\(8)#2)
+	; expecting msg=$$$QEnd
+	Do SETUP1(port,"",clushdw,cli,$j)
+	u tcp:(::"s"::65535:65535) i $$SetIO^%SYS.NLS("UnicodeLittle")
+	If USEGZIP Use tcp:/GZIP ;enable stream compression/decompression
+	Do SNDB^SHDWSBLK(port)
+	Quit
+etserver ;
+	Set $zt=""
+	If $g(IsRequestSession) Quit
+	If $ze["<READ>"!($ze["<WRITE>") {
+		If $i?1"|TCP|"1.5N.E {
+			Set cli=$g(cli,"UNKNOWN")
+			Set shdwzerr=$$Error^%apiOBJ(1073,$s($ze["<READ>":"READ",1:"WRITE"),cli)
+		}
+	}
+	d ERRLOG^SHDWUTIL($ze_";"_$g(shdwzerr),"") k shdwzerr
+	Quit
+etPROXY ;
+	Set $zt="^%ETN"
+	Kill ^SYS("shdwsrv",port)
+	Do $zu(9,"",$ze,(0>0),0)
+	Quit
+AuthenticationError(msg) ;
+	Use $i:(::"-s")
+	i $$SetIO^%SYS.NLS("UnicodeLittle")
+	Use $i
+	Write 0,! ;access denied
+	Quit
+GCLIIP(tcp) ;
+	Use tcp
+	Quit $s($zbitget($zversion(0)_$c(0,0,0,0),42):$SYSTEM.TCPDevice.PeerAddr(0),1:$zu(54,2,$zu(111,0)))
+GSLOT(p) ;
+	For p=p:1:10000 {
+		Open:'$G(^SYS("shdwsrv",p)) "|TCP|"_p:(:p):0
+		Quit:$T
+	}
+	If p<10000 Close "|TCP|"_p Q p
+	Quit -1
+CLRLOG() ;clear error log of server
+	Kill ^SYS("shdwsrv",0,"err")  
+	Set ^SYS("shdwsrv",0,"err")=0  
+	Quit 1

@@ -1,0 +1,54 @@
+ROUTINE RECPRI [Type=INT]
+RECPRI(%CF,%ARRAY) ;RECONFIG- RETURN @%ARRAY@(COMPUTER,S,N)=DEV\REMOTE#
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+1 N %VAR S %VAR="^NET(2,%CF,""DV"")" D GO G K
+LOCAL(%ARRAY) N %VAR S %VAR="^CacheTempJ($J,""DV"")" D GO G K
+ACTIVE1(%ARRAY) N %CPRI,%VAR S %VAR="^NET(1,""ACTIVE"",""DV"")" D AC1B
+ N %AC,%CP,%CJ,%THISCO
+ S %THISCO=$S($D(^NET(0,"THISCO")):^("THISCO"),1:"")
+ S %CP="" F %CJ=0:0 S %CP=$O(^NET(1,"ACTIVE","CO",%CP)) Q:%CP=""  I %CP'=%THISCO S %AC=^NET(1,"ACTIVE","CO",%CP,"AC") S @%ARRAY@(%CP)=%CPRI(%CP,%AC,1)
+ G K
+AC1B N %ARRAY S %ARRAY="%CPRI" D GO
+ Q
+ACTIVE2(%CF,%ARRAY) N %CPRI D RECPRI(%CF,"%CPRI")
+ N %AC,%CP,%CJ,%THISCO
+ S %THISCO=$S($D(^NET(0,"THISCO")):^("THISCO"),1:"")
+ S %CP="" F %CJ=0:0 S %CP=$O(^NET(2,%CF,"CO",%CP)) Q:%CP=""  I %CP'=%THISCO S %AC=^NET(2,%CF,"CO",%CP,"AC") S @%ARRAY@(%CP)=%CPRI(%CP,%AC,1)
+ G K
+REROUTE(%CF,%ARRAY) N %CPRI,%VAR S %VAR="^NET(2,%CF,""DV"")" D AC1B
+ N %AC,%CP,%CJ,%THISCO
+ S %THISCO=$S($D(^NET(0,"THISCO")):^("THISCO"),1:"")
+ S %CP="" F %CJ=0:0 S %CP=$O(^CacheTempJ($J,"CO",%CP)) Q:%CP=""  I %CP'=%THISCO S %AC=^CacheTempJ($J,"CO",%CP,"AC") S @%ARRAY@(%CP)=%CPRI(%CP,%AC,1)
+ G K
+RECON(%CF,%ARRAY) N %CPRI,%VAR S %VAR="^CacheTempJ($J,""DV"")" D AC1B
+ N %AC,%CP,%CJ,%THISCO
+ S %THISCO=$S($D(^NET(0,"THISCO")):^("THISCO"),1:"")
+ S %CP="" F %CJ=0:0 S %CP=$O(^NET(2,%CF,"CO",%CP)) Q:%CP=""  I %CP'=%THISCO S %AC=^NET(2,%CF,"CO",%CP,"AC") S @%ARRAY@(%CP)=%CPRI(%CP,%AC,1)
+ G K
+K Q
+GO N %CP,%DV,%J,%N,%PA,%TO
+ K @%ARRAY
+ S %DV=""
+ F %J=0:0 S %DV=$O(@%VAR@(%DV)) Q:%DV=""  D DV
+ Q
+DV F %TO=1:1:$S($D(@%VAR@(%DV,"TO",0)):@%VAR@(%DV,"TO",0),1:0) D TO
+ Q
+TO S %CP=@%VAR@(%DV,"TO",%TO,"CP"),%PA=@%VAR@(%DV,"TO",%TO,"PA")
+ F %N=1:1 Q:'$D(@%ARRAY@(%CP,%PA,%N))  ;FIND 1ST OPEN SLOT. USUALLY #1.
+ S @%ARRAY@(%CP,%PA,%N)=%DV_"\"_%TO
+ Q

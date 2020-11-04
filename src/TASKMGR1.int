@@ -1,0 +1,251 @@
+ROUTINE TASKMGR1 [Type=INT]
+TASKMGR ; Cache Task manager	;RFD806   2/12/13
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+	/// extension of TASKMGR routine
+TASKSCHEDULE	s $ZT="TASKSCHEDULEE"
+	w !
+	Set Rset = ##class(%Library.ResultSet).%New("%SYS.Task:TaskSchedule")
+	d Rset.Execute()
+	w !,##class(%SYS.Task).FormatTaskSchedule($$LocalizeQueryColumn(Rset.GetColumnName(1)),$$LocalizeQueryColumn(Rset.GetColumnName(2)),$$LocalizeQueryColumn(Rset.GetColumnName(3)),$$LocalizeQueryColumn(Rset.GetColumnName(4)),$$LocalizeQueryColumn(Rset.GetColumnName(5)))
+	w !,##class(%SYS.Task).FormatTaskSchedule($$UL(Rset.GetColumnName(1)),$$UL(Rset.GetColumnName(2)),$$UL(Rset.GetColumnName(3)),$$UL(Rset.GetColumnName(4)),$$UL(Rset.GetColumnName(5)))
+	While Rset.Next() {
+		w !,##class(%SYS.Task).FormatTaskSchedule(Rset.GetData(1),Rset.GetData(2),Rset.GetData(3),Rset.GetData(4),Rset.GetData(5))
+	}
+	q
+TASKSCHEDULEE s $zt=""
+	i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+	q
+TASKDETAIL(TaskNumber) 
+TASKDETAIL1	s $ZT="TASKDETAILE"
+	i TaskNumber="" {
+		s Name=$$GETTASK1^TASKMGR($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"675976747"),"Display detail of which task (*=ALL)"),2,3,.Number) q:Number=$C(0)
+	} Else { Set Number=TaskNumber}
+	Set Rset = ##class(%Library.ResultSet).%New("%SYS.Task:TaskListDetail")
+	d Rset.Execute()
+	While Rset.Next() {
+		Set ID=Rset.Get("ID")
+		If ID=Number!(Number="*") {
+			w !,"------------------"
+			f i=1:1:Rset.GetColumnCount() {
+				i Rset.GetColumnName(i)="MirrorStatus",'$SYSTEM.Mirror.IsMember() continue
+				w !,$$LocalizeQueryColumn(Rset.GetColumnName(i))_":",?22,Rset.GetData(i)
+			}
+		}
+	}
+	If TaskNumber="" G TASKDETAIL1
+	Quit
+TASKDETAILE s $zt=""
+	i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+	Q
+TASKHISTORY	s $ZT="TASKHISTORYE"
+	s Name=$$GETTASK1^TASKMGR($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3545996286"),"Display history of which task (*=ALL)"),2,3) q:Name=$C(0)
+	w !
+	Set query="%SYS.Task.History:TaskHistory",ID=""
+	If Name'="",Name'="*" {
+		Set ID=##class(%SYS.Task).FindId(Name)
+		IF ID Set query="%SYS.Task.History:TaskHistoryForTask"
+	}
+	Set Rset = ##class(%Library.ResultSet).%New(query)
+	d Rset.Execute(ID)
+	w !,##class(%SYS.Task.History).FormatTaskHistory($$LocalizeQueryColumn(Rset.GetColumnName(1)),Rset.GetColumnName(2),Rset.GetColumnName(3),Rset.GetColumnName(4),Rset.GetColumnName(5))
+	w !,##class(%SYS.Task.History).FormatTaskHistory($$UL(Rset.GetColumnName(1)),$$UL(Rset.GetColumnName(2)),$$UL(Rset.GetColumnName(3)),$$UL(Rset.GetColumnName(4)),$$UL(Rset.GetColumnName(5)))
+	While Rset.Next() {
+		w !,##class(%SYS.Task.History).FormatTaskHistory(Rset.GetData(1),Rset.GetData(2),Rset.GetData(3),Rset.GetData(4),Rset.GetData(5))
+	}
+	Quit
+TASKHISTORYE s $zt=""
+	i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ 	q
+TASKHISTORYDETAIL	//
+	s $ZT="TASKHISTORYDETAILE"
+	s Name=$$GETTASK1^TASKMGR($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"46185186"),"Display detail history of which task (*=ALL)"),2,3,.Number) q:Name=$C(0)
+	w !
+	Set Query="%SYS.Task.History:TaskHistory"
+	If Name'="*" Set Query="%SYS.Task.History:TaskHistoryForTask"
+	Set Rset = ##class(%Library.ResultSet).%New(Query)
+	Set Rset.RuntimeMode=2
+	d Rset.Execute(Number)
+	s len=0
+	f i=1:1:Rset.GetColumnCount() s newlen=$l($$LocalizeQueryColumn(Rset.GetColumnName(i))) i newlen>len s len=newlen
+	While Rset.Next() {
+		i (Rset.Get("Task Name")=Name)!(Name="*") {
+			w !,"------------------"
+			f i=1:1:Rset.GetColumnCount() w !,$$LocalizeQueryColumn(Rset.GetColumnName(i))_":",?newlen+2,Rset.GetData(i)
+		}
+	}
+	Quit
+TASKHISTORYDETAILE s $zt=""
+	i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+	q
+MAIL	//
+ 	w !
+ 	w !,"1) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"880933896"),"Define Mail Server")
+ 	w !,"2) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3187197805"),"Define Server Port")
+ 	w !,"3) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2274824725"),"Define Reply To")
+ 	w !,"4) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2103178825"),"Define Sender")
+ 	w !,"5) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1410831273"),"Time Zone")
+ 	w !,"6) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1615012644"),"Define Authenticated User")
+ 	w !,"7) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"876292912"),"Exit")
+ 	w !
+	q
+MAILSERVER	//
+	Set Value=##class(%SYS.Task.Config).GetData("MailServer")
+	Set Value=$$STRINGOPTIONEXT^TASKMGR($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"474235070"),"Mail Server"),Value,1,.Same) q:Value=$C(0)  Quit:Same
+	Set Status=##class(%SYS.Task).MailServerSet(Value)
+	Q
+MAILPORT	//
+	Set Value=##class(%SYS.Task.Config).GetData("MailPort")
+	Set Value=$$STRINGOPTIONEXT^TASKMGR($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1610834942"),"Mail Server Port"),Value,1,.Same) q:Value=$C(0)  Quit:Same
+	Set Status=##class(%SYS.Task).MailPortSet(Value)
+	Q
+MAILREPLY	//
+	Set Value=##class(%SYS.Task.Config).GetData("MailReplyTo")
+	Set Value=$$STRINGOPTIONEXT^TASKMGR($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3522138738"),"Reply To"),Value,1,.Same) q:Value=$C(0)  Quit:Same
+	Set Status=##class(%SYS.Task).MailReplyToSet(Value)
+	Q
+MAILSENDER	//
+	Set Value=##class(%SYS.Task.Config).GetData("MailSender")
+	Set Value=$$STRINGOPTIONEXT^TASKMGR($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1729764905"),"Send Message As"),Value,1,.Same) q:Value=$C(0)  Quit:Same
+	Set Status=##class(%SYS.Task).MailSenderSet(Value)
+	Q
+TIMEZONE	//
+	Set Value=##class(%SYS.Task.Config).GetData("MailTimeZone")
+	Set Value=$$STRINGOPTIONEXT^TASKMGR($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1410831273"),"Time Zone"),Value,1,.Same) q:Value=$C(0)  Quit:Same
+	Set Status=##class(%SYS.Task).MailTimeZoneSet(Value)
+	Q
+MAILAUTHUSER	//
+	W !!,"This option is only required to do SMTP authentication "
+	W !,"with the SMTP server (as defined by RFC 2554)"
+	Set User=##class(%SYS.Task.Config).GetData("MailAuthUser")
+	Set User=$$STRINGOPTIONEXT^TASKMGR($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"648618971"),"Authenticated Username"),User,1,.Same) q:User=$C(0)
+	/// remove current user by entering one or more spaces
+	If $TR(User," ")="" Set User=""
+	If 'Same {
+		Do ##class(%SYS.Task.Config).UpdateData("MailAuthUser",User)
+	}
+	If User="" Do ##class(%SYS.Task.Config).AuthPassSet("") Quit
+	u:$zu(96,14)=1 $io:(:"S")
+	Set Password=$$STRINGOPTIONEXT^TASKMGR($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3946144633"),"Authenticated Password"),"",1,.Same)
+	u:$zu(96,14)=1 $io:(:"-S")
+	q:Password=$C(0)
+	If 'Same {
+		Do ##class(%SYS.Task.Config).AuthPassSet(Password)
+	}
+	Quit
+TASKLIST1	//
+	s $zt="TASKLISTE"
+	Set Rset = ##class(%Library.ResultSet).%New("%SYS.Task:TaskList")
+	w !!,$$LocalizeQueryColumn(Rset.GetColumnName(1)),?28,$$LocalizeQueryColumn(Rset.GetColumnName(2)),?39,$$LocalizeQueryColumn(Rset.GetColumnName(3))
+	w !,$$UL(Rset.GetColumnName(1)),?28,$$UL(Rset.GetColumnName(2)),?39,$$UL(Rset.GetColumnName(3))
+	d Rset.Execute()
+	While Rset.Next() {
+		w !,Rset.GetData(1),?28,Rset.GetData(2),?39,Rset.GetData(3)
+	}
+	q
+TASKLISTE s $zt=""
+ i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+ q
+UL(String) {
+	s $P(x,"-",$l(String)+1)=""
+	q x
+}
+MULTIDAYOPTION(prompt,default,min,max)	//  
+ 	w !
+ 	w !,"1) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3421684983"),"Sunday")
+ 	w !,"2) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3632146495"),"Monday")
+ 	w !,"3) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"597723493"),"Tuesday")
+ 	w !,"4) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"395286495"),"Wednesday")
+ 	w !,"5) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3078746362"),"Thursday")
+ 	w !,"6) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3072242550"),"Friday")
+ 	w !,"7) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3910980832"),"Saturday")
+ 	w !
+	s $zt="MULTIDAYOPTIONE"
+MULTIDAYOPTION1 w !,prompt_"? "_default_" => "
+	r Option i Option="" q default
+	S Ok=1
+	F I=1:1:$L(Option) S v=$e(Option,I) i "1234567"'[v w !!,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2705546656"),"Please enter numbers between %1 and %2"),min,max),! S Ok=0
+	i 'Ok g MULTIDAYOPTION1
+	q +Option
+MULTIDAYOPTIONE s $zt=""
+	i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+	q $C(0)
+NUMOPTION(prompt,default,min,max) 	// 
+	s $zt="NUMOPTIONE"
+NUMOPTION1 w !,prompt_"? "_default_" => "
+	r Option i Option="" q default
+	i '(Option?1.4N)!(Option<min)!(Option>max) w !!,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2705546656"),"Please enter numbers between %1 and %2"),min,max),! g NUMOPTION1
+	q +Option
+NUMOPTIONE s $zt=""
+	i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+	q $C(0)
+Priority(CurrentPriority)	///
+	w !
+	w !,"1) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"640249298"),"Normal")
+	w !,"2) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2865053249"),"Low")
+	w !,"3) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1362578283"),"High")
+	w !
+	s Priority=$$NUMOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2614148721"),"Priority"),(CurrentPriority)+1,1,3) 
+	Quit Priority
+MirrorStatus(CurrentStatus)	///
+	w !
+	w !,"1) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3640185626"),"Primary")
+	w !,"2) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2081684781"),"Non-Primary")
+	w !,"3) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1556001108"),"Any")
+	w !
+	s Status=$$NUMOPTION($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1832637606"),"MirrorStatus"),CurrentStatus,1,3) 
+	Quit Status
+TASKREPORTS	///
+	w !
+	w !,"1) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2146098704"),"Task Schedule")
+	w !,"2) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2394935651"),"Task Detail")
+	w !,"3) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2594651129"),"Task History")
+	w !,"4) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1159264198"),"Task History Detail")
+	w !,"5) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1538899152"),"Upcoming Tasks")
+	w !,"6) ",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"876292912"),"Exit")
+	w !
+	Quit
+LocalizeQueryColumn(pName)	//
+ 	// get key, lookup in localization global
+	Set tKey = $ZCVT(pName,"L")
+	Set tLang = $select($isObject($get(%response)):%response.Language,1:$get(^%SYS("LANGUAGE","CURRENT"),"en"))
+	Quit $get(^%qCacheMsg("%UtilityColumns",tLang,tKey),pName_"*")
+UpcomingTasks	///
+	Try {
+		Set Rset = ##class(%Library.ResultSet).%New("%SYS.Task:UpcomingTasks")
+		Set Rset.RuntimeMode=2
+		d Rset.Execute()
+		Set uLine="----------------------",Columns="ID:5,Name:30,Date:10,Time:8,Suspended:10"
+		For tIdx=1,2 {
+			Write !
+			For Cols=1:1:$l(Columns,",") {
+				Set txt=$P($p(Columns,",",Cols),":"),size=$p($p(Columns,",",Cols),":",2)
+				If tIdx=1 Write $j($$LocalizeQueryColumn(txt),size)_" "
+				Else  Write $j($e(uLine,1,size),size)_" "
+			}
+		}
+		While Rset.%Next() {
+			Write !
+			For Cols=1:1:$l(Columns,",") {
+				Set txt=$P($p(Columns,",",Cols),":"),size=$p($p(Columns,",",Cols),":",2)
+				Write $j(Rset.Get(txt),size)_" "
+			}
+		}
+	} Catch {
+		i $ze'["<INTERRUPT>" w !,$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1936651305"),"ERROR: %1"),$ZE)
+	}
+	Quit

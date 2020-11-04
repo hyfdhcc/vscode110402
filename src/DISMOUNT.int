@@ -1,0 +1,20 @@
+ROUTINE DISMOUNT [Type=INT]
+DISMOUNT ;(KSO,PK) GET USERS TO CLOSE GLOBAL FILES ; LFT1319 10/25/04
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ Write !,"This utility is deprecated in favor of ^DATABASE"
+ Do DISMOUNT^DATABASE() q  

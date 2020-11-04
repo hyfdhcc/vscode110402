@@ -1,0 +1,124 @@
+ROUTINE ECPWork [Type=INT]
+ECPWork ;Big Networking Background Server; RJW1164 8/11/05
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+Run(reporter) [] PUBLIC {
+ ; Transaction rollback function for a big networking transaction processing
+ ; server process to rollback one transaction at the request of the client
+ ; job.
+ ;   reporter = set if error trapper should print out error msgs
+ Set $ZT="fatalerror"
+ if ((($System.ECP.Debug()\$zh("2000"))#2=1)) { d $ZU(9,"","ecp.work: "_"ECP background daemon started") }
+loop ;
+ Set code=0 ; 0 means to initiate the daemon
+ Set ssys=0 ; 0 means this is an initial call
+ Set trans=0 ; should be valid when code is not zero // GK929
+ Set session=0 ; should be valid when code is not zero // GK929
+ Set tlevel=0  ; should be valid when code is not zero
+ If $ZJ#2=0 s reporter=0 ; Force reporter to 0 for jobbed jobs
+nextitem ; Come back here to recover from errors
+ Set $ZT="tpecperr"
+ For  {
+    Set adr=$ZU(183,code,ssys,trans,session,tlevel) ; returns trans,session,index^filecnt^remjobid^remsysid //GK929
+    Quit:adr=""
+    if ((($System.ECP.Debug()\$zh("200"))#2=1)) { d $ZU(9,"","ecp.work.Tr: "_"ECP Back Svr: Rolling back transaction with id: "_adr) }
+    Set trans=$p(adr,",",1)	// GK929+
+    Set session=$p(adr,",",2)
+    If (trans) {
+        Set tlevel=$p(adr,",",3)
+	Set adr=$p(adr,",",4)		// GK929-
+	Set ssys=$p(adr,"^",4)
+	if ((($System.ECP.Debug()\$zh("200"))#2=1)) { d $ZU(9,"","ecp.work.Tr: "_"ECPRollback: sys-"_ssys_", sys.ver-0x"_$zh(session)_", addr-"_adr_", trans-"_trans) }
+	Set code=$$tpservone^ROLLBACK(reporter,adr,"TROLLBACK")+1 ; 1=>rollback failure, 2=>rollback success
+	If code<2 s code=1  ;tpservone may return -1 as an error too
+	If +code'=1,+code'=2 {
+           if ((($System.ECP.Debug()\$zh("200"))#2=1)) { d $ZU(9,"","ecp.work.Tr: "_"ECP Back Svr: ERROR: Illegal %ROLLBACK result="_code) }
+           Set code=1 ; rollback failure
+	} Else {
+           if ((($System.ECP.Debug()\$zh("200"))#2=1)) { d $ZU(9,"","ecp.work.Tr: "_"ECP Back Svr: Result of ROLLBACK="_code) }
+	}
+    } Else {
+	// Session rollback
+	Set ssys=$p(adr,",",3) // the remote sys ID
+	Set firstindex=$p(adr,",",4) // the oldset transaction location <offset>^<jrn-file num>
+	Set lastindex=$p(adr,",",5) // the current jrn position <offset>^<jrn-file num>
+	Set %jrnfile=$p(adr,",",6) // the current jrn file name
+	Set wakeup=$p(session,"^",2)
+	Set session=$p(session,"^",1)
+	Set tlevel=0
+	if ((($System.ECP.Debug()\$zh("200"))#2=1)) { d $ZU(9,"","ecp.work.Tr: "_"ECPRollback: sys-"_ssys_", sys.ver-0x"_$zh(session)) }
+	For  {
+	   set x=$system.ECP.GetProperty("ECPSrvTrans", ssys, session)
+	   q:x=""
+	   if ((($System.ECP.Debug()\$zh("200"))#2=1)) { d $ZU(9,"","ecp.work.Tr: "_"ECPWrk Rollback: pid-"_$p(x,"^", 1)_", sys-0x"_$p(x,"^", 2)) }
+	   Set tranopen($p(x,"^", 1), $p(x,"^", 2))=$p(x,"^", 3)_","_$p(x,"^", 4)
+	}
+	// wait to attach a debugger or resume it by $system.ECP.SetProperty("Hang",0)
+	// do $system.ECP.SetProperty("Hang",1)
+	if ((($System.ECP.Debug()\$zh("200"))#2=1)) {
+	   set x=""
+	   f  { 
+		Set x=$o(tranopen(x))
+		q:x=""  
+		s y=""
+		f  {
+			s y=$o(tranopen(x,y),1,val)
+			q:y=""
+			if ((($System.ECP.Debug()\$zh("200"))#2=1)) { d $ZU(9,"","ecp.work.Tr: "_"ECPRollback: transopen("_x_","_$zh(y)_")="_val) }
+		}
+	   }
+	}
+	if ((($System.ECP.Debug()\$zh("200"))#2=1)) { d $ZU(9,"","ecp.work.Tr: "_"ECPRollback: first("_firstindex_") last("_lastindex_") %jrnfile("_%jrnfile_") wake="_wakeup) }
+	Do:$d(tranopen) startall^ROLLBACK(.tranopen, firstindex, lastindex, -1 /* maxdel */,
+			1 /* checkerr */, 0 /* reporter */, "TROLLBACK")
+	set trans=wakeup // trans offset is used to pass in the job waiting for this completion
+	Set code=3
+    } // If (tr
+ } // For
+ if ((($System.ECP.Debug()\$zh("2000"))#2=1)) { d $ZU(9,"","ecp.work: "_"ECPWork: halting!!") }
+ Set $ZT=""
+ q
+tpecperr
+ Set $ZT="fatalerror"
+ Set x=$ZU(9,"","Error "_$ZE_" in ECPWork at "_$ZU(56,2)_". trans("_$g(trans)_") sys("_$g(ssys)_") Going back to main loop.",1)
+ Do BACK^%ETN
+ If ($g(trans)) {
+	Set code=1 ; rollback failure
+ } else {
+	Set trans=$g(wakeup) // trans offset is used to pass in the job waiting for this completion
+	Set code=3 ; Bulk rollback failure
+ }
+ if ($ze["<FUNCTION>") {	// GK929+
+     S $ZT=""
+     q
+ }				// GK929-
+ g nextitem
+fatalerror
+ S $ZT="fatalexit"
+ Do $ZU(9,"","Fatal Error "_$ZE_" in ECPWork at "_$ZU(56,2)_" -- Exiting ECPWork",1)
+ do BACK^%ETN
+fatalexit
+ Set $ZT=""
+ h
+}
+Start() ;
+ JOB Run(0)::10 Q:$t 1
+ W "Failed to job tprollbackdmn"
+ Q 0
+ ;

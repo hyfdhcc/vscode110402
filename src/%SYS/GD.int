@@ -1,0 +1,702 @@
+ROUTINE %SYS.GD [Type=INT]
+%SYSGD ; List namespace global directories ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/global/_sys.gd.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ New %zu68
+ Do %GDPROC
+ If $g(%zu68) If $zu(68,7,%zu68)
+ Quit  
+%GDPROC() PUBLIC {
+ s $zt="ERROR"
+ if $ZBITGET($ZVERSION(0),46) {
+	 do OLD
+	 quit
+ }
+ Set %zu68=$zu(68,7) If %zu68 If $zu(68,7,0) 
+ s Mask="*"
+MASK
+ s Status=##Class(%Library.Prompt).GetString("Which globals?",.Mask,,,,8)
+ q:(Status=0)||(Status=2)
+ s Single='##class(%SYS.GlobalQuery).Wildcards(Mask)
+SYSTEM
+ s SystemGlobals=0
+ i Single s SystemGlobals=1 G MAPPINGS
+ s Status=##Class(%Library.Prompt).GetYesNo("Include system globals?",.SystemGlobals,,8)
+ q:Status=0  g:Status=2 MASK
+MAPPINGS
+ s Mappings=0
+ s Status=##Class(%Library.Prompt).GetYesNo("Show global mappings?",.Mappings,,8)
+ q:Status=0  
+ i Status=2 {
+	i Single g MASK
+	g SYSTEM
+ }
+ATTRIBUTES
+ s Attributes=0
+ i Mappings {
+	s Status=##Class(%Library.Prompt).GetYesNo("Show global attributes?",.Attributes,,8)
+	q:Status=0  g:Status=2 MAPPINGS
+ }
+DEVICE
+ s IOMS=$System.Device.GetRightMargin()
+ s Status=##class(%Library.Device).Get("Device:",.IO,,8,,4,.IOSL,.IOM,.IOF)
+ q:Status=0
+ i (Status=2) {
+	 i Mappings g ATTRIBUTES
+	 g SYSTEM
+ }
+ n $namespace s NameSpace=$zu(5)
+ u IO
+ s Status=$$QUERY(NameSpace,Mappings,Attributes,SystemGlobals,Mask,IO,IOSL,IOM,IOF)
+ U:IO=$P IO:/MAR=IOMS
+ c:IO'=$P IO
+ q
+ERROR s $zt=""
+ u 0 i $ze'["<INTERRUPT" w !,"ERROR: "_$ze
+ i $d(IO) c:IO'=$P IO U:IO=$P&&($D(IOMS)=1) IO:/MAR=IOMS
+ q
+} 
+INT(NameSpace) PUBLIC {
+ s $zt="INTE"
+ s NameSpace=$g(NameSpace,$zu(5))
+ i $e(NameSpace)'="^" s NameSpace=$zcvt(NameSpace,"U")
+ s IOMS=$System.Device.GetRightMargin()
+ d ##class(%Library.Device).GetCurrent(.IO,.IOSL,.IOM,.IOF)
+ s IO=$I
+ s Mappings=0
+ s Attributes=0
+ s SystemGlobals=0
+ s Mask="*"
+ s Status=$$QUERY(NameSpace,Mappings,Attributes,SystemGlobals,Mask,IO,IOSL,IOM,IOF)
+ U IO:/MAR=IOMS
+ q
+INTE s $zt=""
+ i $ze'["<INTERRUPT" {
+	 w !,"ERROR: "_$ze
+ } else {
+	 w !,"<INTERRUPT>"
+ }
+ q
+} 
+ALL() PUBLIC {
+ s $ZT="ALLE"
+ s IOMS=$System.Device.GetRightMargin()
+ d ##class(%Library.Device).GetCurrent(.IO,.IOSL,.IOM,.IOF)
+ s Mappings=0
+ s Attributes=0
+ s SystemGlobals=0
+ s Mask="*"
+ s i=0, dir=$zu(49,i,3)
+ While ((+dir) '< 0) {
+	if +dir=0 {  ;Only display local databases
+		s NameSpace="^^"_$p(dir,"^",2)
+		s Status=$$QUERY(NameSpace,Mappings,Attributes,SystemGlobals,Mask,IO,IOSL,IOM,IOF)
+		i Status'=1 q
+		s Status=##Class(%Library.Prompt).GetMore()
+		q:(Status=2)||(Status=0)||(Status=3)
+	}
+    s i=i+1, dir=$zu(49,i,3) 
+ }
+ U IO:/MAR=IOMS
+ q
+ALLE s $zt=""
+ I $d(IO) U IO:/MAR=IOMS
+ i $ze'["<INTERRUPT" {
+	 w !,"ERROR: "_$ze
+ } else {
+	 w !,"<INTERRUPT>"
+ }
+ q
+} 
+QUERY(NameSpace,Mappings,Attributes,SystemGlobals,Mask,IO,IOSL,IOM,IOF) PRIVATE  {
+ s $ZT="QUERYE"
+ s CurrentNameSpace=$zu(5)
+ Set Rset = ##class(%Library.ResultSet).%New("%SYS.GlobalQuery:NameSpaceListChui")
+ Do
+ . i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"}
+ . s Status=Rset.Execute(NameSpace,Mask,SystemGlobals,.UnavailableDatabases)
+ i ('Status) {
+	 s Status=$SYSTEM.Status.DecomposeStatus(Status,.Err,"d")
+	 g EXIT
+ }
+ i Attributes {
+	 s SaveLines=5
+ } else {
+	 s SaveLines=3
+ }
+ s DisplayLock=0
+ s IndexTab=2
+ s LocationTab=27
+ s KeepTab=60
+ s JrnTab=65
+ s PntTab=70
+ s GrowthTab=76
+ d HEADER
+ s PrevGlobal="",Empty=1,Count=0
+ While (Rset.Next()) {
+	s GlobalSpec=Rset.Get("Name")
+	s Global=$p($p(GlobalSpec,"(",1)," ",1)
+	i Mappings {
+		i (Global=PrevGlobal) {
+			i (DisplayLock=1),(Attributes=1) {
+				w !,?(LocationTab-$l(Rset.GetColumnName(12))-2),Rset.GetColumnName(12)_": ",?LocationTab,Rset.Get("LockLocation")
+				s DisplayLock=0
+			}
+		} else {
+			i Attributes w !
+		}
+		s Status=$$PROMPT(SaveLines,IOSL)
+		q:(Status=2)||(Status=0)||(Status=3)
+		i GlobalSpec["Replicated" {
+			w !
+			s ReplicatedString="Replicated to:"
+			i $$BooleanYNDisplayToLogical(Rset.Get("Empty"))=1 s ReplicatedString=" Empty,Replicated to:"
+			w ?(LocationTab-$l(ReplicatedString)-1),ReplicatedString
+		} Else {
+			i (Global=PrevGlobal) {
+				w !,?IndexTab,"("_$p(GlobalSpec,"(",2,999)
+			} else {
+				w !,GlobalSpec
+			}
+			i $$BooleanYNDisplayToLogical(Rset.Get("Empty"))=1 w ?LocationTab-7," Empty"
+		}
+		w:$x>LocationTab !
+		w ?LocationTab,Rset.Get("Location")
+		w:$x>KeepTab !
+		w ?KeepTab,Rset.Get("Keep")
+		w:$x>JrnTab !
+		w ?JrnTab,Rset.Get("Jrn")
+		w:$x>PntTab !
+		w ?PntTab,Rset.Get("Ptr")
+		w:$x>GrowthTab !
+		w ?GrowthTab,Rset.Get("Grth")
+		i Attributes {
+			w !,?(LocationTab-$l(Rset.GetColumnName(7))-2),Rset.GetColumnName(7)_": ",?LocationTab,Rset.Get("Collation")
+			w !,?(LocationTab-$l(Rset.GetColumnName(3))-2),Rset.GetColumnName(3)_": ",?LocationTab,Rset.Get("ResourceName")_":"_Rset.Get("Permission")
+		}
+		i Global'=PrevGlobal {
+			s Count=Count+1
+			s PrevGlobal=Global
+			s DisplayLock=1
+		}
+	} else {
+		i Global'=PrevGlobal {
+			s Status=$$DISPLAY(Global,Empty,IOM)
+ 			q:(Status=2)||(Status=0)||(Status=3)
+			i $$BooleanYNDisplayToLogical(Rset.Get("Empty"))=1 {
+				s Empty=1
+			} else {
+				s Empty=0
+			}
+			s PrevGlobal=Global
+			s Count=Count+1
+		} else {
+			i $$BooleanYNDisplayToLogical(Rset.Get("Empty"))=0 s Empty=0
+		}			
+	}
+ }
+ i 'Mappings s Status=$$DISPLAY("",Empty,IOM)
+ q:(Status=2)||(Status=0)||(Status=3) Status
+ i $d(UnavailableDatabases) {
+	w !!,"The following databases were unavailable:"
+	s Database=$o(UnavailableDatabases(""),1,Status1)
+	while (Database'="") {
+		w !,Database,"  "
+		d $SYSTEM.Status.DecomposeStatus(Status1,.Error)
+	 	w Error(1)
+	 	s Database=$o(UnavailableDatabases(Database),1,Status1)
+	}
+ }
+ w !!,Count," global" w:Count-1 "s" w " listed"
+ i IO'=$I w @IOF 
+EXIT s $zt=""
+ q Status
+QUERYE s $zt=""
+ i $d(CurrentNameSpace) d $ZU(5,CurrentNameSpace)
+ i $ze["<NAMESPACE" {
+    w !,"Using old ^%GD",!
+    d OLD^%SYS.GD
+ } elseif $ze'["<INTERRUPT" {
+	 w !,"ERROR: "_$ze
+ } else {
+	 w !,"<INTERRUPT>"
+ }
+ q 0
+HEADER
+ S H="Global Directory Display of "_NameSpace
+ U IO W @IOF W $J(H,$L(H)+80\2)
+ D INT^%T,INT^%D S H=%TIM_"  "_%DAT W !,$J(H,$L(H)+80\2)
+ w !
+ i Mappings {
+	w !,Rset.GetColumnName(1)
+	w ?LocationTab,Rset.GetColumnName(2)
+	w ?KeepTab,Rset.GetColumnName(6)
+	w ?JrnTab,Rset.GetColumnName(11)
+ 	w ?PntTab,Rset.GetColumnName(8)
+ 	w ?GrowthTab,Rset.GetColumnName(9)
+ }
+ q
+PROMPT(SaveLines,IOSL) 
+ s $ZT="PROMPTE"
+ If '$g(IOSL) q 1
+ Else  i $Y+$g(SaveLines)<IOSL q 1
+ i IO=$p {
+	s Status=##Class(%Library.Prompt).GetMore(,,8+4)
+ 	q:(Status=2)||(Status=0)||(Status=3) 0
+ }
+ w !
+ d HEADER 
+ q Status
+PROMPTE s $zt=""
+ q Status
+DISPLAY(Global,Empty,IOM)
+ i $x'=0,Empty w "-"
+ i $x+19\20*20+$l(Global)>IOM {
+	 w ! 
+	 s Status=$$PROMPT()
+ 	 q:(Status=2)||(Status=0)||(Status=3) Status
+ }
+ w ?$x+19\20*20,Global
+ q Status
+} ; End QUERY
+RemJobSys() Public {
+ d RemJob1(1)
+}
+RemJob() Public {
+ d RemJob1(0)
+}
+RemJob1(SystemGlobals) Public {
+ s $zt="RemJobE"
+ s oldval=$zu(68,7,0) 
+ s Directory="^^"_$zu(12,"")
+ s save=$name(^CacheTempUtil("%GD"))
+ d $zu(68,7,oldval)
+ ; i $e($zu(5))="^" d $zu(5,"%SYS")
+ d $zu(5,"%SYS")
+ if SystemGlobals {
+	 d GetDir(Directory,save)
+	s @save=$s($d(errlog):$ze,1:"")
+ 	q
+ }
+ Set Rset = ##class(%Library.ResultSet).%New("%SYS.GlobalQuery:DirectoryList")
+ d Rset.Execute(Directory,,,SystemGlobals)
+ While (Rset.Next()) {
+	s Flags=0
+	s Flags=$case($$BooleanYNDisplayToLogical(Rset.Get("Keep")),0:$zb(Flags,$zu(40,0,57),2),:$zb(Flags,$zu(40,0,57),7))
+	s Flags=$case($$BooleanYNDisplayToLogical(Rset.Get("Journal")),0:$zb(Flags,$zu(40,0,56),2),:$zb(Flags,$zu(40,0,56),7))
+	s @save@($p(Rset.Get("Name"),"(",1))="255^"_Rset.Get("PointerBlock")_"^"_Rset.Get("GrowthBlock")_"^"_Flags_"^"_##Class(%Library.Collate).DisplayToLogical(Rset.Get("Collation"))_"^"_Rset.Get("ResourceName")
+  }
+ s @save=""
+ q
+RemJobE s $zt="" 
+ s @save=$ze
+ q
+}
+OLD
+main ; Main entry for CHUI interface -- select output device
+ n SELF,POP,IO,IOM,IOSL,IOF,lng
+ New P3show,vacancies
+ G main4
+main3 ; entry for performing multiple %GD's to same device
+ ; n SELF,POP,IO,IOM,IOSL,IOF,lng must be performed by caller
+ i 'firstime g main5
+ s firstime=0
+main4 d OUT^%IS q:POP  s SELF=IO=$I
+ s detail=$$YN("Show detail","N")="Y"
+main5 i POP c:'SELF IO q  
+ i 'SELF u IO w @IOF
+main2 s %UI="CHUI"
+ k ^CacheTempJ($j)
+ i '$$Fetch("*",1,0) d  q
+ . w !,"Unable to fetch globals!"
+ . i $ze'="" w !,$ze
+ i '$$Show(detail,0) w !,"Error: ",$ze
+ i 'SELF w @IOF c IO
+ QUIT
+ ;
+maskincl(mask,item,ext) New e,i,include,m,m1,m2
+ Set include=0,ext=$ZCVT($g(ext,""),"U")
+ For i=1:1 Set m=$p(mask,";",i),e="" Quit:m=""  Do:m'["'"  Quit:include
+ . Set:m["." m=$$ParseRoutineName^%R(m,.e),e=$s(e="*":"",e="SRC":".INC.MAC.INT.BAS",e="":"",1:"."_e)
+ . If m["*" Do  Quit
+ . . Set m=$p(m,"*")
+ . . If m=$e(item,1,$l(m)),(e=""!(e[ext)) Set include=1 Quit
+ . If m[":" Do  Quit
+ . . Set m1=$p(m,":"),m2=$p(m,":",2)
+ . . If m1=$e(item,1,$l(m1))!(item]m1) Do
+ . . . If m2=$e(item,1,$l(m2))!(m2]item) Do
+ . . . . Set:e=""!(e[ext) include=1
+ . If m=item,(e=""!(e[ext)) Set include=1 Quit
+ If include,mask["'" For i=1:1 Set m=$p(mask,";",i),e="" Quit:m=""  Do:m["'"  Quit:'include
+ . Set m=$e(m,2,*)
+ . Set:m["." m=$$ParseRoutineName^%R(m,.e),e=$s(e="*":"",e="SRC":".INC.MAC.INT.BAS",e="":"",1:"."_e)
+ . If m["*" Do  Quit
+ . . Set m=$p(m,"*")
+ . . If m=$e(item,1,$l(m)),e=""!(e[ext) Set include=0
+ . If m[":" Do  Quit
+ . . Set m1=$p(m,":"),m2=$p(m,":",2)
+ . . If m1=$e(item,1,$l(m1))!(item]m1) Do
+ . . . If m2=$e(item,1,$l(m2))!(m2]item) Do
+ . . . . Set:e=""!(e[ext) include=0 ; SJ bug fix
+ . If m=item,(e=""!(e[ext)) Set include=0 Quit
+ Quit include
+ ;
+guiFetch(pars) ; entry point for GUI utility call
+ n netHard,return,%UI
+ s %UI="CSP",netHard=$zu(68,27,0)
+ s return=$$Fetch($p(pars,$c(22,35,1),1),$p(pars,$c(22,35,1),2),1)
+ i $g(netHard) d $zu(68,27,1)
+ q return
+ ;
+guiShow(detail) ; entry point from gui to show directory report
+ s %UI="CSP"
+ q $$Show(detail,1)
+ ;        
+Fetch(mask,silent,gui) ;fetch directory info
+ ; Input parameters:
+ ;       mask = global selection mask
+ ;       silent = silent, no status posting (0/1)
+ ;       gui = gui flag (0=chui/1=gui)
+ ; Return:
+ ;       #globals_del1_unreachable datasets
+ quit $$FetchNSP($ZU(5),mask,silent,gui)
+ q
+FetchNSP(nsp,mask,silent,gui) ;fetch directory info for specified namespace
+ ; Input parameters:
+ ;       nsp = Namespace to fetch global directory from
+ ;       mask = global selection mask
+ ;       silent = silent, no status posting (0/1)
+ ;       gui = gui flag (0=chui/1=gui)
+ ; Return:
+ ;       #globals_del1_unreachable datasets
+ n node,info,glob,mynsp,name,output,badset,errlog,i,j,erlist
+ n dset,xlat,map,xref,defdset,sysdset,str
+ n POP,cnt,P1,P2,P3,P4,ret
+ s $zt="FErr",$ze=""
+ k %UI("CANCEL")
+ s (erlist,errlog,POP,cnt,P4,ret)=0,(name,str,P2,P3)=""
+ ;set up ^mtemp
+ s node=$name(^mtemp($$%msub()))
+ s output=$name(@node@("GLO")) ; output global list put here
+ s info=$name(@node@("INFO")) ; namespace mappings put here
+ s glob=$name(@node@("DIR")) ; global directories put here
+ s mynsp=nsp i $e(mynsp)="^" d
+ . d GetDir(mynsp,glob) ; implied namespace -> do only its directory
+ . s name="" f  s name=$o(@glob@(name)) q:name=""  d
+ . . s @output@(name,0)=@glob@(name)_mynsp_mynsp
+ . k badset ; N/A for implieds
+ . s defdset="",sysdset=""
+ e  d Explicit
+ ;set up ^CacheTempJ
+ s name=""
+ f  s name=$o(@output@(name)) q:name=""  i $$maskincl(mask,name) d  q:POP
+ . i '$d(@output@(name,0)) q
+ . s cnt=cnt+1,P1=cnt#5=0,P3="^"_name
+ . i 'silent s P2=P3,P4=cnt
+ . s ^CacheTempJ($j,P3)=@output@(name,0)
+ i POP q
+ ;save unreachable datasets for global directory report
+ i $d(badset) s %="" d
+ . f  s %=$o(badset(%)) q:%=""  d
+ . . s badset=$g(badset)_$c(13,10)_"Dataset "_%_" is currently unreachable."
+ s ^CacheTempJ($j)=$g(badset)
+ s ret=cnt_$select($g(badset)="":"",1:$c(22,35,1)_badset)
+ i POP s ret=0
+FExit i $d(node) k @node ; eliminate our work node
+ q ret
+FErr s $zt="",ret=0_$c(22,35,1)_"Can not fetch global information!"_$s($ze="":"",1:$c(13,10)_$ze)
+ g FExit
+ ;
+Show(detail,gui) ;show report
+ ; Input parameters:
+ ;       detail = show detail report (0/1)
+ ;       gui = gui flag (0=chui/1=gui)
+ ; Return:
+ ;       #globals_del1_unreachable datasets
+ s $zt="SErr",$ze=""
+ n cnt,POP,line,name,str,P1,P2,P3,P4
+ s (cnt,POP,line)=0,(name,str,P1,P2,P3,P4)=""
+ s PROT(0)="N",PROT(1)="R",PROT(2)="RW",PROT(3)="RWD"
+ i 'gui d  ;chui heading
+ . S H="Global Directory Display of "_$zu(5)
+ . U IO W @IOF W !,$J(H,$L(H)+IOM\2)
+ . D INT^%T,INT^%D S H=%TIM_"  "_%DAT W !,$J(H,$L(H)+IOM\2)
+ . w !!
+ . w:detail !,"Global",?15,"Vacant",?25,"Own",?29,"Grp",?33,"Wld",?37,"Net"
+ . w:detail ?42,"Growth",?52,"1st PB",?62,"Jrn  Keep",!
+ f  s name=$o(^CacheTempJ($j,name)) q:name=""  d  q:POP
+ . s cnt=cnt+1,P1=cnt#5=0,P3=name
+ . s P2=P3,P4=cnt
+ . i detail d
+ . . s info=$g(^CacheTempJ($j,name))
+ . . i info="" q
+ . . ;vacant global flag
+ . . i $d(@name) s P3=P3_$c(19,94,1)_0
+ . . e  s P3=P3_$c(19,94,1)_1
+ . . ;protection - owner, group, world, network
+ . . s p=$P(info,"^",1)
+ . . s P3=P3_$c(19,94,1)_PROT(p#4)_$c(19,94,1)_PROT(p\4#4)_$c(19,94,1)_PROT(p\16#4)_$c(19,94,1)_PROT(p\64#4)
+ . . ;growth area
+ . . s P3=P3_$c(19,94,1)_$p(info,"^",2)
+ . . ;first pointer block
+ . . s P3=P3_$c(19,94,1)_$p(info,"^",3)
+ . . ;journal
+ . . s P3=P3_$c(19,94,1)_$p(info,"^",4)
+ . . ;collate
+ . . s P3=P3_$c(19,94,1)_$$NAME^COLLATE($p(info,"^",5))
+ . . ;data location
+ . . s P3=P3_$c(19,94,1)_$$dset($p(info,"^",6,7))
+ . . ;lock location
+ . . s P3=P3_$c(19,94,1)_$$dset($p(info,"^",8,9))
+ . . ;replication locations
+ . . f i=10:2 s rep=$p(info,"^",i,i+1) q:rep=""  s P3=P3_$c(19,94,1)_$$dset(rep)
+ . i 'gui d  ;show chui report
+ . . i detail d
+ . . . d fmt(P3)
+ . . e  d
+ . . . i $x+18\19*19+$l(P3)+8>IOM w ! d:SELF more(1) q:POP
+ . . . If $Data(@P3) Set P3show=P3
+ . . . Else  Set P3show=P3_"-",vacancies=1
+ . . . w ?$x+18\19*19+4,P3show
+ i 'gui d  ;show chui footing
+ . w !!,cnt," global" w:cnt-1 "s" w " listed.",!,^CacheTempJ($j)
+ . If $Get(vacancies) Write "Globals listed with a trailing ""-"" have a directory entry but no data",!!
+ q cnt_$c(22,35,1)_$g(^CacheTempJ($j))
+SErr q 0_$c(22,35,1)_"Can not fetch global information!"_$s($ze="":"",1:$c(13,10)_$ze)
+ ;        
+fmt(data) ; format/print a line
+ w !,$p(data,$c(19,94,1),1) ;glboal name
+ w ?15,$s($P(data,$c(19,94,1),2)=1:"Y",1:"") ;vacant flag
+ w ?25,$P(data,$c(19,94,1),3) ;protection - owner
+ w ?29,$P(data,$c(19,94,1),4) ;protection - group
+ w ?33,$P(data,$c(19,94,1),5) ;protection - world
+ w ?37,$P(data,$c(19,94,1),6) ;protection - net
+ w ?42,$p(data,$c(19,94,1),7) ;growth area
+ w ?52,$p(data,$c(19,94,1),8) ;first pointer block
+ New typeval,jrnval,keepval
+ Set typeval=$P(data,$c(19,94,1),9)
+ Set jrnval=$Case($Zboolean(+typeval,4,1),4:1,:0)
+ Set keepval=$Case($Zboolean(+typeval,1,1),1:1,:0)
+ w ?62,$s(jrnval:"Y",1:"N") ;journal flag
+ w ?67,$s(keepval:"Y",1:"N") ;keep flag
+ w !?5,"Data Location:",?25,$P(data,$c(19,94,1),11) ;data location dataset
+ w !?5,"Lock Location:",?25,$P(data,$c(19,94,1),12) ;lock location dataset
+ w !?5,"Replications:" ;replication datasets
+ f i=13:1 d  i rep="" w:i=13 ! q
+ . s rep=$P(data,$c(19,94,1),i)
+ . i rep'="" w ?25,rep,!
+ w ?5,"Collation:",?25,$P(data,$c(19,94,1),10),! ;collation
+ q
+ ;
+dset(s) ;format a dataset name
+ i $p(s,"^",1)="" s s=$p(s,"^",2)
+ q s
+ ;
+Explicit ; The current namespace is explicit
+ ; Work through datasets and check global mappings
+ d TRANSNSP^%SYS.GXLINFO(info,mynsp) ;get mappings for namespace "mynsp"
+ s xlat=$name(@info@(mynsp)) ; pull out those for this namespace
+ ; Decode mappings for all implicited datasets in our namespace
+ s @xlat@("#")=+$g(@xlat@("#"))
+ f i=1:1:@xlat@("#") s map=@xlat@("#",i) d
+ . s @xlat@(map,"test")=$$decode(map)
+ . i $d(@xlat@(map,"I")) d  ; implicits
+ . . s xref=$p($p(@xlat@(map,"I"),"|""",2),"""|")
+ . . s @xlat@(map,"impl")=xref,dset(xref)=""
+ . i $d(@xlat@(map,"L")) d  ; lock target
+ . . s @xlat@(map,"lock")=$p($p(@xlat@(map,"L"),"|""",2),"""|")
+ . i $d(@xlat@(map,"R")) d  ; replication targets
+ . . s @xlat@(map,"repl")="",xref=""
+ . . f  s xref=$o(@xlat@(map,"R",xref)) q:xref=""  d
+ . . . s @xlat@(map,"repl")=@xlat@(map,"repl")_$p($p(xref,"|""",2),"""|")
+ ; The system data set is the default for %-globals
+ s sysdset="^"_@xlat@("syssys")_"^"_@xlat@("sysdir")
+ ; Get the global directory for the default dataset
+ s defdset="^"_@xlat@("defsys")_"^"_@xlat@("defdir")
+ d GetDir(defdset,$name(@glob@(defdset)))
+ q:'$d(@glob@(defdset))
+ ; Get the global directories for the other datasets
+ s xref="" k dset(defdset)
+ f  s xref=$o(dset(xref)) q:xref=""  d GetDir(xref,$name(@glob@(xref))) q:'$d(@glob@(xref))
+ q:xref'=""
+ ; Scan all directories and see if globals are "visible".
+ f  s xref=$o(dset(xref)) q:xref=""  d Visible(xref)
+ d Visible(defdset)
+ D VisSLM(mynsp)  ; HYY066
+ q
+ ;
+decode(map) ; Converts a global mapping descriptor to an IF @argument
+ n ans,len,pos,ref1,ref2
+ s pos=$f(map,":"),len=$l(map)
+ i $e(map)="(" d  q ans ; exclusive form
+ . i pos s ref1=$e(map,2,pos-2),ref2=$e(map,pos,len-1) d  q
+ . . i $e(map,len)=")" d  q
+ . . . i ref1="" s ans=""""_ref2_"""]name" q
+ . . . i ref2="" s ans="name]"""_ref1_"""" q
+ . . . s ans="name]"""_ref1_""","""_ref2_"""]name" q
+ . . i $e(map,len)="]" d  q
+ . . . i ref1="" s ans="name']"""_ref2_"""" q
+ . . . i ref2="" s ans="name]"""_ref1_"""" q
+ . . . s ans="name]"""_ref1_""",name']"""_ref2_"""" q
+ . . s ans=0 q
+ . s ref1=$e(map,2,len-1)
+ . i $e(map,len)=")" s ans="name'="""_ref1_"""" q
+ . i $e(map,len)="]" s ans="name'="""_ref1_"""" q
+ . s ans=0 q
+ i $e(map)="[" d  q ans ; inclusive form
+ . i pos s ref1=$e(map,2,pos-2),ref2=$e(map,pos,len-1) d  q
+ . . i $e(map,len)=")" d  q
+ . . . i ref1="" s ans=""""_ref2_"""]name" q
+ . . . i ref2="" s ans=""""_ref1_"""']name" q
+ . . . s ans=""""_ref1_"""']name,"""_ref2_"""]name" q
+ . . i $e(map,len)="]" d  q
+ . . . i ref1="" s ans="name']"""_ref2_"""" q
+ . . . i ref2="" s ans=""""_ref1_"""']name" q
+ . . . s ans=""""_ref1_"""']name,name']"""_ref2_"""" q
+ . . s ans=0 q
+ . s ref1=$e(map,2,len-1)
+ . i $e(map,len)=")" s ans="name="""_ref1_"""" q
+ . i $e(map,len)="]" s ans="name="""_ref1_"""" q
+ . s ans=0 q
+ q 0
+ ;
+Visible(xref) ; Sees if globals in dataset are visible to our namespace
+ n %
+ s %=$s(xref'=sysdset:"",defdset=sysdset:"",1:"A") ; show %-globals?
+ s name="" f  s name=$o(@glob@(xref,name)) q:name=""  d
+ . f i=1:1:@xlat@("#") s map=@xlat@("#",i) i @@xlat@(map,"test") d  q
+ . . i $g(@xlat@(map,"impl"),defdset)=xref  d
+ . . . s:%']name @output@(name,0)=@glob@(xref,name)_xref_$g(@xlat@(map,"lock"),defdset)_$g(@xlat@(map,"repl"))
+ . . e  i xref=defdset  d  ; record "hidden" global
+ . . . s @output@(name,1)=@glob@(xref,name)_xref_$g(@xlat@(map,"lock"),defdset)_$g(@xlat@(map,"repl"))
+ q
+ ;
+more(n) s line=line+n q:line+1<IOSL  s line=n,$zt="more2"
+ w "--more--",*-1 r %ANS#1 s:$f("Qq",%ANS)>1 POP=1
+more1 w $c(13),?9,$c(13)
+ q
+more2 s $zt="",POP=1 g more1
+ ;
+GetDirNSP(NSP,save) public { ; gets global directory for a namespace
+ Kill ^CacheTempJ($j)
+ Set ng=$$FetchNSP(NSP,"*",1,1),g=""
+ For  Set g=$o(^CacheTempJ($j,g)) Quit:g=""  Set @save@($e(g,2,$l(g)))=^(g)
+ If $piece(ng,$c(22,35,1),2)'="" Set @save=$piece(ng,$c(22,35,1),2)
+ Kill ^CacheTempJ($j)
+}
+GetDir(NSP,save) [errlog,badset] Public { ; gets global directory for a dataset (implied namespace)
+ s rc=$$GetGlobalDirectoryInfo^%SYS.DATABASE(NSP,save)
+ If ('rc) {
+    d DecomposeStatus^%SYS.DATABASE(rc,.msglist,0,"")
+    set er="" f i=1:1:msglist set er=er_msglist(i)_$c(13,10)
+    Set $ze=er Set erlist=1 Goto errdir
+ }
+ i '$d(@save) s @save=""
+ q
+errdir s $zt="",errlog=$g(errlog)+1,errlog(errlog)=$Case($g(erlist),1:$ze,:$p($ze,">")_">"_NSP)
+ s badset(NSP)=""
+ q
+}
+ ;
+ColAbbr(c) ; Return collation code abbreviation
+ s cabbr=$$ABBREV^COLLATE(c)
+ i cabbr'="" s c=cabbr
+ q c
+ ;
+RemJobOLD() Public { ; Remote job to get a global directory
+ s oldval=$zu(68,7,0) ;set RefInKind to return full reference
+ s NSP="^^"_$zu(12,""),locnode=$name(^UTILITY("%GD")),errlog=0
+ s dummy=$zu(68,7,oldval) ;set RefInKind back to what it was
+ d GetDir(NSP,locnode)
+ s @locnode=$s(errlog:$ze,1:"") ; lets caller know it is ready
+ q
+}
+ ;
+ErrorLog ; Print logged error messages
+ n i f i=1:1:errlog d:SELF more(1) q:POP  d
+ . w $p(errlog(i),"^")_$Case(erlist,1:"",:" error referencing ^"_$p(errlog(i),"^",2,3)),!
+ d:SELF more(1) w !
+ q
+ ;
+%msub() New x Set x=$I(^mtemp) Kill ^mtemp(x) Quit x
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R
+ ; input: xlat from Explicit^%GD
+ ;        defdset
+ ; input/output: @output@(...)
+VisSLM(nsp) ;
+ N i,j,xref,name,map,locdir,rng,slmrep
+ F i=1:1:@xlat@("#") D:$D(@xlat@("#",i,"slm"))  ; this has an SLM global
+ . S $ZT="etVisSLM"
+ . ; retrieve SLM global "XX" from map pattern "[XX]" or "[XX:YY)"
+ . S map=@xlat@("#",i),rng=map
+ . S name=$P($P($P($E(map,2,$L(map)),":"),"]"),")") 
+ . Q:'$D(@("^"_name))!((defdset'=sysdset)&("A"]name)) 
+ . S map=$name(@xlat@("#",i,"slm",0))
+ . S locdir=$G(@xlat@(rng,"lock"),defdset),repdir=$G(@xlat@(rng,"repl"))
+ . S j="" F  S j=$O(@map@(j)) Q:j=""  D
+ . . S $ZT="etVisSLM"
+ . . S xref=$G(^|"%SYS"|SYS("GREDIR","GINDTAB",@map@(j,"implid")),defdset)
+ . . S $P(xref,"^")="" ; e.g., remove 5 from string 5^...^...
+ . . Q:'$D(@("^|"""_xref_"""|"_name))
+ . . S slmrep=$G(^|"%SYS"|SYS("GREDIR","GINDTAB",@map@(j,"replid"))),$P(slmrep,"^")=""
+ . . S:repdir_"^"'[(slmrep_"^") repdir=repdir_slmrep
+ . . I '$D(@glob@(xref)) D GetDir(xref,$name(@glob@(xref))) ;HYY072
+ . . S @output@(name,0,j)=@glob@(xref,name)_xref_locdir_slmrep ;future use
+ . S @output@(name,0)=$P(@output@(name,0,$O(@output@(name,0,""))),"^",1,7)_locdir_repdir
+ Q
+etVisSLM ;
+ i $ZE["<INTERRUPT" ZT $ZE
+ S $ZT=""
+ Q
+ALLOLD ; routine to perform a %GD on each mounted database
+ n curdir,origdir,firstime,multi,temp
+ s origdir=$zu(5),firstime=1,multi=1
+ n SELF,PEP,IO,IOM,IOSL,IOF,lng
+ s curdir=$O(^|"%SYS"|SYS("UCI",1)) i curdir="" g done
+ w !,"Display globals for ",curdir d main3
+loop s curdir=$O(^|"%SYS"|SYS("UCI",curdir)) i curdir="" g done
+ i SELF W !,"Next, display globals for ",curdir d prompt
+ i 'SELF W !,"Display globals for ",curdir
+ s temp=$ZU(5,"^^"_curdir) d main3 s temp=$ZU(5,origdir) g loop
+done s temp=$ZU(5,origdir)
+ q
+prompt ; ask for prompt when pagination in effect
+ r !!,"Strike return to continue, any other key to quit. ",ans#1:20
+ i ans="" q
+ ZQ
+BooleanYNLogicalToDisplay(val)
+ q $case(val,1:$g(^%qCacheMsg("%SYSTEM.Library",$s($mvv(58)="":"en",1:$mvv(58)),"Yes"),$g(^%qCacheMsg("%SYSTEM.Library","en","Yes"),"No message found. Domain: "_"%SYSTEM.Library"_" Id: "_"Yes")),0:$g(^%qCacheMsg("%SYSTEM.Library",$s($mvv(58)="":"en",1:$mvv(58)),"No"),$g(^%qCacheMsg("%SYSTEM.Library","en","No"),"No message found. Domain: "_"%SYSTEM.Library"_" Id: "_"No")),:val)
+BooleanYNDisplayToLogical(val)
+  q $case($zcvt(val,"U"),$g(^%qCacheMsg("%SYSTEM.Library",$s($mvv(58)="":"en",1:$mvv(58)),"YES"),$g(^%qCacheMsg("%SYSTEM.Library","en","YES"),"No message found. Domain: "_"%SYSTEM.Library"_" Id: "_"YES")):1,$g(^%qCacheMsg("%SYSTEM.Library",$s($mvv(58)="":"en",1:$mvv(58)),"NO"),$g(^%qCacheMsg("%SYSTEM.Library","en","NO"),"No message found. Domain: "_"%SYSTEM.Library"_" Id: "_"NO")):0,:0)
+ShowMessage(sc,device) [] PRIVATE {
+    Do DecomposeStatus^%SYS.DATABASE(sc,.msglist,0,"")
+    Do wrtmsg($C(13,10),device)
+    For i=1:1:msglist {	Do wrtmsg(msglist(i)_$C(13,10),device) }
+}
+wrtmsg(msg,device) [] PRIVATE {
+    Quit:'$L(msg)  ; Avoid argumentless writes...
+    If device=-1 { Do $zu(9,"",msg,0,0) Quit }
+    If $g(%UI,"CHUI")="CHUI" { Use device Write msg Quit }
+    Do:$$IjcMsg^%Wprima("DI"_msg)="CANCEL"  ; Return value could be cancel message 
+    . i $$IjcMsg^%Wprima("DI"_$C(13,10)_"Abort received!"_$C(13,10))
+    . zt "Abort"
+}

@@ -1,0 +1,341 @@
+ROUTINE DBREST [Type=INT]
+DBREST ;Incremental Backup Restore ;$Change: 4521965 $
+ ; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/user/dbrest.mac#1 $
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+MAIN k  D ^DBRTEXT G main     ;Entry point for D ^DBRTEXT
+ALL N dbrtext D ^DBRTEXT G all      ;Entry point from menu
+SELECT N dbrtext D ^DBRTEXT G select   ;Entry point from menu
+VOLUMEINFO g volumeinfo
+main d Show("title")
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+ ; Set up display text in DBRTEXT ;AN038         
+ASKRES D Show("ASKRES") r !,"    1 => ",R S:R="" R=1 Q:$$STOP(R)  S R=$E(R)
+ I "1234"'[R w " ?? Type the number of the function you want",! g ASKRES
+ W ! S RESTYPE=R G all:RESTYPE=1,select:RESTYPE=2,volumeinfo:RESTYPE=3
+ Q
+NOJRN G all ; ***REMOVED ENTRYPOINT
+EXTALL(QUIETMODE,ALLOWUPD,INPDEV,DIRLIST,JRNOPT,JRNFILE,JDIRGLO) 
+ S $ZE="",JRNOPT=$E($G(JRNOPT))
+ i $zj\2#2 s %UI="CHUI" ;jobbed job
+ n dlmlock ;JO1991
+ I 1_2_3_4'[JRNOPT S RC=-5 G begin2
+ I JRNOPT=3 I JDIRGLO="" S RC=-6 G begin2
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") s RC=-7 g begin2
+ G all
+all ;
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+ N TopDir
+ n RESTYPE,X,DEJRNSTART
+ I $G(QUIETMODE) S RESTYPE="ALL" G BEGIN
+ W !,"Proceed with restoring ALL directories" S X=$$YESNO(1) W !
+ G ASKRES:'X
+ n dirdlm s dirdlm=$s(($zversion(1)=2):"\",($zversion(1)=1):"]",($zversion(1)=3):"/",1:"")
+TopDir ;
+ W !,"Top directory for all Databases to be restored to (? for Help)?" R TopDir W !
+ I TopDir="?" D  G TopDir
+ . W !,"Enter the top path you want all the databases to be restored to."
+ . W !,"The system will prefix it to the original path of the DB to be restored."
+ . W !,"So all the DBs will be restored under this directory with their original"
+ . W !,"directory as sub-directory to this directory."
+ . W !,"Press RETURN to ignore it and restore the DBs to their original path.",!
+ I TopDir'="" s TopDir=$zu(12,TopDir) I TopDir=""!($e(TopDir,*)'=dirdlm) W !,"Bad path!!",! G TopDir
+ s RESTYPE="ALL" g BEGIN
+EXTSELCT(QUIETMODE,ALLOWUPD,INPDEV,DIRLIST,JRNOPT,JRNFILE,JDIRGLO) 
+ S $ZE="",JRNOPT=$E($G(JRNOPT))
+ i $zj\2#2 s %UI="CHUI" ;jobbed job
+ n dlmlock ;JO1991
+ I 1_2_3_4'[JRNOPT S RC=-5 G begin2
+ I DIRLIST="" S RC=-4 G begin2
+ I JRNOPT=3 I JDIRGLO="" S RC=-6 G begin2
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") s RC=-7 g begin2
+ S SELFILE=$ZU(12,DIRLIST)
+ S $ZT="SELERR"
+ s $ZE="" 
+ O SELFILE:"R":5 
+ I $T { 
+	 U SELFILE 
+     F I=1:1 {
+	     R SELDIR(I) 
+	     I $ZEOF {
+		     S $ZE="<ENDOFFILE>" 
+		     G @$ZT
+	     }
+     }
+ } else {
+	 s RC=-4
+	 goto begin2
+ }
+SELERR ;
+ I $ZE'["<ENDOF" {
+	 S RC=-4 
+	 try {
+		 close SELFILE
+	 } catch {}
+	 G begin2
+ }
+ C SELFILE:"D" 
+ S $ZT="" 
+ G select
+ ; EXTERNAL ENTRYPOINT: ask each directory name and allow
+ ; renaming the directories
+select ; Determine what is probably the journal directory
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+ N TopDir
+ n RESTYPE,X,DEJRNSTART
+ S RESTYPE="SELECT" G BEGIN
+BEGIN ;
+ S logfile=""  ; Do not log the text of the backup
+ ;S logfile="d:\backup\log4xrst.txt"  ; Log the text of the backup
+ i logfile'="" d  ;i 'OK q 0   ; signals an error condition   
+ . o logfile:"WNS":5
+ . e   w !,"Error opening log file ",logfile,! s OK=0
+ ; Some external entry points don't set this up so do it now
+ i '$d(dbrtext) d ^DBRTEXT
+ N mtemp1 M mtemp1("menuse",$j)=^mtemp1("menuse",$j)
+ s DEJRNSTART=""
+ G BEGIN^DBREST2
+finish ; DBREST1 goes here
+ M ^mtemp1("menuse",$j)=mtemp1("menuse",$j)
+ n mirlist  ;SML1106
+ D remount
+ D JRNIN ; dejournal
+ ; moved here from DBREST1, DBREST1 goes here
+begin2 D CLEAR10:'$G(ALREADY) ; clear switch 10 if we set it
+ i $g(mirlist,"")'="" {
+   s ndir=""
+   i $G(ALREADY) {
+		w !,"Skiping catchup of mirrored DBs because switch 10 is set."
+		w !,"Use ^JRNRESTO or ^MIRROR later when switch 10 has been cleared."
+   } else {
+ 		i ($SYSTEM.Mirror.GetInfo()'[",DEFINED,") {
+			if $V($ZU(40,2,93),-2,1)'=0 {
+				do MirrorCatchup^JRNRESTO()
+				goto restoreComplete
+			}
+ 			w !!,"There are mirrored DBs restored, please make sure the mirror"
+ 			w !,"journal files are copied to a specific directory in order to"
+ 			w !,"let system restore the journal records."
+ 			w !,"Please enter the directory contains the mirror journal files:"
+ 			w !,"<",$G(^%SYS("JOURNAL","CURDIR")),">? "
+ 			r ndir 
+ 			i ndir="" s ndir=$G(^%SYS("JOURNAL","CURDIR")) w ndir
+ 			s ndir=$zu(12,ndir)
+ 	   	}
+ 		n rc,errlist,sfn,i
+ 		s rc=##class(SYS.Mirror).CatchupDB(mirlist,ndir,.errlist)
+ 		if 'rc {
+	 		w !,"*** WARNING **** Failed to restore the journal records for the mirrored DBs"
+ 		} else {
+	 		if '$LL(errlist) {
+ 				w !,"Journal records for mirrored DBs were restored successfully."
+	 		} else {
+		 		w !,"Journal records for the following databases were succesfully restored"
+		 		k sfnlist
+		 		f i=1:1:$LL(mirlist) s sfnlist($LG(mirlist,i))=""
+		 		f i=1:1:$LL(errlist) k sfnlist($LG(errlist,i))
+		 		s sfn=""
+		 		for  {
+			 		s sfn=$O(sfnlist(sfn))
+			 		q:sfn=""
+			 		w !,?5,$P($ZU(49,+sfn,3),"^",2)
+		 		}
+		 		w !,"The following databases were not succesfully restored"
+		 		f i=1:1:$LL(errlist) {
+			 		s sfn=$LG(errlist,i)
+			 		w !,?5,$P($ZU(49,+sfn,3),"^",2)
+		 		}
+ 			}
+   		}
+ 	}
+ }
+restoreComplete ; JO2538
+ Try {d $zu(52,0)} catch {}  ;STC2150
+ i $V($ZU(40,2,82),-2,4)=+$ZU(61,30,$ZU(61)) V $ZU(40,2,82):-2:4:0     ;JAO580,HYY302,JO1984
+ M ^mtemp1("menuse",$j)=mtemp1("menuse",$j)
+ K %ST
+ n ndir,dd,mf s dd="" f  s dd=$o(DIRNAM(dd)) q:dd=""  s mf=+$p(DIRNAM(dd),"^",3) d:mf
+ . s ndir=$p(DIRNAM(dd),"^") i ndir="" s ndir=dd
+ . if $$isMirroredDb^MIRRORMGR(ndir) q
+ . i mf=$zu(40,0,41) q  ;don't dismount if it was unmounted (NOT dismounted)
+ . d DISMOUNT^DBREST2(ndir)
+ . i mf=2 d $zu(17,ndir,1)
+ do releaseLock^DBACK(.dlmlock)
+ Q:'$G(QUIETMODE)  K SELDIR,JDIR,JDIRECTORY S:RC=1 RC=3 Q +RC
+remount n ndir,dir,runmir,dbobj,status,rc
+ s dir="",mirlist="",runmir=($SYSTEM.Mirror.GetInfo()[",DEFINED,")
+ f  s dir=$o(dejrn(dir)) q:dir=""  d
+ . S ndir=$G(dejrn(dir)),ndir=$P(ndir,",",2,$L(ndir)) S:ndir="" ndir=dir
+ . s dbobj=##Class(SYS.Database).%OpenId(ndir,,.status)
+ . q:'status
+ . w !,"Mounting ",ndir i dbobj.Mirrored w " which is a mirrored DB"
+ . d ONE^MOUNT(ndir)
+ . i dbobj.Mirrored d
+ . . if runmir&&('dbobj.InActiveMirror)&&dbobj.MirrorNoWrite d  q:'+rc
+ . . . s rc=$SYSTEM.Mirror.DBActivate(ndir)
+ . . . if '+rc W !,"Warning! Failed to activate mirrored DB ",ndir," due to ",$p(rc,",",2) k dejrn(dir) q
+ . . . d:##class(Config.MirrorMember).IsReadWriteReportingMember() $SYSTEM.Mirror.ClearFailoverDBFlag(ndir)
+ . . s mirlist=mirlist_$lb(+$zu(49,ndir)) k dejrn(dir)
+ q
+JRNIN Q:$O(dejrn(""))=""  S $ZT="JX^"_$ZN
+ f i=0:1:$l($g(DEJRNSTART),$C(13,10))-1 d
+ . s DEJRNSTART(i)=$p(DEJRNSTART,$C(13,10),i+1)
+ . i +DEJRNSTART(i)'>0 w:DEJRNSTART(i)]"" !,*7,"[Invalid journal marker] ",DEJRNSTART(i),! k DEJRNSTART(i) q 
+ s node=$name(^SYS("RESTORE","BACKUP",$zdt($h,8)))
+ s @node@("device")=$g(INCDEV)
+ s @node@("backtime")=$g(BACKH)
+ m @node@("databases")=dejrn
+ m @node@("jrnmarker")=DEJRNSTART
+ m @node@("CLSTATE")=CLSTATE
+ i CLUBACKUP,$D(QUIETMODE) s QUIETMODE=0  ; off for clu restore
+  I $G(QUIETMODE) DO  Q
+ . S fromrest=JRNOPT,restjrn=$G(JRNFILE)
+ . I fromrest=4 s RC=3 W !,*7,"[Journal not applied to any directory]",! Q
+ . S RC=1 I JRNOPT=3 S RC=$$GETJDIR(JDIRGLO)
+ . I RC=1 G jrnin2
+ ;
+ i CLUBACKUP d
+ . w !!,"The backup that was restored contains directories that were"
+ . w !,"cluster mounted when the backup was performed. If you restore"
+ . w !,"the journal you must be sure to specify the journal files"
+ . w !,"in use by the other cluster members when the backup was "
+ . w !,"performed in addition to the journal file for this system "
+ . w !,*7
+ W ! D Show("JRNIN0")
+jrnin1 ;
+ D Show("JRNIN1") R R S R=$E(R_1) I "1234"'[R DO  G jrnin1
+ . w " ??? Type the number of the function you want",!
+ i CLUBACKUP,R=2 d  g jrnin1
+ . w !,"You cannot restore the entire journal when the backup"
+ . w !,"   contains clustered databases because that journal restore"
+ . w !,"   function does not support the restoration from multiple"
+ . w !,"   journal files"
+ S fromrest=R I fromrest=4 Q
+jrnin2 ; restore journal and rollback transactions
+ i $d(DEJRNSTART) d
+ . n i
+ . w !!,"We know something about where journaling was at the time of the backup:",!
+ . s i="" f  s i=$o(DEJRNSTART(i)) q:i=""  w i,": ","offset "_+DEJRNSTART(i)_" in "_$p(DEJRNSTART(i),",",2),!
+ . i CLUBACKUP s DEJRNSTART=""  ;cluster: don't know which one is primary system
+ . e  s DEJRNSTART=$g(DEJRNSTART(0)) ;just to be safe
+ G INT^JRNRESTO ; restore journal and rollback transactions
+JX Q
+GETJDIR(dev) ;modifies 'dejrn', and 'JDIR'
+ N II,JJ,XX,ALL,dir S $ZT="JDIRERR^"_$ZN O dev:"R":5 E  Q -6
+ F II=1:1 U dev R JDIR(II) ;read in directories to restore journal
+ ;
+JDIRERR K dejrn S $ZT="" F II=1:1 Q:'$D(JDIR(II))  S XX=JDIR(II) DO
+ . S dir=$P(XX,",") Q:dir=""  S dir=$ZU(12,dir),ALL=$E($P(XX,",",2)_"?")
+ . I "Yy"[ALL K dejrn(dir) S dejrn(dir)=1 Q  ;all globals in directory
+ . I "Nn"[ALL DO  ;selected entries in directory -- specific globals
+ . . N g S g=$G(dejrn(dir)),$P(g,",")=0,dejrn(dir)=g ;mark as *not-all*
+ . . F JJ=3:1 S g=$P(JDIR(II),",",JJ) Q:g=""  S dejrn(dir,g)=1_""""_g_"""" ;globals
+ C dev Q 1
+volumeinfo
+ n
+ S DEV=$G(^SYS("BACKUP","LASTFULL","DEVICE"))
+ w !
+ w !,"Enter the backup volume you want to display information from"
+ W !," (Type STOP to exit)"
+ W !,"Device: " W:DEV]"" DEV_" => " R ANS,! S:ANS]"" DEV=ANS
+ I DEV=""!$$STOP(ANS) Q
+ s Status=##Class(Backup.General).GetBackupVolumeInfo(DEV,.Info)
+ i '(''Status) {
+	 d $SYSTEM.OBJ.DisplayError(Status)
+	 q
+ }
+ w !,"This backup volume was created by:"
+ w !,Info("CacheVersion")
+ w !
+ w !,"The volume label contains:"
+ w !,?3,"Volume number",?23,Info("BackupVolume")
+ w !,?3,"Volume backup",?23,Info("BackupDate")," ",Info("BackupTime")," ",Info("BackupType")
+ w !,?3,"Previous backup",?23,Info("PrevBackupDate")," ",Info("PrevBackupTime")," ",Info("PrevBackupType")
+ w !,?3,"Last FULL backup",?23,Info("LastFullBackupDate")," ",Info("LastFullBackupTime")
+ w !,?3,"Description",?23,Info("Description")
+ w !,?3,"Buffer Count",?23,Info("BufferCount")
+ s Mirror=0
+ i $d(Info("MirrorName")) {
+	w !,?3,"Mirror name",?23,Info("MirrorName")
+	w !,?3,"Failover member",?23,Info("FailoverMember")
+	s Mirror=1
+ }
+ i $d(Info("AsyncMember")) {
+	 w !,?3,"Async mirror member",?23,Info("AsyncMember")
+	 s Mirror=1
+ }
+ w !,?3,"Journal File",?23,Info("JournalFile")
+ w !,?3,"Log file",?23,Info("LogFile")
+ w !,?3,"Backup Status",?23,Info("Status") 
+ s Index="",Cluster=0
+ f  {
+	s Index=$o(Info("Database",Index)) q:Index=""
+ 	i Info("Database",Index,"ClusterFlag")'="P" {
+ 		s Cluster=1
+ 		quit
+ 	}
+ }
+ s ClusterOff=68
+ i Cluster,'Mirror s ClusterOff=49
+ w !
+ w !,"Database",?40,"Size(mb)"
+ i Mirror w ?49,"Mirror DB Name"
+ i Cluster w ?ClusterOff,"Mount Status"
+ w !,"--------",?40,"--------"
+ i Mirror w ?49,"--------------"
+ i Cluster w ?ClusterOff,"------------"
+ s Index="",TotalSize=0
+ f  {
+	s Index=$o(Info("Database",Index)) q:Index=""
+ 	s Count=Index
+ 	w !,Info("Database",Index,"Directory")
+ 	i $x>40 w !
+ 	s Size=$p(Info("Database",Index,"ZU49"),",",4)
+ 	w ?40,$j(Size,8)
+ 	s TotalSize=TotalSize+Size
+ 	i Mirror w ?49,$g(Info("Database",Index,"Mirror","dbname"))
+	i Cluster w ?ClusterOff,$case(Info("Database",Index,"ClusterFlag"),"P":"Private",:"Clustered")
+ }
+ w !,"Total of "_Count_" databases, totaling "_TotalSize_" mb"
+ w !,"Backup volume size is "_Info("Size")_" mb"
+ g volumeinfo
+ ;uppercase function
+UC(x) q $zcvt(x,"u")
+ ;check  for stop text function
+STOP(x) S x=$$UC($E(x,1,4)) Q (x["EXIT")!(x["STOP")!(x["QUIT")!(x["HALT")!($E(x)="^")
+YESNO(a) N v,b S a=$G(a)  F  DO  Q:$D(v)
+ . W *-1,$S(a:" Yes",1:" No")_" => " R b I b="" S v=a Q
+ . S b=$TR($E(b),"yn","YN") I "YN"[b S v=(b="Y") Q
+ . W *7," [answer Yes or No, please]" I $x>68 W !
+ Q v
+Show(item,p1,p2,p3,p4) ;
+ n d,i,p0,p,tx s d="#",tx=$g(dbrtext(item))
+ i tx="" w !,*7,"MISSING DBRTEXT ITEM ",item
+ e  f i=0:1:4 s p="p"_i w $p(tx,d,i),$g(@p)
+ h 0 q 
+SWSET   do $SYSTEM.Util.SetSwitch(%SW,%VAL)
+	quit
+SET10   do $SYSTEM.Util.SetSwitch(10,1)
+        quit
+CLEAR10 do $SYSTEM.Util.SetSwitch(10,0) 
+        quit
+CHECK10() n res
+	s res=$SYSTEM.Util.GetSwitch(10)
+	if '+res quit 0  ; not owned
+	if +$P(res,",",2)'=+$J quit 0  ; not owned by us
+	quit 1  ; set and owned by us

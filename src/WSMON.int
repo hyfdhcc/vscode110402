@@ -1,0 +1,649 @@
+ROUTINE WSMON [Type=INT]
+WSMON	; Web Services monitoring utility ; RFD546   6/21/10
+	;
+	; Menu based demo for calling Web Services for monitoring, see SYS.WSMon classes.
+	; You start by entering the System name and Cache Web Server port for a Cache
+	; instance. The utility will remember instances which have previously been accessed. 
+	;
+	; This should work from any type of OS (Windows, Unix, VMS) across the network to
+	; any other type of OS. Note that firewalls may inhibit connections (recent versions
+	; of Windows block this by default). Also (at this time) VMS requires that you use
+	; the CSP Gateway from a Windows (or Unix) Cache. 
+	;
+	; This routine also incudes EVENTS^WSMON, which is used as a background job to monitor
+	; and deliver Events if there are any "subscribers".
+ 	;  
+	;
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* MONEXT.INC */
+	;
+	;
+	d MENU
+ 	q
+ 	;
+MENU() PUBLIC {
+ 	s $zt="ERROR"
+ 	s Menu(1)="Monitor a Cache instance"
+ 	s Menu(2)="Subscribe to Events"
+ 	s Menu(3)="Cancel Subscription"
+ 	s Menu(4)="Stop WS Events Monitor"
+ 	s Menu(5)="List Current Subscriptions"
+ 	f  {
+ 		s response=""
+ 		s mask=8+128+4
+ 		w #
+		s status=##Class(%Library.Prompt).GetMenu("Option?",.response,.Menu,,mask)
+ 		i (+status=0)||(status=2)||(status=3)||(response="") q
+ 		i response=1 d monitor() Continue
+ 		i response=2 d subscribe() Continue
+ 		i response=3 d cancel() Continue
+ 		i response=4 d STOP Continue
+ 		i response=5 d sublist Continue
+ 	}
+ 	q status
+ERROR	; handle errors
+	s $zt=""
+ 	i $ze["<INTERRUPT>" q 0
+ 	ztrap $ze
+ }
+	;
+	; Call Web Services to monitor a remote instance
+	;
+monitor()  {
+	s server=$$select()
+	q:server=""
+	s system=$p(server,":",1),port=$p(server,":",2)
+	s user=$p(server,":",3) i user]"" s pw=$list(user,2),user=$list(user,1)
+ 	;
+ 	; send request for system info
+ 	;
+ 	s client=##class(SYS.WSMon.Client).%New()
+	s client.Location="http://"_server_"/csp/sys/SYS.WSMon.Service.cls"
+	s client.Timeout=10
+	i user]"" {
+		s usertoken=##class(%SOAP.Security.UsernameToken).Create(user,pw)
+		d client.SecurityOut.AddToken(usertoken)
+	}
+	s $zt="monerr"
+	s sysref=client.GetSystem()
+	s $zt=""
+sys	;
+	w #
+	w !!,"Cache instance ",sysref.Name," on ",sysref.System
+	w !,sysref.Version
+	w !!,"Installed at ",sysref.Directory
+	w !,"Config file: ",sysref.ConfigFile
+	w !!,"Current Users: ",sysref.CurrentUsers,?29,"Routine Buffers: ",sysref.RoutineCache,?53,"Global Buffers: ",sysref.DatabaseCache
+	w !,"Current Licenses Available: ",sysref.LicenseAvailable,?40,"Used: ",sysref.LicenseUsed,?55,"Highest Used: ",sysref.LicenseHigh
+	;
+	s Menu(1)="Get Global Stats"
+ 	s Menu(2)="Get Disk IO stats"
+ 	s Menu(3)="Get Routine stats"
+ 	s Menu(4)="Get Database listing"
+ 	s Menu(5)="Get Buffer stats"
+ 	s Menu(6)="Get Write Daemon stats"
+ 	s Menu(7)="Get Resource Seize stats"
+ 	s Menu(8)="Get Process list by Commands"
+ 	s Menu(9)="Get Process list by GloRefs"
+ 	s Menu(10)="Get System Dashboard"
+ 	;
+ 	s response=""
+ 	s mask=8+128+4
+	s status=##Class(%Library.Prompt).GetMenu("Option?",.response,.Menu,,mask)
+ 	i (+status=0)||(status=2)||(status=3)||(response="") q
+ 	i response=1 d getglo
+ 	i response=2 d getdisk
+ 	i response=3 d getrou
+ 	i response=4 d getdb
+ 	i response=5 d getbuff
+ 	i response=6 d getwd
+ 	i response=7 d getressz
+ 	i response=8 d getproc("COMMANDS")
+ 	i response=9 d getproc("GLOREFS")
+ 	i response=10 d getdash
+ 	;
+ 	s status=##Class(%Library.Prompt).GetString("Press RETURN to continue.",,0,,,8+4)
+ 	g sys
+ 	;
+monerr	;
+	s $ze=""
+	w !!,"Error in contacting ",system," at port ",port,"."
+ 	s status=##Class(%Library.Prompt).GetString("Press RETURN to continue.",,0,,,8+4)
+	q
+	;
+getglo	; get global stats
+	s ref=client.GetGlobal() s c1=20,c2=40,c3=60
+	w #
+	w !,"Cache instance ",sysref.Name," on ",system,!!
+	w !,"                    Local               Remote              Total"
+	w !,"                    -----               ------              -----"
+	w !,"Global Refs",?c1,ref.RefLocal,?c2,ref.RefRemote,?c3,ref.RefLocal+ref.RefRemote
+	w !,"Global Updates",?c1,ref.RefUpdateLocal,?c2,ref.RefUpdateRemote,?c3,ref.RefUpdateLocal+ref.RefUpdateRemote
+	w !,"Journal Entries",?c1,ref.JrnEntries
+	w !,"Journal Blocks",?c1,ref.JrnBlocks w !
+	w !!,"Logical Reads: ",ref.LogicalBlocks,"    Physical Reads: ",ref.PhysBlockReads,"    Block Writes: ",ref.PhysBlockWrites
+	w !!,"Global Updaters: ",ref.UpdateCnt,"   Update Lock: ",ref.UpdateLock,"   WD Wake: ",ref.WDWake,"   WD Queue: ",ref.WDQueueSize
+	w !!
+	q
+getrou	; get routine stats
+	s ref=client.GetRoutine()
+	w #
+	w !,"Cache instance ",sysref.Name," on ",system,!!
+	w !,"Commands: ",ref.RtnLines
+	w !!,"Routine Calls (Local): ",ref.RtnCallsLocal,?35,"  Routine Calls (Remote): ",ref.RtnCallsRemote
+	w !!,"Routine Fetch (Local): ",ref.RtnFetchLocal,?35,"  Routine Fetch (Remote): ",ref.RtnFetchRemote
+	w !!
+	q
+getdisk	; get disk stats
+	s ref=client.GetDisk() s c=12
+	w #
+	w !,"Cache instance ",sysref.Name," on ",system,!!
+	w !,"            Dir         Uptr        Bptr        Bdata       Data        Map "
+	w !,"            ---         ----        ----        -----       ----        --- "
+	w !,"LogRead",?c,ref.LogDir,?c*2,ref.LogUptr,?c*3,ref.LogBptr,?c*4,ref.LogBdata,?c*5,ref.LogData,?c*6,ref.LogMap
+	w !,"PhyRead",?c,ref.PhyDirRd,?c*2,ref.PhyUptrRd,?c*3,ref.PhyBptrRd,?c*4,ref.PhyBdataRd,?c*5,ref.PhyDataRd,?c*6,ref.PhyMapRd
+	w !,"PhyWrite",?c,ref.PhyDirWt,?c*2,ref.PhyUptrWt,?c*3,ref.PhyBptrWt,?c*4,ref.PhyBdataWt,?c*5,ref.PhyDataWt,?c*6,ref.PhyMapWt
+	w !
+	q
+getdash	; get system Dashboard
+	s ref=client.GetDashboard() s c=12
+	w #
+	w !,"Cache instance ",sysref.Name," on ",system,!!
+	w ! i ref]"" d $System.OBJ.Dump(ref)
+	q
+getdb	; get database info
+	w # s c1=34,c2=50,c3=64
+	w "Cache instance ",sysref.Name," on ",system,!
+	w !,"Name/Directory                    Size           Freespace       Status"
+	w !,"--------------                    ----           ---------       ------"
+	;
+	set dataset=client.EnumDatabase()
+	while (dataset.Next(.status)) {
+		w !,dataset.Get("Name")
+		w ?c1,dataset.Get("SizeAllocated"),?c2,dataset.Get("FreeSpace")
+		if dataset.Get("Mounted")=1 {
+			w ?c3,"Mounted/" w $s(dataset.Get("ReadOnly")=1:"RO",1:"RW")
+		} else {
+			w ?c3,"Dismounted"
+		}
+		w !,dataset.Get("Directory")
+	}
+	i 'status w !,$$DisplayError^%apiOBJ(status)
+	q
+getbuff	; get buffer info
+	w # s c=11
+	w !,"Cache instance ",sysref.Name," on ",system,!!
+	w !,"Size       NumSize   LRUqueue  Interactive  Available  WrtQueSz   LastWrite"
+	w !,"----       -------   --------  -----------  ---------  --------   ---------"
+	set dataset=client.EnumBuffer()
+	while (dataset.Next(.status)) {
+		w !,dataset.Get("Size"),?c,dataset.Get("NumSize"),?c*2,dataset.Get("BatchQ")
+		w ?c*3,dataset.Get("Interact"),?c*4,dataset.Get("Avail")
+		w ?c*5,dataset.Get("WrtQSz"),?c*6,dataset.Get("WrtSz")
+	}
+	i 'status w !,$$DisplayError^%apiOBJ(status)
+	w !
+	q
+getwd	; get write daemon info
+	w # s c=10,index=0
+	w !,"Cache instance ",sysref.Name," on ",system,!!
+	w !,"WD#       Blocks    TotBlk    Cycles  Blks/Cycle  Wake      CycleTime"
+	w !,"---       ------    ------    ------  ----------  ----      ---------"
+	set dataset=client.EnumWriteDaemon()
+	while (dataset.Next(.status)) {
+		s index=index+1
+		w !,index,". ",?c,dataset.Get("CurBlk"),?c*2,dataset.Get("TotBlk")
+		w ?c*3,dataset.Get("Cycles"),?c*4,dataset.Get("CycleBlk")
+		w ?c*5,dataset.Get("Wake"),?c*6,dataset.Get("CycleTime")
+	}
+	i 'status w !,$$DisplayError^%apiOBJ(status)
+	w !
+	q
+getressz	; get resource seize stats
+	w # s c=10,index=0
+	w !,"Cache instance ",sysref.Name," on ",system,!!
+	w !,"Res Name            Seize     Nseize    Aseize    Bseize    BusySets "
+	w !,"--------            -----     ------    ------    ------    ---------"
+	set dataset=client.EnumResource()
+	while (dataset.Next(.status)) {
+		s index=index+1
+		w !,dataset.Get("Name"),?c*2,dataset.Get("Seize")
+		w ?c*3,dataset.Get("Nseize"),?c*4,dataset.Get("Aseize")
+		w ?c*5,dataset.Get("Bseize"),?c*6,dataset.Get("BusySets")
+	}
+	i 'status w !,$$DisplayError^%apiOBJ(status)
+	w !
+	q
+getproc(sort)	; get top process list
+	w # s c1=9,c2=22,c3=34,c4=44,c5=58,c6=67,c7=75
+	w "Cache instance ",sysref.Name," on ",system,!
+	w !,"Process  UserName     Device      Namespace   Routine     Commands GloRefs State"
+	w !,"-------  --------     ------      ---------   -------     -------- ------- -----"
+	;
+	set dataset=client.EnumProcess(sort,10)
+	while (dataset.Next(.status)) {
+		w !,dataset.Get("Process")
+		w ?c1,dataset.Get("UserName"),?c2,dataset.Get("CurrentDevice")
+		w ?c3,dataset.Get("Namespace"),?c4,dataset.Get("Routine")
+		w:dataset.Get("Process")'=0 !
+		w ?c5,dataset.Get("CommandsExecuted"),?c6,dataset.Get("GlobalReferences")
+		w ?c7,dataset.Get("State")
+	}
+	i 'status w !,$$DisplayError^%apiOBJ(status)
+	q
+}
+	; subscribe to Events
+subscribe() {
+	s server=$$select()
+	q:server=""
+	s system=$p(server,":",1),port=$p(server,":",2)
+	s user=$p(server,":",3) i user]"" s pw=$list(user,2),user=$list(user,1)
+ 	;
+	w !!,"Subscribing to event ..."
+	s client=##class(SYS.WSMon.Client).%New()
+	s client.Location="http://"_server_"/csp/sys/SYS.WSMon.Service.cls"
+	s Status=##Class(%Library.RoutineMgr).GetWebServerPort(.Port,.Server,.URLPrefix,.URL)
+	s location=URL_"/csp/sys/SYS.WSMon.EventSink.cls"
+	i user]"" {
+		s usertoken=##class(%SOAP.Security.UsernameToken).Create(user,pw)
+		d client.SecurityOut.AddToken(usertoken)
+	}
+	set resp=client.EventSubscribe(location)
+	i resp]"" w !!,"Subscription granted as ",resp,!
+	e  w !!,"Subscription failed.",!
+	; remember the subscription ID
+	s i=$i(^CacheTemp.WSMonSubscriptions)
+	s ^CacheTemp.WSMonSubscriptions(system,port,i)=resp
+	s status=##Class(%Library.Prompt).GetString("Press RETURN to continue.",,0,,,8+4)
+	k
+	q
+}
+	; Cancel subscription
+cancel() {
+	s server=$$select()
+	q:server=""
+	s system=$p(server,":",1),port=$p(server,":",2)
+	s user=$p(server,":",3) i user]"" s pw=$list(user,2),user=$list(user,1)
+ 	;
+	s client=##class(SYS.WSMon.Client).%New()
+	s client.Location="http://"_server_"/csp/sys/SYS.WSMon.Service.cls"
+	i user]"" {
+		s usertoken=##class(%SOAP.Security.UsernameToken).Create(user,pw)
+		d client.SecurityOut.AddToken(usertoken)
+	}
+	s id=$o(^CacheTemp.WSMonSubscriptions(system,port,""))
+	if id="" {
+		w !!,"No subscription to ",system,":",port," found.",!
+	} else  {
+		s sub=^CacheTemp.WSMonSubscriptions(system,port,id)
+		w !!,"Canceling subscription ",sub
+		set resp=client.EventCancel(sub)
+		i resp w !!,"Subscription cancelled.",!
+		e  w !!,"Subscription cancel failed.",!
+		k ^CacheTemp.WSMonSubscriptions(system,port,id)
+	}
+	s status=##Class(%Library.Prompt).GetString("Press RETURN to continue.",,0,,,8+4)
+	k
+	q
+}
+	;
+	; Select a Cache instance - return system:port:$list(user,password)
+	;
+	; New selections are added to list at 
+	;   ^SYS("MONITOR","WSMON","SERVERS",system,port)=instance_name;system_name
+	;
+	; NOTE: we get the system name from the system, VMS may have to use a gateway
+	;
+select() {
+	s n=0
+	; create a list of previous choices if there are some
+	i $o(^SYS("MONITOR","WSMON","SERVERS",""))]"" {
+		s (system,port)=""
+		f  {
+			s system=$o(^SYS("MONITOR","WSMON","SERVERS",system))
+			q:system=""
+			f  {
+				s port=$o(^SYS("MONITOR","WSMON","SERVERS",system,port))
+				q:port=""
+				s n=n+1,instance=^SYS("MONITOR","WSMON","SERVERS",system,port)
+				s list(n)=system_":"_port
+				s nm=$p(instance,";",1)_" on "_$p(instance,";",2)
+				s Menu(n)=nm_$e("                                       ",1,40-$l(nm))_"("_system_":"_port_")"
+			}
+		}
+	}
+	; handle  menu
+	if n {
+		s n=n+1,Menu(n)="Enter new system and port number"
+		s response=n
+		s mask=8+128+4
+		s status=##Class(%Library.Prompt).GetMenu("Option?",.response,.Menu,,mask)
+		i (+status=0)||(status=2)||(status=3)||(response="") q ""
+		i response<n q list(response)_":"_$$user()
+	}
+	w !
+ 	s prompt="System:"
+ 	s response=$g(^%SYS("WebServer","Name"))
+ 	i response="" s response=$zu(110)
+ 	s help(1)="Enter the system name of the Cache instance to connect to."
+ 	s status=##Class(%Library.Prompt).GetString(prompt,.response,0,,.help,8+4) k help
+ 	i (status=2)||(+status=0)||(status=3)||(response="") q ""
+ 	s system=$zcvt(response,"U")
+	;
+ 	s prompt="Port:"
+ 	s response=$g(^%SYS("WebServer","Port"),57772),help(1)="Enter the Cache Web Server Port number."
+ 	s status=##Class(%Library.Prompt).GetString(prompt,.response,0,,.help,8+4) k help
+ 	i (status=2)||(+status=0)||(status=3)||(response="") q ""
+ 	s port=+response
+ 	;
+ 	s user=$$user(),pw=""
+ 	i user]"" s pw=$list(user,2),user=$list(user,1)
+ 	s client=##class(SYS.WSMon.Client).%New()
+	s client.Location="http://"_system_":"_port_"/csp/sys/SYS.WSMon.Service.cls"
+	s client.Timeout=10
+	i user]"" {
+		s usertoken=##class(%SOAP.Security.UsernameToken).Create(user,pw)
+		d client.SecurityOut.AddToken(usertoken)
+	}
+	s $zt="selerr"
+	s sysref=client.GetSystem()
+	s $zt=""
+	s ^SYS("MONITOR","WSMON","SERVERS",system,port)=sysref.Name_";"_sysref.System
+	q system_":"_port_":"_$s(user]"":$lb(user,pw),1:"")
+	;
+selerr ; handle connection error
+	s $ze=""
+	w !!,"Error in contacting ",system," at port ",port,"."
+	d $System.OBJ.DisplayError(%objlasterror)
+ 	s status=##Class(%Library.Prompt).GetString("Press RETURN to continue.",,0,,,8+4)
+	q ""
+}
+	;
+	; Provide a username/password for a server - return $list(user,pass)
+	;
+user()
+	w !
+ 	s prompt="User:",response="",help(1)="Enter a user name for remote access."
+ 	s status=##Class(%Library.Prompt).GetString(prompt,.response,0,,.help,8+4) k help
+ 	i (status=2)||(+status=0)||(status=3)||(response="") q ""
+ 	s user=response
+ 	i user="" q ""
+	;
+ 	s prompt="Password:",response="",help(1)="Enter a user name for remote access."
+ 	;w prompt u 0:"S" r response
+ 	u $io:(:"S") s status=##Class(%Library.Prompt).GetString(prompt,.response,0,,.help,8+4) u $io:(:"-S") k help
+ 	i (status=2)||(+status=0)||(status=3)||(response="") q ""
+ 	s pw=response
+ 	;
+    q $lb(user,pw)
+    ;
+event	; test sending an event
+	s defsys=$g(^%SYS("WebServer","Name"))
+	i defsys="" s defsys="localhost"
+	w !,"System: <",defsys,"> " r system s:system="" system="localhost"
+	s defport=$g(^%SYS("WebServer","Port"),57772)
+	w !,"Port: <",defport,"> " r port s:port="" port=defport
+	s client=##class(SYS.WSMon.Client).%New()
+	s client.Location="http://"_system_":"_port_"/csp/sys/SYS.WSMon.EventSink.cls"
+	s event=##class(SYS.WSMon.wsEvent).%New()
+	s err=$r(17-1)+1,trap=$t(traplist+err^SNMP)
+	s event.System=$zu(110),event.Instance=$p($zu(86),"*",2)
+	s event.Name=$zstrip($p(trap,";",4),"*W"),event.Severity=+$p(trap,";",5)
+	s event.SnmpId=err,event.AdditionalInfo=$tr($p(trap,";",6),"'","*")
+	w !,"Sending ...",!! d $System.OBJ.Dump(event)
+	set resp=client.CacheEventSink(event)
+	w !!,"Response = ",resp,!
+	k
+	q
+	;
+EVENTS	; Entry point for JOB to signal events
+	;
+	s $zt="evterr^WSMON"
+	l +^SYS("MONITOR","WSMON"):5 e  s ^SYS("MONITOR","WSMON","ERROR")="Unable  to LOCK - "_$H q
+	s ^SYS("MONITOR","WSMON")="RUN"
+	s to=+$g(^SYS("MONITOR","WSMON","EVENTLOOP"),10) ; loop time in seconds
+	d $zu(9,"","Events monitor for Web Services (WSMON) started.",(0>0),0)
+	s trap=$zu(190,1,1,4)	; enable queue
+evtloop	; job loop to check for alerts
+	i $g(^SYS("MONITOR","WSMON"))="STOP" d $zu(9,"","Web Services Monitor terminated.",(1>0),1) g evtexit
+	s trap=$zu(190,1,2,4) ; get next entry on queue
+	i trap=0 h to g evtloop
+	s tn=$p(trap,",") i (tn<1)!(tn>17),tn'=100 h to g evtloop
+	;
+	s aux=$p(trap,",",2,$l(trap,","))
+	; Get trap name and message
+	if tn=100 {
+		; emulate 'traplist' - insert trap name and severity
+		s text=";;100;cacheAppAlert;"_$p(aux,",")
+		s msg=$p(aux,",",2,$l(aux,","))
+	} else {
+		s text=$t(traplist+tn^SNMP),msg=$p(text,";",6)
+	}
+	; add database index for some DB traps
+	i tn>2,tn<7,aux]"" {
+		s sfn=+$p(aux,",",1),index=$$dbtab^SNMP("INDEX",sfn)
+		s dbname=$p(index,",",2),index=$p(index,",")
+		s msg=msg_", database "_dbname
+		; add database read status for cacheDBStatusChange
+		i tn=5 s msg=msg_", status is "_$p($$dbtab^SNMP("Status",index),"/",2)
+		i tn=6 s msg=msg_", error is "_$zu(96,1,+$p(aux,",",2))
+  	}
+  	; add message for cconsole.log trap
+  	i tn=15 s msg=msg_" - "_$p(aux,",",1)
+  	;
+  	; Build object to send
+	s event=##class(SYS.WSMon.wsEvent).%New()
+	s event.System=$zu(110),event.Instance=$p($zu(86),"*",2)
+	s event.Name=$zstrip($p(text,";",4),"*W"),event.Severity=+$p(text,";",5)
+	s event.SnmpId=+$p(text,";",3),event.AdditionalInfo=msg
+	;
+	; Now send it to all subscribers
+	s id=""
+evtsend ;
+	d $System.OBJ.Dump(event)
+	f  {
+		s id=$o(^CacheTemp.WSMonSubscriber(id)) q:id=""
+		s location=^CacheTemp.WSMonSubscriber(id)
+		s client=##class(SYS.WSMon.Client).%New()
+		s client.Location=location
+		w !,"Send to ",location
+		S $zt="senderr^WSMON"
+		s resp=client.CacheEventSink(event)
+		s $zt="evterr^WSMON"
+		i 'resp d $zu(9,"","No response to Web Services Event from "_location,(1>0),1)
+	}
+	;
+	g evtloop
+senderr	; error in sending Event
+	s $zt="evterr^WSMON"
+	d $zu(9,"","Error sending Web Services Event to "_$g(location)_" - "_$ze,(1>0),1)
+	i $g(%objlasterror)]"" s ^SYS("MONITOR","WSMON","objlasterror")=$g(%objlasterror)
+	;i $g(location)]"" {
+	;	d $$$LOGMSG("Removing subscriber at "_$g(location),0,1)
+	;	i $g(id)]"" k ^CacheTemp.WSMonSubscriber(id)
+	;}
+	g evtsend ; continue with other subscribers 
+evterr	; unexpected error trap 
+	s $zt=""
+	d $zu(9,"","Unexpected error in Web Services Event Monitor -"_$ze,(1>0),1)
+evtexit
+	s trap=$zu(190,1,0,4) ; disable queue for WSMon 
+	l -^SYS("MONITOR","WSMON")
+	q
+	;
+STOP	; stop background job
+	s ^SYS("MONITOR","WSMON")="STOP"
+	q
+sublist	; list current subscribers
+	n num,fnd,i,sys,port
+	s num=+$g(^CacheTemp.WSMonSubscriber),fnd=0
+	w !!,"Subscribers for Events on this system ...",!
+	f i=1:1:num i $d(^CacheTemp.WSMonSubscriber(i)) w !,i,". ",^CacheTemp.WSMonSubscriber(i) s fnd=1
+	i 'fnd w !,"No subscribers found.",!
+	w !!,"Subscriptions to Events on other systems ...",!
+	s (sys,port,i)="",fnd=0
+	f  {
+		s sys=$o(^CacheTemp.WSMonSubscriptions(sys))
+		q:sys=""
+		f  {
+			s port=$o(^CacheTemp.WSMonSubscriptions(sys,port))
+			q:port=""
+			f  {
+				s i=$o(^CacheTemp.WSMonSubscriptions(sys,port,i))
+				q:i=""
+				s fnd = 1 w !,sys,":",port, " = ",^CacheTemp.WSMonSubscriptions(sys,port,i)
+			}
+		}
+	}
+	i 'fnd w !,"No subscriptions found.",!
+	w !
+ 	s status=##Class(%Library.Prompt).GetString("Press RETURN to continue.",,0,,,8+4)
+	q
+	;
+	; Test WS-Management client
+	; action = "get", "enum", "pull", "release", "enum+", "subscribe", "renew", "unsubscribe"
+	; resource = "database", "system", "global", "disk", "routine", "wd"
+	; selector = index for "get" with multiple instances (e.g. "database" or "wd")
+	;            or may be used as EnumerationContext:MaxElements for "enum+", "pull" and "release"
+	;			 or may be Subscriber index for Renew / Unsubscribe / Notify
+	; 
+	; Prints out resource data (or error)
+	; Returns status or EnumerationContext
+	;
+wsman(action, resource, selector) PUBLIC {
+	s system=$zu(110),port=8080,response=1
+	;s system=$zu(110),port=$g(^%SYS("WebServer","Port"),57772)
+ 	s client=##class(SYS.WSMon.wsman.Client).%New()
+	s client.Location="http://"_system_":"_port_"/csp/sys/SYS.WSMon.wsman.Service.cls"
+	s client.Timeout=10
+	s class=$case(resource,
+			"system":"SYS.WSMon.wsSystem",
+			"database":"SYS.WSMon.wsDatabase",
+			"global":"SYS.Stats.Global",
+			"buffer":"SYS.Stats.Buffer",
+			"disk":"SYS.Stats.Disk",
+			"ecpapp":"SYS.Stats.ECPAppSvr",
+			"ecpsvr":"SYS.Stats.ECPDataSvr",
+			"routine":"SYS.Stats.Routine",
+			"wd":"SYS.Stats.WriteDaemon",
+			"resource":"SYS.Stats.Resource",
+			"event":"SYS.WSMon.wsEvent",
+			:"")
+	i class="" w "Unknown resource ",resource q 0
+	;
+	s client.Resource="http://intersystems.com/cache/wsman/1/resource/"_class
+	;
+	if action="get" {
+		; this works for 'database' and 'wd', shouldn't be a selector otherwise
+		if $g(selector)]"" d client.Selector.SetAt(selector,"ID")
+		s ref=client.TransferGet()
+		i ref]"" d $System.OBJ.Dump(ref)
+		q 1
+	}
+	if action="enum" {
+		s enum=##class(SYS.WSMon.wsen.Enumerate).%New()
+		s enum.Expires=""
+		s client.RequestTotalItemsCountEstimate=1
+		s ref=client.Enumerate(enum)
+		i ref]"" d $System.OBJ.Dump(ref)
+		q ref.EnumerationContext
+	}
+	if action="pull" {
+		s pull=##class(SYS.WSMon.wsen.Pull).%New()
+		s pull.EnumerationContext=+selector
+		s pull.MaxElements=$p(selector,":",2)
+		s ref=client.Pull(pull)
+		i ref]"" d $System.OBJ.Dump(ref)
+		q ref.EnumerationContext
+	}
+	if action="release" {
+		s rel=##class(SYS.WSMon.wsen.Release).%New()
+		s rel.EnumerationContext=+selector
+		s ref=client.Release(rel)
+		i ref]"" d $System.OBJ.Dump(ref)
+		q ref.EnumerationContext
+	}
+	if action="enum+" {
+		s enum=##class(SYS.WSMon.wsen.Enumerate).%New()
+		s enum.Expires=""
+		s enum.OptimizeEnumeration=$c(0)
+		s enum.MaxElements=$p(selector,":",2)
+		s ref=client.Enumerate(enum)
+		i ref]"" d $System.OBJ.Dump(ref)
+		q ref.EnumerationContext
+	}
+	if action="subscribe" {
+		s sub=##class(SYS.WSMon.wse.Subscribe).%New()
+		s sub.Expires=$c(0)
+		s notify=##class(SYS.WSMon.wse.EndpointReference).%New()
+		; send to TcpTrace for now
+		s notify.Address="http://"_$zu(110)_":8080/csp/sys/SYS.WSMon.wsman.Service.cls"
+		; build an Identifier for the ReferenceProperties
+		s xmlns=##class(%XML.Namespaces).%New()
+		s sc=xmlns.AddNamespace("http://www.intersystems.com/cache/wsmon/1/xsd","wsmon")
+		s id=##class(%SOAP.IdHeader).%New(),sc=id.GetId()
+		s myrefprop=##class(SYS.WSMon.wse.MyRefProp).%New(),myrefprop.value=id.Id
+		s sc=myrefprop.XMLExportToString(.refprop,"","",xmlns)
+		s notify.ReferenceProperties=refprop
+		s deliver=##class(SYS.WSMon.wse.Delivery).%New()
+		s deliver.NotifyTo=notify
+		s sub.Delivery=deliver
+		s ref=client.Subscribe(sub)
+		i ref]"" d $System.OBJ.Dump(ref)
+		zw ^CacheTemp.WSMonSubscriber
+		q 1
+	}
+	if action="unsubscribe" {
+		; 'selector' is ID of subscription in ^CacheTemp.WSMonSubscriber(ID)
+		s client.Identifier=$g(^CacheTemp.WSMonSubscriber(selector,"Identifier"))
+		s sub=##class(SYS.WSMon.wse.Unsubscribe).%New()
+		s ref=client.Unsubscribe(sub)
+		i ref]"" d $System.OBJ.Dump(ref)
+		zw ^CacheTemp.WSMonSubscriber
+		q 1
+	}
+	if action="renew" {
+		; 'selector' is ID of subscription in ^CacheTemp.WSMonSubscriber(ID)
+		s client.Identifier=$g(^CacheTemp.WSMonSubscriber(selector,"Identifier"))
+		s sub=##class(SYS.WSMon.wse.Renew).%New()
+		s sub.Expires="2004-06-26T12:00:00.000-00:00"
+		s ref=client.Renew(sub)
+		i ref]"" d $System.OBJ.Dump(ref)
+		zw ^CacheTemp.WSMonSubscriber
+		q 1
+	}
+	if action="notify" {
+		; Build object to send
+		s event=##class(SYS.WSMon.wsEvent).%New()
+		s event.System=$zu(110),event.Instance=$p($zu(86),"*",2)
+		s event.Name="cacheTest",event.Severity=3
+		s event.SnmpId=1,event.AdditionalInfo="This is a test"
+		;
+		s location=$g(^CacheTemp.WSMonSubscriber(selector))
+		i location="" w !,"Subscription ",selector," not found." q 1
+		w !,"Send to ",location
+		s client.Location=location
+		s client.ReferenceProperties=$g(^CacheTemp.WSMonSubscriber(selector,"RefProp"))
+		d client.Notification(event)
+		zw ^CacheTemp.WSMonEvent
+		q 1
+	}
+	;
+	w !,"Unknown action ",action
+	q 0
+}

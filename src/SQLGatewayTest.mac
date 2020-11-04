@@ -1,0 +1,59 @@
+ROUTINE SQLGatewayTest
+#include %systemInclude
+SQLGatewayTest ; A test for Cache SQL Gateway:
+ ;			; connects to the SAMPLES namespace and processes 
+ ;			; the SELECT * FROM SAMPLE.PERSON statement 
+ ;			; fetching 10 rows from the result set
+ ;
+ n
+ set dsn=$s($zv["Windows":$n(^["%SYS"]NET("2",""))_" Samples",1:"samples"),usr="",pwd=""
+ ;
+ set $zt="err" 
+ ;
+ Set gc=##class(%Library.SQLGatewayConnection).%New() If gc="" Do $system.Status.DisplayError($$$ERROR($$$GeneralError,"Can not create %SQLGatewayConnection.")) quit
+ s gc.LegacyMode=1
+ ;
+ set $zt="err1"
+ ;												
+ ; Allocate a connection handle to the SAMPLES namespace
+ set sc=gc.Connect(dsn,usr,pwd,0) If ('sc) Do $system.Status.DisplayError(sc)
+ if gc.ConnectionHandle="" { write !,"Connection failed !!!" w ! quit}
+ write !,"Connection successful"
+ ;
+ set $zt=""
+ ;
+ ; Allocate a statement handle for the connection specified by gc.ConnectionHandle
+ set hstmt="",sc=gc.AllocateStatement(.hstmt) If ('sc) Do $system.Status.DisplayError(sc)
+ if hstmt="" { write !,"Statement handle allocation failed" set sc=gc.Disconnect() w ! quit}
+ ;
+ ; Prepare and execute SELECT * FROM SAMPLE.PERSON statement
+ set sql="SELECT * FROM SAMPLE.PERSON" w !!,sql
+ ;
+ s sc=gc.Prepare(hstmt,sql) If ('sc)  {Do $system.Status.DisplayError(sc) w !,"Prepare failed" set sc=gc.Disconnect() w ! quit}
+ s sc=gc.Execute(hstmt) If ('sc)  {Do $system.Status.DisplayError(sc) w !,"Execute failed" set sc=gc.Disconnect() w ! quit}
+ ;
+ ; Fetch 10 rows from the result set
+ set clist="",sc=gc.DescribeColumns(hstmt,.clist) ; returns a list clist of a result set columns' information 
+ If ('sc) {Do $system.Status.DisplayError(sc) w !,"DescribeColumns failed" set sc=gc.Disconnect() w ! quit}
+ ;
+ set rlist="",sc=gc.FetchRows(hstmt,.rlist,10)  ; returns rlist - a list of rows
+ ;										; if there is no data (SQLCODE =100) 
+ ;										; fetching is assumed to be successful
+ If ('sc) {Do $system.Status.DisplayError(sc) w !,"Fetch Rows failed" set sc=gc.Disconnect() w ! quit}
+ ; 
+ ; Print the result set
+ Set cc=$ll(clist) w !!,"   "
+ For i=2:1:cc Write $lg($lg(clist,i),1)," "
+ Write !
+ s n1=$ll(rlist) i n1>0 f i1=1:1:n1 { w "   " s n2=$ll($lg(rlist,i1)) i n2>0 f j=1:1:n2 {w $lg($lg(rlist,i1),j)," "} Write ! }
+ ; 
+ ; Close Cursor and Disconnect
+ s sc=gc.CloseCursor(hstmt) If ('sc) { Do $system.Status.DisplayError(sc) w !,"Close Cursor failed"}
+ set sc=gc.Disconnect() 
+ quit
+err2 
+ w !,$ze set sc=gc.Disconnect() quit
+err1 
+ w !,$ze quit
+err 
+ w !,$ze quit

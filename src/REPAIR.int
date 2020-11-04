@@ -1,0 +1,1212 @@
+ROUTINE REPAIR [Type=INT]
+REPAIR ;REPAIR/EXAMINE PROGRAM FOR DATABASE DEGRADATION ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/diagnostic/repair.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ; GXLATE.INC DPB125 06/04/93
+ i '$zbitget($zversion(0),21) g ^REPAIROLD
+ n DIRNAM,%BLKSIZ,%UIC,%FILSIZ,%EXP,%MAX,%GD,%GP,%GG,%RD,%RG,%TOTVOL,%BIG,%MAPBLOCKS
+ n %CURBLKS,%MAPSZ,%CURMAPS,%FREEZE,rc,addoff,REPVAL,REPAIR,REPPRINT,REPCCC
+ n REPLEN,REPPAD,REPSUB,REPBIG,REPINFO,OFF,TYPE,LINK,BLK,A,N,X,NUMNODES
+ n delerr,mtemp1,D,Z,F,L,S,Y,I,C,B,return,cod,i,DFIRST,DLAST,DEND,GD
+ n msglist,%A,G,VAL,colrule,encG,curkeep,typeval,ans,pi
+ New BIGCOUNT,BLINCVER,COLLATE,FREECOUNT,GARTREE,LEFT,LNEXTPNTREF,RIGHT,PNTLEN,NEXTPNTLEN,NEXTPNTREF,NEXTPNTVAL,NEXTPNTOFF,allocblk,blocktab,curlev,gloname,levels,link,mapblk,method,modblk,modtab,mtemp1,newblock,oldBLK,top,upblock,LA,PNTREF,POP,UA,already,dodump,domore,mapblknum,op,restoreBLK,tab,updatearray,%UTILITY
+ New blk,blocks,dirblk,found,lev,levels,thisblk,treestr
+ New bytes,domodify,numn,modok ;JO2166
+ New oldPNTREF,oldREPVAL
+ new remote,SYS,DIR,SYSNUM,sfn,%DATABIG,%PTRBIG,%DATA
+ s %DATA=1
+ G A
+ECP ;Entry point to work with Client Side ECP cache
+ w !,"***ECP Client Cache Block Repair/Examine***",!!
+ s remote=1
+ g ASK
+A W !,"***Block Repair/Examine Program***",!!
+ Set $Ztrap="badError"
+ASK ;
+ s remote=+$G(remote)
+ i remote {
+	 s sfn=##class(SYS.ECP).AskUserForRemoteDir()
+ 	 i 'sfn s DIRNAM="" q  ;sfn #0 means they didn't make a choice
+ 	 s DIRNAM=##class(SYS.ECP).StorageDBName()
+	 s rc=$$SetDatabaseVariables^%SYS.DATABASE(DIRNAM,.%BLKSIZ,.%UIC,.%FILSIZ,.%EXP,.%MAX,.%GD,.%GP,.%GG,.%RD,.%RG,.%TOTVOL,.%BIG,.%CURBLKS,.%MAPSZ,.%CURMAPS,.%FREEZE)
+	 s %PTRBIG=%BIG 	 
+	 s rc=$$SetDatabaseVariables^%SYS.DATABASE(+sfn,.%BLKSIZ,.%UIC,.%FILSIZ,.%EXP,.%MAX,.%GD,.%GP,.%GG,.%RD,.%RG,.%TOTVOL,.%BIG,.%CURBLKS,.%MAPSZ,.%CURMAPS,.%FREEZE)
+	 s %DATABIG=%BIG
+	 s %BIG=%PTRBIG
+ } else {
+	 d ASK^%SYS.FILE
+	 q:DIRNAM=""
+	 s rc=$$SetDatabaseVariables^%SYS.DATABASE(DIRNAM,.%BLKSIZ,.%UIC,.%FILSIZ,.%EXP,.%MAX,.%GD,.%GP,.%GG,.%RD,.%RG,.%TOTVOL,.%BIG,.%CURBLKS,.%MAPSZ,.%CURMAPS,.%FREEZE)
+ }
+ quit:DIRNAM=""
+ i ('rc) d ShowMessage(rc,0) g ASK
+ i '%BIG o 63:"^^"_DIRNAM s GD=%GD g A1^REPAIROLD
+A1 W !,"Global Directory Block: ",%GD
+ W !
+ if ('remote) {  ;JO1564+
+    Set rc=$$GetMapBlocks^DMREPAIR(DIRNAM,.%MAPBLOCKS)
+    If ('rc) d ShowMessage(rc,0) Quit  
+    Write !,"Map Blocks: "
+    Set mapblk="" For  Set mapblk=$Order(%MAPBLOCKS(mapblk)) Quit:mapblk=""  Write mapblk," "
+ }               ;JO1564-
+A2 ;JO1564
+ S LINK=0,BLK=0 W ! D menuREAD I 'BLK C 63 Q
+B Write !,"Block Repair Function "_$Case(BLK,0:"",:"(Current Block "_BLK_"): ") 
+ Read F
+ If 'remote {
+    If F>%CURBLKS {
+	    s rc=$$SetDatabaseVariables^%SYS.DATABASE(DIRNAM,.%BLKSIZ,.%UIC,.%FILSIZ,.%EXP,.%MAX,.%GD,.%GP,.%GG,.%RD,.%RG,.%TOTVOL,.%BIG,.%CURBLKS,.%MAPSZ,.%CURMAPS,.%FREEZE)
+	    If F>%CURBLKS Write !,"Block number too high",! Goto B
+    }
+    If F<0!(F[".") Write !,"Not a block number",! Goto B
+ }
+ If F="" Goto B
+ If F>12 Set BLK=F Do R3 Goto B
+ Set ans=$zcvt(F,"U")
+ If ans="LEFT" || (ans="PREV" || (ans="PREVIOUS")) {
+    If $$doLeft(BLK) { Do R3 } Goto B
+ }
+ If ans="LINK" || (ans="RIGHT" || (ans="NEXT")) {
+    If $$doRight() { Do R3 } Goto B
+ }
+ If ans="UP" {
+    If $$doUp(BLK) { Do R3 } Goto B
+ }
+ I F>0,F<13 S A=$T(FUN+F) W " ",$P(A,";;",2),! D @$P(A,";;",3) G B 
+ I F="?" W ! DO  W ! G B
+ . F I=1:1:12 S A=$T(FUN+I) W $J(I,6),")  ",$P(A,";;",2),!
+ S F=$$UC(F)
+ F I=1:1:12 S LA=$T(FUN+I) S UA=$$UC(LA) I $E($P(UA,";;",2),1,$L(F))=F W $E($P(LA,";;",2),$L(F)+1,99),! D @$P(LA,";;",3) G B
+ W " ???" G B
+doLeft(block) [BLK,DIRNAM] PRIVATE
+{
+ If '$Get(block) Write !,"No Current Block",! Quit 0
+ Write !,"Searching for block to the left of ",block," ...",!
+ Set rc=$$FindLeftBlock^DMREPAIR(DIRNAM,block,.LEFT)
+ If ('rc) { Do ShowMessage(rc,0) Quit 0 }
+ ElseIf LEFT { Write !,"Left Block is ",LEFT Set BLK=LEFT Quit 1 }
+ Else { Write !,"No left block",! Quit 0 }
+}
+doRight() [BLK,LINK] PRIVATE
+{
+ If LINK { Set BLK=LINK Quit 1 }
+ Else { Write !,"No link block",! Quit 0 }
+ Quit  
+}
+doUp(block) [DIRNAM,BLK] PRIVATE
+{
+ If '$Get(block) Write !,"No Current Block",! Quit 0
+ Set rc=$$FindPointerBlock^DMREPAIR(DIRNAM,block,.upblock)
+ If ('rc) { d ShowMessage(rc,0) Quit 0 }
+ ElseIf upblock { Write !,"Pointer block is ",upblock Set BLK=upblock Quit 1 }
+ Else { Write !,"No upper block",! Quit 0 }
+}
+FUN ; ;
+ ;;Read Block;;READ
+ ;;Display Current Block;;DISPLAY
+ ;;Alternate Display of Current Block using --more--;;moreDISPLAY
+ ;;Edit Current Block;;EDIT
+ ;;Write Current Block to Disk;;WRITE
+ ;;Internal Detail of Current Block;;dumpDISPLAY
+ ;;Saved Block Restore;;RESTORE
+ ;;Block Dump;;dumpBLOCK
+ ;;Pointer Tree;;TREE
+ ;;Node Dump;;dumpNODE
+ ;;Help;;HELP
+ ;;Quit REPAIR;;quitREPAIR
+TREE
+ If TYPE=$Case(%BIG,0:170,:16) w !,"Not applicable to map blocks" Quit
+ If TYPE=9 {
+    Open 63:"^^"_DIRNAM Set dirblk=%GD
+    Write !,"This is a directory block: "_%GD
+    For  View dirblk Do  Set dirblk=$v($Zutil(40,32,4),0,4) Quit:'dirblk  Write " => "_dirblk
+    . For i=1:1 Set blk=$View(i*2,-5) Quit:blk=""  If blk=BLK Set found=dirblk Quit  
+ Quit  
+ }
+ Set rc=$$FindGlobalLevels^DMREPAIR(DIRNAM,BLK,,,.curlev)
+ If ('rc) Do ShowMessage(rc,0) Quit
+ Write !,curlev," level"_$Case(curlev,1:"",:"s")
+ Set (treestr,thisblk)=BLK
+ For lev=1:1:curlev-1 {
+    Set rc=$$FindPointerBlock^DMREPAIR(DIRNAM,thisblk,.upblock)
+    If ('rc) d ShowMessage(rc,0) Quit
+    If 'upblock Quit
+    Else  Set treestr=upblock_" => "_treestr
+    Set thisblk=upblock
+ }
+ ;Now find out which global directory block points here.
+ Set found=0
+ Open 63:"^^"_DIRNAM Set dirblk=%GD
+ For  View dirblk Do  Quit:found  Set dirblk=$v($Zutil(40,32,4),0,4) Quit:'dirblk
+ . For i=1:1 Set blk=$View(i*2,-5) Quit:blk=""  If blk=thisblk Set found=1 Quit  
+ If 'found Write !,"Cannot find global directory block"
+ Else  Set treestr="Directory block: "_dirblk_" => "_treestr
+ Write !,treestr,!
+ Quit
+HELP 
+ Write !,"Navigation Options:"
+ Write !,"-If you enter a number greater than 12 REPAIR will read that block."
+ Write !,"-If you enter ""left"" or ""previous"" REPAIR will read the block that precedes"
+ Write !," the current block." ;if there is one."
+ Write !,"-If you enter ""link"" or ""right"" or ""next"" REPAIR will read the link block."
+ Write !,"-If you enter ""up"" REPAIR will read the pointer block that points"
+ Write !," to the current block."
+ Write !,"-At the Read Block prompt you can enter any block number or"
+ Write !," any of the above options.",!
+ Quit  
+quitREPAIR ZQuit  
+ Quit   
+dumpBLOCK
+ Write !,"Calling ^BLKDUMP"
+ Do INT^BLKDUMP(DIRNAM,BLK) Quit   
+displayBLOCK
+ Write !,"Calling ^BITMAPSCAN"
+ Do INT^BITMAPSCAN(DIRNAM,BLK) Quit   
+RESTORE 
+ Set restoreBLK=$Order(^REPAIR("restore",$Zutil(12,DIRNAM),""))
+ Open 63:"^^"_DIRNAM
+ While restoreBLK'="" {
+    Write !,"Restore block ",restoreBLK," ? " Read ans
+    If $TR(ans,"yn","YN")'?1"Y".E { W " Not restored",! }
+    Else {
+       View restoreBLK 
+       View 0:0:-%BLKSIZ:^REPAIR("restore",$Zutil(12,DIRNAM),restoreBLK)
+       View -restoreBLK
+       Write "Block ",restoreBLK," written",!
+    }
+    Set restoreBLK=$Order(^REPAIR("restore",$Zutil(12,DIRNAM),restoreBLK))
+ }
+ Close 63 Quit  
+moreDISPLAY set domore=1 Goto DISPLAY
+dumpDISPLAY Set dodump=1 Goto DISPLAY
+menuREAD Write "Entering Block Repair Menu",!
+	s oldBLK=BLK
+READ Kill modtab R "Block #: ",A 
+ s BLK=oldBLK
+ If $zcvt(A,"U")="Q" Quit
+ If 'remote {
+    If A>%CURBLKS {
+	    s rc=$$SetDatabaseVariables^%SYS.DATABASE(DIRNAM,.%BLKSIZ,.%UIC,.%FILSIZ,.%EXP,.%MAX,.%GD,.%GP,.%GG,.%RD,.%RG,.%TOTVOL,.%BIG,.%CURBLKS,.%MAPSZ,.%CURMAPS,.%FREEZE)
+	    If A>%CURBLKS Write !,"Block number too high",! Goto READ
+    }
+    If A<0 || (A["." && ($e(A)'="^")) Write !,"Not a block number",! Goto READ
+ }
+ If A="" {
+    Write ! Goto READ
+ } else {
+    Set BLK=A
+    Set oldBLK=BLK
+ }
+ Set ans=$zcvt(A,"U")
+ If ans="LEFT" || (ans="PREV" || (ans="PREVIOUS")) {
+    If $$doLeft(BLK) { Goto R3 } Else { Goto READ }
+ }
+ If ans="LINK" || (ans="RIGHT" || (ans="NEXT")) {
+    If $$doRight() { Goto R3 } Else { Goto READ }
+ }
+ If ans="UP" {
+    If $$doUp(BLK) { Goto R3 } Else { Goto READ }
+ }
+ I A?1"L".E,LINK W "  Link Block ",LINK,! S BLK=LINK
+ n NSPNAM s NSPNAM="^^"_DIRNAM
+ G R3:A'?1"^".E
+ If A?1"^[".E || (A?1"^|".E) Write !,"This requires a simple global name with no extended namespace syntax",! Goto READ
+ Set gloname=A,A="^["""_NSPNAM_"""]"_$E(A,2,*)
+ S $ZT="READERR"
+ I '$D(@A) W " ??? does not exist",! G READ
+R2 Set rc=$$GetGlobalPointers^%SYS.DATABASE(DIRNAM,gloname,.top,.BLK)
+ If ('rc) Do ShowMessage(rc,0) Goto READ
+  W !,"DATA BLOCK = ",BLK,"  TOP POINTER BLOCK = ",top,!
+R3 I 'BLK W " ???",! G READ
+ Kill modtab
+ if (remote) {
+   s %BIG=%PTRBIG,%DATA=0
+   if ("Dd"[$E(BLK,$L(BLK))) {
+	   Open 63:"#"_sfn 
+	   View BLK 
+	   s %BIG=%DATABIG,%DATA=1
+   } else {
+ 	   s $ETRAP="Open 63:""#""_sfn View BLK s %BIG=%DATABIG,%DATA=1" 
+  	   Open 63:"^^"_DIRNAM View BLK
+  	   s $ETRAP=""
+   }
+ } else {
+    Open 63:"^^"_DIRNAM View BLK
+ }
+ Set TYPE=$$GetBlockTypeFromViewBuffer^DMREPAIR(%BIG)
+ i 'TYPE&remote {
+   Open 63:"#"_sfn View BLK s %BIG=%DATABIG,%DATA=1
+   Set TYPE=$$GetBlockTypeFromViewBuffer^DMREPAIR(%BIG)
+ }
+ If TYPE=24 Write "Big string block",! Do INT^BLKDUMP(DIRNAM,BLK) Goto READ
+ If 'remote,$Data(%MAPBLOCKS(BLK)) {
+    Set rc=$$ParseMapBlock^DMREPAIR(DIRNAM,BLK,.FREECOUNT)
+    i ('rc) d ShowMessage(rc,0) Set BLK=0 Goto READ
+    Goto DISPLAY
+ }
+ k OFF,REPVAL,REPAIR,REPPRINT,REPCC,REPLEN,REPPAD,REPSUB,REPBIG,REPINFO
+ Set $Ztrap="badError"
+ i ('remote)!('%DATA) {
+    s rc=$$ParseRepairViewBuf^DMREPAIR(DIRNAM,.OFF,.REPAIR,.REPPRINT,.REPVAL,.REPCCC,.REPLEN,.REPPAD,.REPSUB,.REPBIG,.REPINFO,.N,.TYPE,.LINK,.BIGCOUNT,.PNTLEN,.NEXTPNTLEN,.NEXTPNTVAL,.NEXTPNTOFF,.PNTREF,.NEXTPNTREF,.BLINCVER,.COLLATE,.GARTREE)
+ } else {
+	i remote,%DATA,'%BIG {
+		s x=$$GET2KARRAY()
+		i 'x w !,*7,"Error parsing 2KB remote data block " g READ
+		d DISPLAY2K
+		g READ
+	} else {
+       s rc=$$ParseRepairViewBuf^DMREPAIR(sfn,.OFF,.REPAIR,.REPPRINT,.REPVAL,.REPCCC,.REPLEN,.REPPAD,.REPSUB,.REPBIG,.REPINFO,.N,.TYPE,.LINK,.BIGCOUNT,.PNTLEN,.NEXTPNTLEN,.NEXTPNTVAL,.NEXTPNTOFF,.PNTREF,.NEXTPNTREF,.BLINCVER,.COLLATE,.GARTREE)
+	}
+ }
+ i ('rc) d ShowMessage(rc,0) If ($listget($listget($extract(rc,3,*)),1,0)=195) || ($Get(N)<1) || ((TYPE=$Case(%BIG,0:170,:16)) && ('$Data(%MAPBLOCKS(BLK)))) Set BLK=0 Goto READ
+DISPLAY If 'BLK Write !,"No block number, please pick a block" Quit  
+ W !,"Block # ",BLK,?25,"Type: ",TYPE
+ w $case(TYPE,2:" POINTER",6:" BOTTOM POINTER",8:" DATA",9:" GLOBAL DIR",24:" BIGDATA",66:" TOP POINTER",70:" TOP/BOTTOM POINTER",16:" MAP BLOCK",13:" SECURITY BLK")
+ If $Get(GARTREE) {
+    k X
+    Set rc=$$IsBlockAllocated^DMREPAIR(DIRNAM,BLK,.ans,.X)
+    If ('rc) { Do ShowMessage(rc,0) }
+    Else {
+       Write !,?25,"(In garbage tree ",$Case(ans,1:"but is",:"and not")," allocated in map block ",X,")"
+    }
+ }
+ If $Data(%MAPBLOCKS(BLK)) {
+    Write !,"Free Count: ",FREECOUNT
+    Write !,"First block: ",%MAPBLOCKS(BLK,1)
+    Write !,"Last block: ",%MAPBLOCKS(BLK,2)
+	If $Case($$YN("Do ^BITMAPSCAN","N"),"Y":1,:0) Do INT^BITMAPSCAN(DIRNAM,BLK) Quit
+    Quit  
+ }
+ Else { W !,"Link Block: ",LINK,?25,"Offset: ",OFF,!,"Count of Nodes: ",N w:TYPE'=9 ?25,"Collate: ",$G(COLLATE) }
+ If (TYPE=8)!(TYPE=9) {  ;JO2150
+    If '$Data(BIGCOUNT) {
+       Write !,"Cannot display this block because you have changed the type."
+       Write !,"Please restart REPAIR to display this block"
+       Quit  
+    }
+    If TYPE=8 Write ?48
+    Else  Write ?25
+    Write ?25,"Big String Nodes: ",BIGCOUNT
+    Write !,"Pointer Length:",PNTLEN,?25,"Next Pointer Length:",NEXTPNTLEN
+    Write ?48," Diff Byte:Hex ",$zh(NEXTPNTVAL)
+    Write !,"Pointer Reference:      ",$$clean(PNTREF("printable")) If $Get(dodump) zzdump PNTREF("internal")
+    Write !,"Next Pointer Reference: ",$$clean(NEXTPNTREF("printable")) If $Get(dodump) zzdump NEXTPNTREF("internal")
+    If +NEXTPNTOFF = -1 {
+       Write !,"Next Pointer Reference stored at end does not match!"
+       If $Get(dodump) Write !,"Stored reference:" zzdump $Piece(NEXTPNTOFF,",",2)
+    } Else {
+       Write !,"Next pointer stored? ",$Case(NEXTPNTOFF,1:"Yes",:"No"),!
+    }
+ } Else {
+    If N>1 {
+       If $Data(REPPRINT(1)) Write !,"First Node: ",$$clean(REPPRINT(1))
+       If $Data(REPPRINT(N)) Write !,"Last Node:  ",$$clean(REPPRINT(N))
+    }
+ }
+ Read !!,"--more--",ans w ! If $zcvt(ans,"U")="Q" Quit
+ W !,"#",?5,"Node",?29
+ w $case(TYPE,8:"Data",24:"BIGDATA",9:"PTR,NEW GROWTH,COLL,TYPE,PROT",:"POINTER")
+ W ! F D=1:1:N W D D PRINT If ($Get(domore)||$Get(dodump)) && '(D#20) Read !,"--more--",ans w ! If $zcvt(ans,"U")="Q" Quit
+ Set (domore,dodump)=0 W ! Q
+PRINT Quit:'$Data(REPVAL(D))  S X=$G(REPVAL(D)) W ?5,$$clean($G(REPPRINT(D))),?28," "
+ If $Get(dodump) zzdump $Get(REPAIR(D)) Write !,?28," "
+ If TYPE=9 {For pi=1:1:5 {Write $Piece(X,",",pi)_$Case(pi,2:"        ",:"    ")} Write ! Quit }
+ I TYPE-8,TYPE-12,TYPE-24 D  W ! Q 
+ . w $p(X,",",2),$case($p(X,",",1),1:" *big",:"")
+ i $a(X)=8 w ! q  ;dummy first node, no data ; 6 for 2k blocks
+ I '$A(X) W $$clean($E(X,2,$Length(X))),! Q 
+ Else  If $Ascii(X)=6!($Ascii(X)=4) Do  Quit  ;unicode strings need $v(,-5)
+ . Open 63:"^^"_DIRNAM View BLK
+ . W $$clean($View(D*2,-5)),! Close 63
+ I $A(X)=1 Do  
+ . If $ZU(40,0,0) S Z=$A(X,2)*256+$A(X,3)*256+$A(X,4)*256+$A(X,5)
+ . Else  S Z=$A(X,5)*256+$A(X,4)*256+$A(X,3)*256+$A(X,2)
+ I  I Z>2147483647 S Z=Z-4294967296
+ I $A(X)=1 W Z," *",! Q
+ I $A(X)=3!($A(X)=5)!($A(X)=7) G PRINTBIG
+ I $A(X)=10 G PRINTDBL
+ G PRINT2:$A(X,$S($ZU(40,0,0):3,1:10))>127
+ S Z=0 If $ZU(40,0,0) F J=3:1:10 S Z=Z*256+$A(X,J)
+ Else  F J=10:-1:3 S Z=Z*256+$A(X,J)
+ ;
+PRINT1 S Y=$A(X,2) I Y<128,Y S Z=Z_"E+"_Y
+ I Y>127 S Y=256-Y S Z=Z_"E-"_Y
+ W Z," **",! Q
+PRINT2 If $ZU(40,0,0) F J=3:1:10 S A(J)=255-$A(X,13-J)
+ Else  F J=3:1:10 S A(J)=255-$A(X,J)
+ S A(3)=A(3)+1#256 F J=3:1:10 Q:A(J)  S A(J+1)=A(J+1)+1#256
+ S Z=0 F J=10:-1:3 S Z=Z*256+A(J)
+ S Z="-"_Z G PRINT1
+PRINTBIG S NUM=$p(X,",",2) ; X has 03,numblks,bytes in last block, block,block,...
+ S REM=$p(X,",",3)
+ S LEN=(NUM-1)*(%BLKSIZ-$zu(40,32,10))+REM
+ W "BIG: LEN ",LEN," BLKS: " 
+ i NUM+3'=$l(X,",") W "** BLOCK TOTAL MISMATCH **" Q
+ f Z=1:1:NUM w:Z>1 "," w $p(X,",",3+Z)
+ w ! Q
+PRINTDBL S Z=$E(X,2,*),Z=$ZDASCII($S($ZU(40,0,0):$RE(Z),1:Z)) W Z," ***",! Q
+clean(data)     ; Convert all control characters to $c(3)
+ s L=$l(data) q:'L ""
+ s return=data
+ f i=1:1:L s cod=$a(data,i) i cod<32!(cod>126&(cod<160)) s $e(return,i)=$c(3)
+ q return
+READERR S $ZT="" W !,$P($ZE,">")_">",! G READ
+badError Set $Ztrap="" Write $ZE Quit  
+mapEDIT ;
+ New func,option
+mapLoop Read !,"Map Edit Option: ",func Quit:func=""
+ If 'BLK Write !,"No block" Quit  
+ If func>0,func<7 Set option=$Text(FUNMAPEDIT+func) Write " ",$Piece(option,";;",2) Do @$Piece(option,";;",3) Goto mapLoop
+ If func="?" {
+    Write ! 
+    For func=1:1:6 {
+       Set option=$Text(FUNMAPEDIT+func)
+       Write ?5,func,")  ",$Piece(option,";;",2),!
+    }
+    Goto mapLoop
+ }
+ Set func=$$UC(func)
+ F I=1:1:6 S LA=$T(FUNMAPEDIT+I),UA=$$UC(LA) I $E($P(UA,";;",2),1,$L(func))=func W $E($P(LA,";;",2),$L(func)+1,99),! D @$P(LA,";;",3) Goto mapLoop
+ Write " ???" Goto mapLoop
+FUNMAPEDIT ; ;
+ ;;Change Free Count ;;changeFREECOUNT
+ ;;Allocate one Block ;;allocateBLOCK
+ ;;Free (Deallocate) one Block ;;deallocateBLOCK
+ ;;Dump Map Block ;;dumpBLOCK
+ ;;Display Map Block ;;displayBLOCK
+ ;;Allocate Entire Map ;;mapOUT
+changeFREECOUNT 
+ Write !,"Current free count in map block ",BLK," is ",FREECOUNT
+ Read !,"New free count? ",ans
+ If ans=FREECOUNT || ((ans\1)'=ans) Write !,"No change" Quit  
+ Set rc=$$ChangeFreeCount^DMREPAIR(DIRNAM,BLK,ans,0,.newblock)
+ i ('rc) d ShowMessage(rc,0)
+ Set FREECOUNT=ans
+ Write !,"Map block # "_BLK_" modified"
+ Write !,"Change will be written to disk if you choose"
+ Write !,"""5)  Write Current Block to Disk"" from the Block Repair menu."
+ Write !,"To retain this change you must write this block to disk before"
+ Write !," making additional edits to this block."
+ Set modtab(BLK)=newblock
+ Quit  
+allocateBLOCK
+deallocateBLOCK
+ ;Use number of Map Edit Option for Allocate
+ Set op=$S(func=2:1,$e(func)="A":1,1:0) 
+ Write !,"Block to "_$Case(op,1:"Allocate",:"Deallocate")_"? :"
+ Read allocblk
+ Write !,$Case(op,1:"Allocate",:"Deallocate")_" block "_allocblk_" in map? " Read ans
+ If $TR(ans,"yn","YN")?1"Y".E {
+    Set rc=$$IsBlockAllocated^DMREPAIR(DIRNAM,allocblk,.ans,BLK)
+    If ('rc) { Do ShowMessage(rc,0) Quit }
+    If ans,op=1 Write !,"Block ",allocblk," is already allocated" Quit  
+    If 'ans,'op Write !,"Block ",allocblk," is already deallocated" Quit  
+    Set already=0
+    Set rc=$$AllocateBlockInMap^DMREPAIR(DIRNAM,allocblk,op,,,.newblock)
+    If ('rc) { Do ShowMessage(rc,0) Quit }
+    Write !,"Map block # "_BLK_" modified"
+    Write !,"Change will be written to disk if you choose"
+    Write !,"""5)  Write Current Block to Disk"" from the Block Repair menu."
+    Write !,"To retain this change you must write this block to disk before"
+    Write !," making additional edits to this block."
+    Set modtab(BLK)=newblock
+ }
+ Quit  
+mapOUT
+ Set rc=$$MapOut^DMREPAIR(DIRNAM,BLK,,.newblock)
+ If ('rc) { Do ShowMessage(rc,0) Quit }
+ Write !,"Map block # "_BLK_" modified"
+ Write !,"Change will be written to disk if you choose"
+ Write !,"""5)  Write Current Block to Disk"" from the Block Repair menu."
+ Write !,"To retain this change you must write this block to disk before"
+ Write !," making additional edits to this block."
+ Set modtab(BLK)=newblock
+ Quit  
+EDIT ;
+ i remote w !,"Cannot EDIT blocks from the ECP client cache." q
+ If TYPE=$Case(%BIG,0:170,:16) Goto mapEDIT
+BB R !,"Edit Option: ",F Q:F=""
+ If 'BLK Write !,"No block" Quit
+ ; Options 10,11,12 and 14 are only for Data & Global Directory blocks
+ If (TYPE'=9 && (F=7 || ($zcvt(F,"U")="K"))) || 
+    ((TYPE'=8) && (TYPE'=9) && ((F=10)!(F=11)!(F=12)!(F=14))) {  ;JO2150
+    Write " Not applicable for this block type" Goto BB
+ } Else {
+    I F>0,F<15 S A=$T(FUNEDIT+F) W " ",$P(A,";;",2),! D @$P(A,";;",3) G BB
+ }
+ I F="?" {
+    W ! F I=1:1:14 S A=$T(FUNEDIT+I) W $J(I,6),")  ",$P(A,";;",2),!
+    Goto BB
+ }
+ S F=$$UC(F)
+ F I=1:1:14 S LA=$T(FUNEDIT+I) S UA=$$UC(LA) I $E($P(UA,";;",2),1,$L(F))=F W $E($P(LA,";;",2),$L(F)+1,99),! D @$P(LA,";;",3) G BB
+ W " ???" G BB
+FUNEDIT ; ;
+ ;;Delete Node ;;DENODE
+ ;;Insert Node ;;INNODE
+ ;;Value (Data or Down pointer) - Change ;;VALUE
+ ;;Link - Change ;;LINK
+ ;;Type - Change ;;TYPE
+ ;;Blincversion4 - Change ;;BLINCVERSION4
+ ;;Keep Flag - Change ;;KEEP
+ ;;Node Dump ;;dumpNODE
+ ;;Big string count - Change ;;BIGCOUNT
+ ;;Blpntlen4 - Change;;BLPNTLEN4
+ ;;Blnextpntlen4 - Change ;;BLNEXTPNTLEN4
+ ;;Blnextpntvalue4 - Change ;;BLNEXTPNTVALUE4
+ ;;Blnextpntoff - Change ;;BLNEXTPNTOFF
+ ;;Collation - Change ;;COLLATION
+dumpNODE
+ If TYPE=$Case(%BIG,0:170,:16) w !,"Not applicable to map blocks" Quit
+ Read "Dump Node #: ",i Q:'i
+ If i>N Write " ???",! Goto dumpNODE
+ Set numn=1
+ Do ASKSET("How many nodes to show? ",.numn)
+ If numn="" Set numn=N
+ Else  If i+numn>N Set numn=N-i
+ Set dodump=$Case($$YN("Detailed display","N"),"Y":1,:0)
+ For D=i:1:i+numn {
+    Write !,D,?5,REPPRINT(D)
+    If dodump {
+       Write !,"Node Reference:" zzdump REPAIR(D)
+       Write !,"Node Value:"
+    }
+    Set bytes=0
+    If 'dodump {
+       If ($x+$l(REPPRINT(D))>80) { Write ! } ;Else { Write "     " }
+       Write "     "
+       Write REPVAL(D)
+    }
+    Else {
+       Do {
+          Do zzdumpmore^BLKDUMP($Extract(REPVAL(D),bytes+1,bytes+256),bytes+256)
+	  Set bytes=bytes+256
+	  If bytes<$Length(REPVAL(D)) {
+             Read !,"--more--",ans
+	     If $zcvt(ans,"U")="Q" Quit  
+	  }
+       } While bytes<$Length(REPVAL(D))
+    }
+ }
+ Quit  
+COLLATION Write "Change block header collation byte from ",COLLATE," to: " Read X
+ If X="" Write " ***No Change*** "
+ If X<0 Write " ???",! Goto COLLATION
+ Set COLLATE=X Quit  
+BLPNTLEN4 
+ Write "Change block header pointer length field from ",PNTLEN," to: " Read X
+ If X="" Write " ***No Change*** " Quit
+ If X<0 Write " ???",! Goto BLPNTLEN4
+ Set PNTLEN=X Quit  
+BLNEXTPNTLEN4
+ Write "Change block header next pointer length field from ",NEXTPNTLEN," to: " Read X
+ If X="" Write " ***No Change*** " Quit
+ If X<0 Write " ???",! Goto BLNEXTPNTLEN4
+ Set NEXTPNTLEN=X Quit  
+BLNEXTPNTVALUE4
+ Write "Change block header Discriminator byte from Decimal(",NEXTPNTVAL,") Hex(",$ZH(NEXTPNTVAL),") to Decimal: " Read X Write !,"Hex: ",$zh(+X)
+ If X="" || (X=NEXTPNTVAL) Write " ***No Change*** " Quit
+ If X<0 Write " ???",! Goto BLNEXTPNTVALUE4
+ Set NEXTPNTVAL=+X Quit  
+BLNEXTPNTOFF
+ Write "Change block header indicator of stored next pointer from ",NEXTPNTOFF," to: " Read X
+ If X="" Write " ***No Change*** " Quit
+ If X<0 || (X>1) Write " ???",! Goto BLNEXTPNTOFF
+ Set NEXTPNTOFF=X Quit  
+BLINCVERSION4
+ Write "Change block header incremental backup version from ",BLINCVER," to: " Read X
+ If X="" || (X=BLINCVER) Write " ***No Change*** " Quit
+ If X<0 Write " ???",! Goto BLINCVERSION4
+ Set BLINCVER=X Quit  
+BIGCOUNT
+ Write "REPAIR will correct the value for the big string count in this block if you"
+ Write !," choose ""Write Current Block to Disk"" from the Block Repair Function menu."
+ Quit  
+KEEP n D,X 
+ w ! r "Change keep type for Node: ",D  ; D because PRINT expects it
+ If D="" Write " ***No Change" Quit  
+ W ! D PRINT^REPAIR R "Is this the node? ",X
+ I $TR(X,"yn","YN")'?1"Y".E W " ***No Change" Q
+ s typeval=$p(REPVAL(D),",",4)
+ s curkeep=typeval#2 ;keep flag is bit 1 of type
+ w !,"Current keep type is ",$case(curkeep,1:"TRUE",:"FALSE")
+ w !,"Do you want to change it to ",$case(curkeep,0:"TRUE? ",:"FALSE? ") r X
+ I $TR(X,"yn","YN")'?1"Y".E W " ***No Change" Q
+ s $p(REPVAL(D),",",4)=typeval+$case(curkeep,1:-1,:1)
+ q  
+INNODE 
+ Write !,"To insert a node that you will enter manually, type ""E""."
+ Write !,"To insert a node specified in a global string, type ""G""."
+ Read !,"How will you specify the global reference? => E ",method
+ If method="" Set method="E"
+ Write !
+ If (method="?") || ($zcvt(method,"U")="HELP") {
+    Write !,"For example you can use the ""G"" method to enter control characters like this:",!
+    Write "Set ^foo(1)=""^THISGLOBAL(""_1_$c(4)_""sub""_"")"""
+    Write !,"Then enter ^foo(1) at this prompt",!
+    Goto INNODE
+ } ElseIf ($zcvt(method,"U")="E") {
+    Read "Insert Global Node: ^",G I G?1"^".E S G=$E(G,2,99)
+ } ElseIf $zcvt(method,"U")="G" {
+    Read "Global that contains the reference for the inserted node? ",glo
+    If $e(glo,1)'="^" Set glo="^"_glo
+    If '$Data(glo) Write !,glo," does not exist" Goto INNODE
+    Set G=@glo I G?1"^".E S G=$E(G,2,99)
+ } Else {
+   Write "???" Goto INNODE
+ }
+ Q:G=""  G IN10:TYPE=9 S X=$P(G,"(",1),B=$L(X)
+ I $D(REPPRINT(2)),$P($E(REPPRINT(2),2,99),"(")'=X DO  G INNODE
+ . W "** Must be same global **",!
+ I TYPE=8!(TYPE=12) R !,"Data Value (String only): ",VAL,!
+ E  Do  
+ . R !,"Down Pointer: ",VAL,!
+ . R !,"Does that block contain any big string nodes? ",ans
+ . If $TR(ans,"yn","YN")'?1"Y".E W " No big string nodes",! Set VAL="0,"_VAL
+ . Else  Set VAL="1,"_VAL
+ s colrule=$$GetCollationRuleInViewBuffer^DMREPAIR(DIRNAM,BLK)
+ If ('colrule) d ShowMessage(colrule,0) g INNODE 
+ Set colrule=$List($List($e(colrule,3,$Length(colrule))))
+ s encG=$$EncodeGlobalReference^DMREPAIR(G,colrule)
+ s rc=$$InsertNodeInRepairBlock^DMREPAIR(DIRNAM,BLK,G,encG,VAL,.N,.REPAIR,.REPPRINT,.REPVAL,.REPCCC,.REPLEN,.REPPAD,.REPSUB,.REPBIG,.REPINFO,.OFF,.D)
+ If +rc'=rc,rc d ShowMessage(rc,0)
+ If ('rc) d ShowMessage(rc,0) Goto INNODE
+ If D=1 && ($$YN("Modify associated blocks","N")="Y"){
+    Set updatearray("internal")=REPAIR(1),updatearray("printable")=REPPRINT(1)
+    Do gupdateFirst(DIRNAM,BLK,TYPE,.updatearray)
+ }
+ If D=N && (((TYPE=8 || (TYPE=9) || (TYPE=12) || (TYPE=24))) && LINK) && ($$YN("Modify associated blocks","N")="Y") Do gupdateLast(DIRNAM,BLK,LINK,REPAIR(N))
+ Use 0 Write ! g INNODE 
+IN10 I G'?1A.AN&(G'?1"%".AN)!($L(G)>32) DO  Q
+ . W " Incorrect syntax - No insertion",!
+INGET 
+ R !,"Pointer: ",VAL S VAL=+VAL
+ R !,"New growth area: ",A S VAL=VAL_","_+A
+ R !,"Collation type: ",A S VAL=VAL_","_+A
+ R !,"Global type (Decimal #): 0 => ",A S VAL=VAL_","_+A
+ R !,"Protection code (Decimal #): ",A S VAL=VAL_","_+A
+ Set rc=$$InsertNodeInRepairBlock^DMREPAIR(DIRNAM,BLK,G,G,VAL,.N,.REPAIR,.REPPRINT,.REPVAL,.REPCCC,.REPLEN,.REPPAD,.REPSUB,.REPBIG,.REPINFO,.OFF,.D)
+ If +rc'=rc,rc d ShowMessage(rc,0)
+ If ('rc) d ShowMessage(rc,0) Goto INNODE
+ Q
+DENODE R "Delete Node #: ",D Q:'D
+ If $Data(modtab("DELETE",D)) {
+    Write !,"To delete node ",D," you must write this block to disk before"
+    Write !," making additional edits to this block.",!
+    Goto DENODE
+ } Else { Set modtab("DELETE",D)="" }
+ S (DFIRST,DLAST)=D I D[":" {
+    If (TYPE=8 || (TYPE=9) || (TYPE=12) || (TYPE=24)) { S DFIRST=$P(D,":"),DLAST=$P(D,":",2) }
+    Else { Write !,"Cannot delete a range of pointer nodes",! Goto DENODE }
+ }
+ ;
+ I DFIRST<0!(DFIRST>N)!(DFIRST'?1N.N) W " ???",! G DENODE
+ I DLAST<0!(DLAST>N)!(DLAST'?1N.N)!(DLAST<DFIRST) W " ???",! G DENODE
+ Set rc=$$FindGlobalLevels^DMREPAIR(DIRNAM,BLK,.levels,.blocktab,.curlev)
+ s modok=1  ;tracks whether REPAIR can automatically update related blocks
+ If ('rc) {
+	 w !,"Error locating this block in the tree: " do ShowMessage(rc,0)
+	 w !,"  Repair will be unable to automatically update associated blocks"
+	 w !,"  which may be affected by this change. You may continue and modify"
+	 w !,"  any related blocks yourself."
+	 r !,"Do you want to continue? <Yes> ",resp
+	 w !
+	 if "Nn"[$E(resp_"X") Goto DENODE
+	 s modok=0
+ }
+ If modok,DFIRST=1 {
+	 For i=1:1:levels {
+	    if blocktab(i)=BLK {
+	       Write !,"  Repair cannot update related blocks when deleting the node at the"
+	       Write !,"  left edge of global tree. You may continue and modify any related"
+	       Write !,"  blocks yourself."
+	       r !,"Do you want to continue? <Yes> ",resp
+	  	   w !
+	       if "Nn"[$E(resp_"X") Goto DENODE
+	       s modok=0
+	       quit
+        }
+     }
+ }
+ W ! F D=DFIRST:1:DLAST D PRINT^REPAIR
+ ;
+ W $S(DFIRST=DLAST:"Is this the node",1:"Are these the nodes")
+ R " to be deleted? ",X
+ I $TR(X,"yn","YN")'?1"Y".E W " ***No Change",! G DENODE
+ For D=DLAST:-1:DFIRST {  
+    New prefix Set prefix=$Ascii(REPVAL(D))
+    If $Get(BIGCOUNT)=1 && (((prefix=3) || (prefix=5) || (prefix=7))) {
+       u 0 w !,REPPRINT(D)_" is the only long string in this block.",!,"If you delete this node you must change the pointer block."
+       Read !,"Do you want to continue? ",rc
+       If $TR(rc,"yn","YN")'?1"Y".E { Write " ***No Change",! g DENODE }
+       Read !,"Do you want REPAIR to change the pointer block? ",rc
+       If $TR(rc,"yn","YN")'?1"Y".E { Write " ***Not changing pointer block" }
+       Else {
+          Set rc=$$FindPointerBlock^DMREPAIR(DIRNAM,BLK,.upblock)
+          If ('rc) d ShowMessage(rc,0) Goto DENODE
+          Do gupdateBigStringPtr(DIRNAM,BLK,upblock)
+       }
+    }
+ }
+ If (TYPE=8 || (TYPE=9) || (TYPE=12) || (TYPE=24)) Set oldPNTREF=$Get(PNTREF("internal")) ;Save for gupdateFirst if necessary
+ Else  Set oldREPVAL=REPVAL(D)
+ F D=DLAST:-1:DFIRST d  
+ . s rc=$$DeleteNodeInRepairBlock^DMREPAIR(DIRNAM,BLK,D,.N,.REPAIR,.REPPRINT,.REPVAL,.REPCCC,.REPLEN,.REPPAD,.REPSUB,.REPBIG,.REPINFO,.OFF,.BIGCOUNT)
+ . If +rc'=rc,rc Do ShowMessage(rc,0) 
+ . i ('rc) Do ShowMessage(rc,0) Goto DENODE
+ . Set rc=$$WriteRepairBlock^DMREPAIR(.newblock,DIRNAM,BLK,TYPE,LINK,N,.REPAIR,.REPVAL,.REPCCC,.REPLEN,.REPPAD,.REPSUB,.REPBIG,.REPINFO,.PNTLEN,.NEXTPNTLEN,.NEXTPNTVAL,.NEXTPNTOFF,.BLINCVER,.COLLATE,$Get(NEXTPNTREF("internal")),.GARTREE)
+ . Set rc=$$ParseRepairBlock^DMREPAIR(DIRNAM,,newblock,.OFF,.REPAIR,.REPPRINT,.REPVAL,.REPCCC,.REPLEN,.REPPAD,.REPSUB,.REPBIG,.REPINFO,.N,.TYPE,.LINK,.BIGCOUNT,.PNTLEN,.NEXTPNTLEN,.NEXTPNTVAL,.NEXTPNTOFF,.PNTREF,.NEXTPNTREF,.BLINCVER,.COLLATE,.GARTREE)
+ Set modtab(BLK)=newblock Kill newblock
+ if 'modok {
+	 set domodify=0
+ } else {
+    If '(TYPE=8 || (TYPE=9) || (TYPE=12) || (TYPE=24)) {
+       Set domodify=$Case($$YN("Modify associated blocks","N"),"Y":1,:0)
+    } ElseIf (((D=1) && '((TYPE=9) && (BLK=3))) || (D=(N+1))) {  ;JO2438
+		Set domodify=$Case($$YN("Modify associated blocks","N"),"Y":1,:0)
+		If domodify {
+			If D=1 {
+				Set updatearray("internal")=REPAIR(1),updatearray("printable")=REPPRINT(1)
+				Do gupdateFirst(DIRNAM,BLK,TYPE,.updatearray)
+			} ElseIf LINK {
+				Do gupdateLast(DIRNAM,BLK,LINK,REPAIR(N))
+			}
+		}
+    } ;end if D=1 or N+1
+ }  ;JO2166
+ If '(TYPE=8 || (TYPE=9) || (TYPE=12) || (TYPE=24)) && domodify {
+    If D=1 {
+       Write !,"Searching for block to the left of ",BLK," ...",!
+       Set rc=$$FindLeftBlock^DMREPAIR(DIRNAM,BLK,.LEFT)
+       If ('rc) { Do ShowMessage(rc,0) Goto DENODE }
+       Open 63:"^^"_DIRNAM View LEFT
+       For i=2:2 If $View(i,-5)="" Quit  ;Find last node in left block
+       Set LEFT=$View(i-2,-5) Close 63
+    } Else { Set LEFT=$Piece(REPVAL(D-1),",",2) }
+    If D'>N { Set RIGHT=$Piece(REPVAL(D),",",2) }
+    Else {
+       If LINK {
+          Open 63:"^^"_DIRNAM View LINK
+          Set RIGHT=$View(2,-5) Close 63
+       } Else { Set RIGHT=0 }
+    }
+    Do gupdateDeletePointer(DIRNAM,BLK,TYPE,D,N,LEFT,RIGHT,$Piece(oldREPVAL,",",2))
+    Write !,"We have updated the blocks to support deleting this pointer."
+    If $Data(modtab(BLK)) {
+       Write !,"Parsing updated block ",BLK
+       s rc=$$ParseRepairBlock^DMREPAIR(DIRNAM,,modtab(BLK),.OFF,.REPAIR,.REPPRINT,.REPVAL,.REPCCC,.REPLEN,.REPPAD,.REPSUB,.REPBIG,.REPINFO,.N,.TYPE,.LINK,.BIGCOUNT,.PNTLEN,.NEXTPNTLEN,.NEXTPNTVAL,.NEXTPNTOFF,.PNTREF,.NEXTPNTREF,.BLINCVER,.COLLATE,.GARTREE)
+       If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+       Kill modtab(BLK)
+    }
+ } ;End if data block and do modify
+ u 0 w ! g DENODE
+VALUE W "Change ",$S(TYPE=8!(TYPE=24):"Data value",TYPE=9:"Value",1:"Pointer")
+ W " of node #: " R D Q:D=""  I D<1!(D>N)!(D'?1.N) W " ???",! G VALUE
+ W ! D PRINT^REPAIR R "Is this the node? ",X
+ I $TR(X,"yn","YN")'?1"Y".E W " ***No Change" Q
+ I TYPE=1 D INGET S REPVAL(D)=VAL Q  ; CHECK this out
+ I TYPE=9 D  Q
+ . W !,"Pointer ("_$p(REPVAL(D),",",1)_"): " R VAL S:VAL'="" $p(REPVAL(D),",",1)=+VAL
+ . W !,"New growth area ("_$p(REPVAL(D),",",2)_"): " R VAL S:VAL'="" $p(REPVAL(D),",",2)=+VAL
+ . W !,"Collation type ("_$p(REPVAL(D),",",3)_"): " R VAL S:VAL'="" $p(REPVAL(D),",",3)=+VAL
+ . W !,"Global type (Decimal #)("_$p(REPVAL(D),",",4)_"): " R VAL S:VAL'="" $p(REPVAL(D),",",4)=+VAL
+ . W !,"Protection code (Decimal #)("_$p(REPVAL(D),",",5)_"): " R VAL S:VAL'="" $p(REPVAL(D),",",5)=+VAL
+ W !,"NEW ",$S(TYPE=8!(TYPE=24):"Data value (string only)",1:"Pointer"),": " R X
+ New prefix Set prefix=$Ascii(REPVAL(D))
+ If ((prefix=3) || (prefix=5) || (prefix=7)) {
+    u 0 w !,REPPRINT(D)_" is a long string.",!,"If you change this value you must change the pointer block."
+    Read !,"Do you want to continue? ",rc
+    If $TR(rc,"yn","YN")'?1"Y".E Write " ***No Change" Quit
+ }
+ If '(TYPE=8 || (TYPE=9) || (TYPE=12) || (TYPE=24)) {
+    R !,"Does that block contain any big sring nodes? ",ans
+    If $TR(ans,"yn","YN")'?1"Y".E W " No big string nodes",! Set X="0,"_X
+    Else  Set X="1,"_X
+ }
+ s rc=$$ChangeValueInRepairBlock^DMREPAIR(DIRNAM,BLK,D,X,.REPAIR,.REPVAL,.REPCCC,.REPLEN,.REPPAD,.REPSUB,.REPBIG,.REPINFO,.OFF)
+ i ('rc) d ShowMessage(rc,0)
+ q  
+LINK W "Change link from ",LINK," to: " R X
+ I X="" W " ***No Change (Specify 0 to delete link)",! Q
+ I X<0 W " ???",! G LINK
+ Set LINK=X
+ If LINK && ($$YN("Modify associated blocks","N")="Y") Do gupdateLast(DIRNAM,BLK,LINK,REPAIR(N))
+ Quit  
+TYPE 
+ W "Change type from ",$$GetTypeName^DMREPAIR(TYPE)," to one of the following: ",!
+ F I=2,6,8,9,24,66,70 w ?10,I,?15,$$GetTypeName^DMREPAIR(I),!
+TYP1 R !,"New type: ",Z I Z="" W " ***No Change",! Q
+ s Y=$$GetTypeName^DMREPAIR(Z) i Y="" W " ??? Choose a # or press <RETURN>",! G TYP1
+ W " ",Y,!
+ If $Get(GARTREE) {
+    Write !,"The block type field indicates this block is in the garbage tree.",!
+    If $$YN("Do you want to retain this setting?","Y")="N" Set GARTREE=0
+ } Else {
+    Write !,"The block type field indicates this block is not in the garbage tree.",!
+    If $$YN("Do you want to retain this setting?","Y")="N" Set GARTREE=1
+ }
+ S X=TYPE,TYPE=Z W " ",Y,!
+ Write !,"If you make this change REPAIR will change the block immediately,"
+ Write !," as opposed to waiting until you choose the Write option. "
+ Write !,"If you have other edits in this block you should save those first"
+ Write !,"before making this change"
+ If $$YN("Do you want to make the change?","N")="Y" {
+    Open 63:"^^"_DIRNAM View BLK
+    If DIRNAM'=$Zutil(12) {
+       Write !,"Saving old block in ^REPAIR(""restore""",",","""",DIRNAM,"""",",",BLK,")"
+       Set ^REPAIR("restore",DIRNAM,BLK)=$View(0,0,-%BLKSIZ)
+    }
+    Write !,"Writing new block ",BLK,!
+    View $Zutil(40,32,1):0:1:TYPE
+    View -BLK
+    Quit
+ }
+ Close 63
+ Q  ; For now allow any type to be switched to any other type
+WRITE ;
+ i remote w !,"Cannot WRITE blocks from the ECP client cache." q
+ W !,"Writing modified block ",BLK,!
+okayWRITE R "Okay? Please answer yes or no: ",X,!
+ If ($zcvt(X,"U")'="YES"),($zcvt(X,"U")'="NO") Goto okayWRITE
+ If ($zcvt(X,"U")'="YES") W "***Not Written",! kill modtab Q 
+ Open 63:"^^"_DIRNAM View BLK
+ If DIRNAM'=$Zutil(12) {
+    Write "Saving old block in ^REPAIR(""restore""",",","""",DIRNAM,"""",",",BLK,")"
+    Set ^REPAIR("restore",DIRNAM,BLK)=$View(0,0,-%BLKSIZ)
+ }
+ Write !,"Writing new block ",BLK,!
+ If TYPE=$Case(%BIG,0:170,:16) {
+    If $Data(modtab(BLK)) View 0:0:-%BLKSIZ:modtab(BLK) View -BLK
+    Kill modtab(BLK)
+    Quit
+ }
+ Kill modtab(BLK)
+ Close 63
+ s rc=$$WriteRepairBlock^DMREPAIR("disk",DIRNAM,BLK,TYPE,LINK,N,.REPAIR,.REPVAL,.REPCCC,.REPLEN,.REPPAD,.REPSUB,.REPBIG,.REPINFO,.PNTLEN,.NEXTPNTLEN,.NEXTPNTVAL,.NEXTPNTOFF,.BLINCVER,.COLLATE,$Get(NEXTPNTREF("internal")),.GARTREE)
+ i ('rc) d ShowMessage(rc,0) Quit 
+ If $Data(modtab) {
+    Open 63:"^^"_DIRNAM
+    Set modblk=$Order(modtab(""))
+    While (modblk'="" && (modblk'="DELETE")) {
+       View modblk
+       If DIRNAM'=$Zutil(12) Set ^REPAIR("restore",DIRNAM,modblk)=$View(0,0,-%BLKSIZ)
+       Write !,"Now REPAIR will write updated block ",modblk,!
+okayMOD	  
+       R "Okay? Please answer yes or no: ",X,!
+       If ($zcvt(X,"U")'="YES"),($zcvt(X,"U")'="NO") Goto okayMOD
+       If ($zcvt(X,"U")'="YES") {
+          W "***Not Written",!
+       } Else {
+          If DIRNAM'=$Zutil(12) {
+             Write "Saving old block in ^REPAIR(""restore""",",","""",DIRNAM,"""",",",modblk,")",!,"Writing new block ",modblk,!
+          } Else {
+             Write !,"Writing new block ",modblk,!
+          }
+          View 0:0:-%BLKSIZ:modtab(modblk)
+          View -modblk
+       }
+       Set modblk=$Order(modtab(modblk))
+    }
+    Kill modtab
+ }
+ Close 63 Quit  
+gupdateFirst(dir,blk,type,newfirst) [modtab,PNTLEN,PNTREF,LNEXTPNTREF,oldPNTREF] PUBLIC
+{
+ Set $Zerror="",$Ztrap="errgupdateFirst"
+ If (type=8 || (type=9) || (type=12) || (type=24)) {
+    Write !,"Searching for block to the left of ",blk," ...",!
+    Set rc=$$FindLeftBlock^DMREPAIR(dir,blk,.left)
+    If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }    
+    If left {
+       If $Data(modtab(left)) {
+          Set rc=$$ParseRepairBlock^DMREPAIR(dir,,modtab(left),.LOFF,.LREPAIR,.LREPPRINT,.LREPVAL,.LREPCCC,.LREPLEN,.LREPPAD,.LREPSUB,.LREPBIG,.LREPINFO,.LN,.LTYPE,.LLINK,.LBIGCOUNT,.LPNTLEN,.LNEXTPNTLEN,.LNEXTPNTVAL,.LNEXTPNTOFF,.LPNTREF,.LNEXTPNTREF,.LBLINCVER,.LCOLLATE,.LGARTREE)
+          Kill modtab(left)
+       } Else {
+          Set rc=$$ParseRepairBlock^DMREPAIR(dir,left,,.LOFF,.LREPAIR,.LREPPRINT,.LREPVAL,.LREPCCC,.LREPLEN,.LREPPAD,.LREPSUB,.LREPBIG,.LREPINFO,.LN,.LTYPE,.LLINK,.LBIGCOUNT,.LPNTLEN,.LNEXTPNTLEN,.LNEXTPNTVAL,.LNEXTPNTOFF,.LPNTREF,.LNEXTPNTREF,.LBLINCVER,.LCOLLATE,.LGARTREE)
+       }
+       If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+       For i=1:1:LNEXTPNTLEN Quit:$Extract(LNEXTPNTREF("internal"),i)'=$Extract(newfirst("internal"),i)
+       Set (LNEXTPNTLEN,PNTLEN)=i,LNEXTPNTVAL=$Ascii(newfirst("internal"),i)
+       Set LNEXTPNTREF("internal")=$Extract(newfirst("internal"),1,i)
+       Write !,"Updating left data block, ",left,", with new Next Pointer Reference: " zzdump LNEXTPNTREF("internal")
+       Set rc=$$WriteRepairBlock^DMREPAIR(.newleftblock,dir,left,LTYPE,LLINK,LN,.LREPAIR,.LREPVAL,.LREPCCC,.LREPLEN,.LREPPAD,.LREPSUB,.LREPBIG,.LREPINFO,LPNTLEN,LNEXTPNTLEN,LNEXTPNTVAL,LNEXTPNTOFF,LBLINCVER,LCOLLATE,LNEXTPNTREF("internal"),LGARTREE)
+       If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+       Set rc=$$ParseRepairBlock^DMREPAIR(dir,,newleftblock,.LOFF,.LREPAIR,.LREPPRINT,.LREPVAL,.LREPCCC,.LREPLEN,.LREPPAD,.LREPSUB,.LREPBIG,.LREPINFO,.LN,.LTYPE,.LLINK,.LBIGCOUNT,.LPNTLEN,.LNEXTPNTLEN,.LNEXTPNTVAL,.LNEXTPNTOFF,.LPNTREF,.LNEXTPNTREF,.LBLINCVER,.LCOLLATE,.LGARTREE)
+       If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+       Set modtab(left)=newleftblock
+    }
+    If type'=9 {
+       If $Extract(newfirst("internal"),1,PNTLEN)'=oldPNTREF {
+          Do modifyHigherLevels(dir,blk,.PNTREF)
+       }
+    }
+ } Else { ;not a data block
+    Do modifyHigherLevels(dir,blk,.newfirst)
+ }
+ Quit  
+errgupdateFirst Do gupdateErrorMsg
+ Quit  
+}
+modifyHigherLevels(dir,blk,newref) [modtab,LNEXTPNTREF] PUBLIC
+{
+ Write !,"Modifying higher levels with new reference ",newref("printable")
+ Write !,"Internal version is:" zzdump newref("internal")
+ Set rc=$$FindGlobalLevels^DMREPAIR(dir,blk,.levels,.blocktab,.curlev)
+ If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }    
+ Write !,"The current level, which contains block ",blk," is ",curlev
+ Set modblk=blocktab(curlev-1),found=0
+ If curlev=1 Quit  
+ If modblk>%CURBLKS || ('modblk) Do gupdateErrorMsg Quit  
+ Open 63:"^^"_dir ;This gets closed by gupdatePtrBlk
+ Do {
+    View modblk Set modtype=$v($Zutil(40,32,1),0,1)
+    ; Use the most current version of the block if it is being edited
+    If $Data(modtab(modblk)) View 0:0:-%BLKSIZ:modtab(modblk)
+    Set node=1
+    Do {
+       Set curblk=$View(node*2,-5)
+       If curblk=blk {
+          Set insertval=$View(node*2,-6) ;add big string flag piece
+          u 0 w !!,"update node ",node," in block ",modblk
+          Do gupdatePtrBlk(dir,node,modblk,insertval,.newref)
+          Open 63:"^^"_dir ;This gets closed by gupdatePtrBlk
+       }
+       Set node=node+1
+    } While (curblk'="" && (curblk'=blk))
+    If curblk'=blk {
+       View modblk
+       If $Data(modtab(modblk)) View 0:0:-%BLKSIZ:modtab(modblk)
+       Set modblk=$v($Zutil(40,32,4),0,4) 
+    } Else {
+       Set found=1
+    }
+ } While ('found && modblk && (modblk'>%CURBLKS))
+ If curblk'=blk {
+    Write !,"Block ",blk," cannot be found on level ",curlev-1
+    Do gupdateErrorMsg
+    Quit  
+ }
+ Close 63
+ If (node=2) Do gupdateFirst(dir,modblk,modtype,.newref)
+ Quit  
+}
+gupdatePtrBlk(dir,node,modblk,block,ref) [modtab] PUBLIC
+{
+ If $Data(modtab(modblk)) Set rc=$$ParseRepairBlock^DMREPAIR(dir,,modtab(modblk),.MOFF,.MREPAIR,.MREPPRINT,.MREPVAL,.MREPCCC,.MREPLEN,.MREPPAD,.MREPSUB,.MREPBIG,.MREPINFO,.MN,.MTYPE,.MLINK,.MBIGCOUNT,.MPNTLEN,.MNEXTPNTLEN,.MNEXTPNTVAL,.MNEXTPNTOFF,.MPNTREF,.MNEXTPNTREF,.MBLINCVER,.MCOLLATE,.MGARTREE)
+ Else  Set rc=$$ParseRepairBlock^DMREPAIR(dir,modblk,,.MOFF,.MREPAIR,.MREPPRINT,.MREPVAL,.MREPCCC,.MREPLEN,.MREPPAD,.MREPSUB,.MREPBIG,.MREPINFO,.MN,.MTYPE,.MLINK,.MBIGCOUNT,.MPNTLEN,.MNEXTPNTLEN,.MNEXTPNTVAL,.MNEXTPNTOFF,.MPNTREF,.MNEXTPNTREF,.MBLINCVER,.MCOLLATE,.MGARTREE)
+ If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+ Write !,"Updating pointer block ",modblk,", by deleting node ",node," and inserting in its place: " zzdump ref("internal")
+ s rc=$$DeleteNodeInRepairBlock^DMREPAIR(dir,modblk,node,.MN,.MREPAIR,.MREPPRINT,.MREPVAL,.MREPCCC,.MREPLEN,.MREPPAD,.MREPSUB,.MREPBIG,.MREPINFO,.MOFF,.MBIGCOUNT)
+ If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }    
+ ;Write and parse the block after deleting
+ Set rc=$$WriteRepairBlock^DMREPAIR(.newmodblk,dir,modblk,MTYPE,MLINK,MN,.MREPAIR,.MREPVAL,.MREPCCC,.MREPLEN,.MREPPAD,.MREPSUB,.MREPBIG,.MREPINFO,,,,,,,.MGARTREE)
+ If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }    
+  Set rc=$$ParseRepairBlock^DMREPAIR(dir,,newmodblk,.MOFF,.MREPAIR,.MREPPRINT,.MREPVAL,.MREPCCC,.MREPLEN,.MREPPAD,.MREPSUB,.MREPBIG,.MREPINFO,.MN,.MTYPE,.MLINK,.MBIGCOUNT,.MPNTLEN,.MNEXTPNTLEN,.MNEXTPNTVAL,.MNEXTPNTOFF,.MPNTREF,.MNEXTPNTREF,.MBLINCVER,.MCOLLATE,.MGARTREE)
+ If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }    
+ s rc=$$InsertNodeInRepairBlock^DMREPAIR(dir,modblk,ref("printable"),ref("internal"),block,.MN,.MREPAIR,.MREPPRINT,.MREPVAL,.MREPCCC,.MREPLEN,.MREPPAD,.MREPSUB,.MREPBIG,.MREPINFO,.MOFF)
+ If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+ if rc,rc'=+rc d ShowMessage(rc,0)
+ Set rc=$$WriteRepairBlock^DMREPAIR(.newmodblk,dir,modblk,MTYPE,MLINK,MN,.MREPAIR,.MREPVAL,.MREPCCC,.MREPLEN,.MREPPAD,.MREPSUB,.MREPBIG,.MREPINFO,,,,,,,.MGARTREE)
+ If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }    
+  Set rc=$$ParseRepairBlock^DMREPAIR(dir,,newmodblk,.MOFF,.MREPAIR,.MREPPRINT,.MREPVAL,.MREPCCC,.MREPLEN,.MREPPAD,.MREPSUB,.MREPBIG,.MREPINFO,.MN,.MTYPE,.MLINK,.MBIGCOUNT,.MPNTLEN,.MNEXTPNTLEN,.MNEXTPNTVAL,.MNEXTPNTOFF,.MPNTREF,.MNEXTPNTREF,.MBLINCVER,.MCOLLATE,.MGARTREE)
+ If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }    
+ Set modtab(modblk)=newmodblk Kill newmodblk
+}
+ ;
+gupdateLast(dir,blk,link,newlast) [modtab,NEXTPNTLEN,NEXTPNTREF,NEXTPNTVAL] PUBLIC
+{
+ Set $Zerror="",$Ztrap="errgupdateLast"
+ If $Data(modtab(link)) Set rc=$$ParseRepairBlock^DMREPAIR(dir,,modtab(link),.LOFF,.LREPAIR,.LREPPRINT,.LREPVAL,.LREPCCC,.LREPLEN,.LREPPAD,.LREPSUB,.LREPBIG,.LREPINFO,.LN,.LTYPE,.LLINK,.LBIGCOUNT,.LPNTLEN,.LNEXTPNTLEN,.LNEXTPNTVAL,.LNEXTPNTOFF,.LPNTREF,.LNEXTPNTREF,.LBLINCVER,.LCOLLATE,.LGARTREE)
+ Else  Set rc=$$ParseRepairBlock^DMREPAIR(dir,link,,.LOFF,.LREPAIR,.LREPPRINT,.LREPVAL,.LREPCCC,.LREPLEN,.LREPPAD,.LREPSUB,.LREPBIG,.LREPINFO,.LN,.LTYPE,.LLINK,.LBIGCOUNT,.LPNTLEN,.LNEXTPNTLEN,.LNEXTPNTVAL,.LNEXTPNTOFF,.LPNTREF,.LNEXTPNTREF,.LBLINCVER,.LCOLLATE,.LGARTREE)
+ If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+ Set linkpntref=LREPAIR(1)
+ For i=1:1 Quit:$Extract(newlast,i)'=$Extract(linkpntref,i)  
+ Set (NEXTPNTLEN,newlinkpntlen)=i,NEXTPNTVAL=$Ascii(linkpntref,i)
+ Set NEXTPNTREF("internal")=$Extract(linkpntref,1,i)
+ If newlinkpntlen'=LPNTLEN { ;Pointer reference in right blk changed length
+    Write !!,"Changing block header information for block ",blk," and right link block, ",link
+    Open 63:"^^"_dir View link 
+    If $Data(modtab(link)) View 0:0:-%BLKSIZ:modtab(link)
+    View $Zutil(40,32,3):0:2:newlinkpntlen
+    Set rc=$$GetNodeReferences^DMREPAIR(0,.internal,.printable)
+    If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+    Set newlinkpntref("internal")=internal,newlinkpntref("printable")=printable
+    Kill NEXTPNTREF Merge NEXTPNTREF=newlinkpntref
+    Set modtab(link)=$View(0,0,-%BLKSIZ)
+    Close 63
+    If ($$YN("Modify associated blocks on higher levels","N")="Y") {
+       Do modifyHigherLevels(dir,link,.newlinkpntref)
+    }
+ }
+ Quit  
+errgupdateLast Do gupdateErrorMsg
+}
+gupdateDeletePointer(dir,blk,type,node,numnodes,left,right,nodeval) [modtab] PUBLIC
+{
+ Open 63:"^^"_dir
+ If (type=6 || (type=70)) {
+    Set leftdata=left,rightdata=right
+    If rightdata {
+       View rightdata 
+       If $Data(modtab(rightdata)) View 0:0:-%BLKSIZ:modtab(rightdata)
+       Set rightfirstnode=$View(1,-6)
+    } Else { 
+       Set rightfirstnode=0
+    }
+ } Else {
+    Write !,"Updating lower blocks while deleting node ",node
+    Write !,"Updating left block on this level, ",left,", with new link, ",right
+    View left
+    If $Data(modtab(left)) View 0:0:-%BLKSIZ:modtab(left)
+    View $Zutil(40,32,4):0:4:right
+    Set modtab(left)=$View(0,0,-%BLKSIZ)
+    View nodeval
+    If $Data(modtab(nodeval)) View 0:0:-%BLKSIZ:modtab(nodeval)
+    While ('($v($Zutil(40,32,1),0,1)=6 || ($v($Zutil(40,32,1),0,1)=70))) {
+       Set firstptr=$View(2,-5)
+       Write !,"Searching for block to the left of ",firstptr," ...",!
+       Set rc=$$FindLeftBlock^DMREPAIR(dir,firstptr,.leftptr)
+       If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+       Open 63:"^^"_dir
+       If right {
+          View right 
+          If $Data(modtab(right)) View 0:0:-%BLKSIZ:modtab(right)
+          Set rightptr=$View(2,-5)
+       } Else {
+          Set rightptr=0
+       }
+       View leftptr 
+       If $Data(modtab(leftptr)) View 0:0:-%BLKSIZ:modtab(leftptr)
+       View $Zutil(40,32,4):0:4:rightptr
+       Set modtab(leftptr)=$View(0,0,-%BLKSIZ)
+       Set right=rightptr
+       View firstptr
+       If $Data(modtab(firstptr)) View 0:0:-%BLKSIZ:modtab(firstptr)
+    }
+    Write !,"Searching for block to the left of ",$View(2,-5)," ...",!
+    Set rc=$$FindLeftBlock^DMREPAIR(dir,$View(2,-5),.leftdata)
+    If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+    Open 63:"^^"_dir
+    If right {
+       View right 
+       If $Data(modtab(right)) View 0:0:-%BLKSIZ:modtab(right)
+       Set rightdata=$View(2,-5) View rightdata
+       If $Data(modtab(rightdata)) View 0:0:-%BLKSIZ:modtab(rightdata)
+       Set rightfirstnode=$View(1,-6)
+    } Else {
+       Set rightdata=0
+    }
+ }
+ ;
+ If $Data(modtab(leftdata)) Set rc=$$ParseRepairBlock^DMREPAIR(dir,,modtab(leftdata),.LOFF,.LREPAIR,.LREPPRINT,.LREPVAL,.LREPCCC,.LREPLEN,.LREPPAD,.LREPSUB,.LREPBIG,.LREPINFO,.LN,.LTYPE,.LLINK,.LBIGCOUNT,.LPNTLEN,.LNEXTPNTLEN,.LNEXTPNTVAL,.LNEXTPNTOFF,.LPNTREF,.LNEXTPNTREF,.LBLINCVER,.LCOLLATE,.LGARTREE)
+ Else  Set rc=$$ParseRepairBlock^DMREPAIR(dir,leftdata,,.LOFF,.LREPAIR,.LREPPRINT,.LREPVAL,.LREPCCC,.LREPLEN,.LREPPAD,.LREPSUB,.LREPBIG,.LREPINFO,.LN,.LTYPE,.LLINK,.LBIGCOUNT,.LPNTLEN,.LNEXTPNTLEN,.LNEXTPNTVAL,.LNEXTPNTOFF,.LPNTREF,.LNEXTPNTREF,.LBLINCVER,.LCOLLATE,.LGARTREE)
+ If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+ If (right) {
+    Set llastnoderef=LREPAIR(LN),llastnodereflen=$Length(llastnoderef)
+    For i=1:1:llastnodereflen Quit:$Extract(llastnoderef,i)'=$Extract(rightfirstnode,i)  
+    Set (LNEXTPNTLEN,RPNTLEN)=i,LNEXTPNTVAL=$Ascii(rightfirstnode,i)
+    Set LNEXTPNTREF("internal")=$Extract(rightfirstnode,1,i)
+ } Else {
+    Set (LLINK,LNEXTPNTLEN,LNEXTPNTVAL,LNEXTPNTOFF)=0
+ }
+ Write !,"Updating left data block, ",leftdata,", with new Next Pointer Reference: "
+ If LNEXTPNTLEN zzdump LNEXTPNTREF("internal") 
+ Set LLINK=rightdata
+ Set rc=$$WriteRepairBlock^DMREPAIR(.newleftdatablock,dir,leftdata,LTYPE,LLINK,LN,.LREPAIR,.LREPVAL,.LREPCCC,.LREPLEN,.LREPPAD,.LREPSUB,.LREPBIG,.LREPINFO,LPNTLEN,LNEXTPNTLEN,LNEXTPNTVAL,LNEXTPNTOFF,LBLINCVER,LCOLLATE,LNEXTPNTREF("internal"),LGARTREE)
+ If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+ Set rc=$$ParseRepairBlock^DMREPAIR(dir,,newleftdatablock,.LOFF,.LREPAIR,.LREPPRINT,.LREPVAL,.LREPCCC,.LREPLEN,.LREPPAD,.LREPSUB,.LREPBIG,.LREPINFO,.LN,.LTYPE,.LLINK,.LBIGCOUNT,.LPNTLEN,.LNEXTPNTLEN,.LNEXTPNTVAL,.LNEXTPNTOFF,.LPNTREF,.LNEXTPNTREF,.LBLINCVER,.LCOLLATE,.LGARTREE)
+ If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+ Set modtab(leftdata)=newleftdatablock Kill newleftdatablock
+ If right {
+    Write !,"Updating right data block, ",rightdata,", with new pntlen ",LNEXTPNTLEN
+    Open 63:"^^"_dir
+    View rightdata
+    If $Data(modtab(rightdata)) View 0:0:-%BLKSIZ:modtab(rightdata) 
+    View $Zutil(40,32,3):0:2:LNEXTPNTLEN
+    Set modtab(rightdata)=$View(0,0,-%BLKSIZ)
+    Do GetPrintableRef^DMREPAIR(.LNEXTPNTREF,$Zutil(70,1,$View($Zutil(40,32,2),0,1))) ;colrule for right data block
+    Do modifyHigherLevels(dir,rightdata,.LNEXTPNTREF)
+ }
+}
+gupdateBigStringPtr(dir,blk,upblock) [modtab] PUBLIC
+{
+ Set $Zerror="" Set $Ztrap="errgupdateBigStringPtr"
+ If $Data(modtab(upblock)) Set rc=$$ParseRepairBlock^DMREPAIR(dir,,modtab(upblock),.UOFF,.UREPAIR,.UREPPRINT,.UREPVAL,.UREPCCC,.UREPLEN,.UREPPAD,.UREPSUB,.UREPBIG,.UREPINFO,.UN,.UTYPE,.ULINK,.UBIGCOUNT,.UPNTLEN,.UNEXTPNTLEN,.UNEXTPNTVAL,.UNEXTPNTOFF,.UPNTREF,.UNEXTPNTREF,.UBLINCVER,.UCOLLATE,.UGARTREE)
+ Else   Set rc=$$ParseRepairBlock^DMREPAIR(dir,upblock,,.UOFF,.UREPAIR,.UREPPRINT,.UREPVAL,.UREPCCC,.UREPLEN,.UREPPAD,.UREPSUB,.UREPBIG,.UREPINFO,.UN,.UTYPE,.ULINK,.UBIGCOUNT,.UPNTLEN,.UNEXTPNTLEN,.UNEXTPNTVAL,.UNEXTPNTOFF,.UPNTREF,.UNEXTPNTREF,.UBLINCVER,.UCOLLATE,.UGARTREE)
+ If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+ Open 63:"^^"_dir View upblock
+ If $Data(modtab(upblock)) View 0:0:-%BLKSIZ:modtab(upblock)
+ For node=1:1:UN If $View(node*2,-5)=blk Set found=1 Quit
+ If 'found || (UREPVAL(node)'=("1,"_blk)) {
+    Write !,"Cannot find node in pointer block"
+    Do gupdateErrorMsg Quit
+ }
+ Write !,"Changing node ",node," in pointer block ",upblock," to indicate no long strings in block ",blk
+ Set rc=$$ChangeValueInRepairBlock^DMREPAIR(dir,upblock,node,"0,"_blk,.UREPAIR,.UREPVAL,.UREPCC,.UREPLEN,.UREPPAD,.UREPSUB,.UREPBIG,.UREPINFO,.UOFF)
+ If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+  Set rc=$$WriteRepairBlock^DMREPAIR(.newmodblk,dir,upblock,UTYPE,ULINK,UN,.UREPAIR,.UREPVAL,.UREPCCC,.UREPLEN,.UREPPAD,.UREPSUB,.UREPBIG,.UREPINFO,,,,,,,.UGARTREE)
+ If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+ Set rc=$$ParseRepairBlock^DMREPAIR(dir,,newmodblk,.UOFF,.UREPAIR,.UREPPRINT,.UREPVAL,.UREPCCC,.UREPLEN,.UREPPAD,.UREPSUB,.UREPBIG,.UREPINFO,.UN,.UTYPE,.ULINK,.UBIGCOUNT,.UPNTLEN,.UNEXTPNTLEN,.UNEXTPNTVAL,.UNEXTPNTOFF,.UPNTREF,.UNEXTPNTREF,.UBLINCVER,.UCOLLATE,.UGARTREE)
+ If ('rc) {d ShowMessage(rc,0) Do gupdateErrorMsg Quit  }
+ Set modtab(upblock)=newmodblk Kill newmodblk
+ Quit   
+errgupdateBigStringPtr Do gupdateErrorMsg
+}
+ 	;
+ 	; The following are for handling 2kb data blocks. It is called by the java
+ 	; displayer and by ECP^REPAIR.
+ 	;  
+ 	; Call with the block in the view buffer and BLK loaded with the block #
+ 	; 
+ 	; Returns REPAIR arrays and N is the node count
+ 	; Return value is 0,error text if it fails, 1 if it succeeds
+GET2KARRAY() ;
+	N LINK,TYPE,OFF,GAR,A,S
+ 	K REPPRINT,REPAIR,REPVAL 
+ 	S LINK=$V(2040,0,"3O")
+ 	S TYPE=$V(2043,0,1)
+ 	I TYPE-8,TYPE-12 q "0,***Type = "_TYPE_" Invalid"
+	S OFF=$V(2046,0,2),GAR=$V(2036,0,"4O")
+ 	I OFF>2036 q "0,***Offset improper ("_OFF_" - shouldn't be > 2036 )"
+	F N=1:1 S X=$V(N-1*2+1,-6) Q:X=""  DO
+	. S REPAIR(N)=X,REPPRINT(N)=$V(N-1*2+1,-5),REPVAL(N)=$V(N-1*2+2,-6)
+	S N=N-1 
+	q 1   ;call DISPLAY2K to display the contents of the block if you wawt
+DISPLAY2K ;
+	N LINK,TYPE,OFF,GAR,D
+	;
+	S LINK=$V(2040,0,"3O")
+ 	S TYPE=$V(2043,0,1)
+	S OFF=$V(2046,0,2),GAR=$V(2036,0,"4O")
+ 	;	
+	W !,"Block # ",BLK,?25,"Type: ",TYPE
+ 	W " (",$P("GLOBAL DIR^POINTER^^^^BOTTOM POINTER^^DATA^^^^BIGDATA","^",TYPE),")",!
+ 	W !,"Link Block: ",LINK,?25,"Offset: ",OFF,?40,"Garbage pnt: ",GAR
+ 	W !,"#",?5,"Node",?30
+ 	W $S(TYPE=8:"Data",TYPE=12:"BIGDATA",1:"<unknown type: "_TYPE_">")
+ 	W ! F D=1:1:N W D W ?5,$$get2KNodeRef(D),?28," ",$$get2KDataVal(D),!
+	W ! 
+	Q
+get2KNodeRef(node) ;
+	quit $G(REPPRINT(node))
+get2KDataVal(node) 
+	new X,Z,J,Y
+	S X=$G(REPVAL(node))
+ 	If $Get(dodump) zzdump $Get(REPAIR(node)) Write !,?28," "
+ 	I '$A(X)!($A(X)=8)!($A(X)=4) q $$clean($E(X,2,*)) 
+ 	I $A(X)=1 S Z=$A(X,5)*256+$A(X,4)*256+$A(X,3)*256+$A(X,2)
+ 	I  I Z>2147483647 S Z=Z-4294967296
+ 	I $A(X)=1 Q Z
+ 	I $A(X)=3!($A(X)=5)!($A(X)=9) G PRINTBIG2K
+ 	G PRINT2Ksub2:$A(REPVAL(node),10)>127
+ 	S Z=0 F J=10:-1:3 S Z=Z*256+$A(REPVAL(node),J)
+ 	;
+PRINT2Ksub1 ;
+	S Y=$A(X,2) 
+	I Y<128,Y {
+		S Z=Z_"E+"_Y
+		I (Y<9) S Z=+Z
+	}
+ 	I Y>127 {
+	 	S Y=256-Y 
+	 	S Z=Z_"E-"_Y
+		I (Y>-9) s Z=+Z
+ 	}
+ 	Q Z
+ 	;
+PRINT2Ksub2 
+	F J=3:1:10 S A(J)=255-$A(REPVAL(D),J)
+ 	S A(3)=A(3)+1#256 F J=3:1:10 Q:A(J)  S A(J+1)=A(J+1)+1#256
+ 	S Z=0 F J=10:-1:3 S Z=Z*256+A(J)
+ 	S Z="-"_Z G PRINT2Ksub1
+PRINTBIG2K
+	n NUM,REM,LEN
+	S NUM=$p(X,",",2) ; X has 03,numblks,bytes in last block, block,block,...
+ 	S REM=$p(X,",",3)
+ 	S LEN=(NUM-1)*(%BLKSIZ)+REM
+ 	q "<"_LEN_" byte big string>"
+ 	;W "BIG: LEN ",LEN," BLKS: " 
+ 	;i NUM+3'=$l(X,",") W "** BLOCK TOTAL MISMATCH **" Q
+ 	;f Z=1:1:NUM w:Z>1 "," w $p(X,",",3+Z)
+ 	;w ! Q
+gupdateErrorMsg
+ If $Zerror'="" Write !,$Zerror
+ Write !,"This REPAIR operation requires further updating of the database"
+ Write !,"in order to maintain its integrity, but this error makes that"
+ Write !,"impossible to do automatically.  If you save this block to disk"
+ Write !,"you probably will have degradation."
+ Quit  
+UC(x) q $zcvt(x,"u")
+DC(c,n) Q $TR($J("",n)," ",$E(c_" "))
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R
+ShowMessage(sc,device) [] PRIVATE {
+    Do DecomposeStatus^%SYS.DATABASE(sc,.msglist,0,"")
+    Do wrtmsg($C(13,10),device)
+    For i=1:1:msglist {	Do wrtmsg(msglist(i)_$C(13,10),device) }
+}
+wrtmsg(msg,device) [] PRIVATE {
+    Quit:'$L(msg)  ; Avoid argumentless writes...
+    If device=-1 { Do $zu(9,"",msg,0,0) Quit }
+    If $g(%UI,"CHUI")="CHUI" { Use device Write msg Quit }
+    Do:$$IjcMsg^%Wprima("DI"_msg)="CANCEL"  ; Return value could be cancel message 
+    . i $$IjcMsg^%Wprima("DI"_$C(13,10)_"Abort received!"_$C(13,10))
+    . zt "Abort"
+}
+ASKSET(prompt,val,backup,help,pattern) ;procedure
+ N x,done,def,enahelp,helpavail,backupavail
+ s done=0
+ s def=$G(val)
+ s backup=$G(backup,0) 
+ s enabackup=$S(backup=-1:0,1:1)
+ s backupavail=$S(backup=1:1,1:0)
+ s help=$G(help)
+ s enahelp=$S(help="*":0,1:1) ;there might not be any help though
+ s helpavail=$s(enahelp&($L(help)!($D(help)>1)):1,1:0)
+ if 'enabackup n POP
+ s POP=0
+ f  d  q:done!POP
+ . W !,$G(prompt)
+ . w:($X+$L(def))>65 !,?5
+ . w:$L(def) " <",def,">"
+ . if helpavail!backupavail do
+ . . w " [" w:helpavail "?" w:backupavail "^" w "]"
+ . w:(($X+$L(def))>75) !,?5
+ . W " => " 
+ . R x,!
+ . if x="^" d  q
+ . . if 'enabackup s done=1 q
+ . . if backupavail s POP=1 q
+ . . w "...backup not available here"
+ . if enabackup,x="""^""" s x="^",done=1 q
+ . ;
+ . if x="?" d  q
+ . . if 'enahelp s done=1 q
+ . . if 'helpavail w "...help not available here" q
+ . . if $D(help)=1 w !?5,help q
+ . . s x="" f  s x=$O(help(x)) q:x=""  w !,?5,help(x)
+ . . w !
+ . if enahelp,x="""?""" s x="?",done=1 q
+ . i x]"",$g(pattern)]"",x'?@pattern w !?5,$s(helpavail:help,1:"[bad format]") q
+ . s:'$L(x) x=val 
+ . s done=1
+ s:'POP val=x
+ q

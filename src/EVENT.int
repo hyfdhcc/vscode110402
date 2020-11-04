@@ -1,0 +1,91 @@
+ROUTINE EVENT [Type=INT]
+EVENT ;Remote event routines ;$Change: 941510 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+	/* Server is jobbed off from ^%SYS.SERVER when a message
+	   is received with the header "E"_$C(1)_"L" or "E"_$C(1)_"S". 
+	   The message protocol is:
+	   	a) send the header E_$C(1)_<x> back to the other side so it knows we understood its message
+	   	b) Do the event operation and return the numeric status, or for a list, a
+	   	   string of event names separated by ";"
+	   Returns:
+	    -2 - invalid event name
+	    -3 - event undefined
+	*/
+SIGNAL(dev,hdr) ;
+	s $zt="err"
+	u dev:(::"a")
+	;
+	w hdr w *-3  ; send back E_$C(1)_<x> so the other side knows it reached the right place
+	r event 
+	; signal the event
+	s $zt="evterr"
+	s rc=$system.Event.Signal(event)
+Edone
+	s $zt="err"
+	w rc,!
+err
+	s $zt=""
+	c dev
+ 	q
+evterr
+	if $ZE["<UNDEFINED>" {
+		s rc = -3
+	} else {
+		s rc = -2
+	}
+	goto Edone
+DEFINED(dev,hdr) ;
+	s $zt="err"
+	u dev:(::"a")
+	;
+	w hdr w *-3  ; send back E_$C(1)_<x> so the other side knows it reached the right place
+	r event 
+	; signal the event
+	s $zt="evterr"
+	s rc=$system.Event.Defined(event)
+	s $zt="err"
+	i 'rc s rc=-3	; event undefined
+	w rc,!
+	s $zt=""
+	c dev
+ 	q
+LIST(dev,hdr) ;
+	s $zt="errL"
+	u dev:(::"a")
+	;
+	w hdr w *-3  ; send back E_$C(1)_<x> so the other side knows it reached the right place
+	; list the events
+	s $zt="Listerr"
+	s le=$system.Event.List()
+	i $ll(le)=0 s evlist=$C(0) goto Ldone
+	s evstr=""
+	f i=1:1:$ll(le) {
+		s evstr=evstr_$list(le,i)_";"
+	}
+	goto Ldone
+Listerr
+	s evlist=$C(255)
+Ldone
+	s $zt="errL"
+	w evstr,!
+	c dev
+	q
+errL
+	s $zt=""
+	c dev
+ 	q

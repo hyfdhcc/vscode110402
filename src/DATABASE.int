@@ -1,0 +1,1209 @@
+ROUTINE DATABASE [Type=INT]
+DATABASE ; Manage databases ; ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/user/database.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ d MENU()
+ q
+EMSClient()	PRIVATE {
+	q ##class(EMS.Instance).IsManaged("Config.Databases")
+	;Q ##class(EMS.Clients).IsSubscribedTo($$$EMSDatabasesBit)
+}
+EMSEditText() PRIVATE {
+	i ##class(EMS.Instance).IsManaged("Config.Databases") q " (restricted)"
+	;i ##class(EMS.Clients).IsSubscribedTo($$$EMSDatabasesBit) q " (restricted)"
+	q ""
+}
+NotAvailableOnVMS() PRIVATE {
+   if ($zversion(1)=1) {
+	   quit " (n/a)"
+   }
+   quit ""
+}
+MENU() PUBLIC { 
+ s $zt="ERROR"
+ s List(1)="Create a database"_$$EMSEditText
+ s List(2)="Edit a database"
+ s List(3)="List databases"
+ s List(4)="Delete a database"_$$EMSEditText
+ s List(5)="Mount a database"
+ s List(6)="Dismount a database"
+ s List(7)="Compact globals in a database"
+ s List(8)="Show free space for a database"
+ s List(9)="Show details for a database"
+ s List(10)="Recreate a database"
+ s List(11)="Manage database encryption"
+ s List(12)="Return unused space for a database"_$$NotAvailableOnVMS()
+ s List(13)="Compact free space in a database"_$$NotAvailableOnVMS()
+ s List(14)="Defragment globals in a database"_$$NotAvailableOnVMS()
+ f  {
+ 	s Value=""
+	s Status=##Class(%Library.Prompt).GetMenu("Option?",.Value,.List,,8+128+4)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+ 	i Value=1,'$$EMSClient d CREATE() Continue
+ 	i Value=2 d EDIT() Continue
+ 	i Value=3 d LIST() Continue
+ 	i Value=4,'$$EMSClient d DELETE() Continue
+	i Value=5 d MOUNT() Continue
+	i Value=6 d DISMOUNT() Continue
+	i Value=7 d COMPACT() Continue
+	i Value=8 d FREECOUNT() Continue
+	i Value=9 d DETAIL() Continue
+	i Value=10 d RECREATE() Continue
+	i Value=11 d DBEncKey() Continue
+	i Value=12 d DBTruncat() Continue
+	i Value=13 d FileCompact() Continue
+	i Value=14 d DEFRAG() Continue
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ze
+}
+CREATE() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q 1
+ f  {
+	s Value=""
+	i $$IsMaxDBMounted^%SYS.DATABASE() w !,"The mounted database count exceeds license limit." S Status=0 q
+	s Flag=8+16384+512+65536+131072
+ 	s Status=##class(SYS.Database).GetDirectory("Database directory?",.Value,.Obj,,,,.Flag)
+ 	s DBExist=($zb(Flag,65536,1)=0)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+	f  {
+ 		s Value=0
+ 		s Status=##Class(%Library.Prompt).GetYesNo("Change default database properties?",.Value,,8)
+ 		i (Status=2)||(+Status=0) q
+ 		i Value=1 {
+	 		if 'DBExist {
+		 		s v=""
+		 		d ##class(SYS.MirrorConfiguration).GetAndCheckMirrorSetName(.v)
+		 		s Obj.MirrorSetName=v
+	 		}
+	 		s OrigSize=Obj.Size
+	 		s Status=##Class(%Library.Prompt).EditFields(.Obj,$s(DBExist:1,1:0))
+ 			i (+Status=0)||(Status=2) q
+ 			if OrigSize'=Obj.Size {
+	 			s Status=##Class(%Library.File).GetDirectorySpace(Obj.Directory,.FreeSpace,.TotalSpace)
+	 			if ('Status) {
+		 			w !,"Failed to get available disk space for ",Obj.Directory
+		 			s Status=2
+		 			quit
+	 			}
+	 			if Obj.Size>TotalSpace {
+		 			w !,"Database is NOT created, size ",Obj.Size," MB is greater than total disk space ",TotalSpace," MB."
+		 			s Status=2
+		 			quit
+	 			}
+	 			if Obj.Size>(FreeSpace*90/100) {
+		 			w !,"Warning! Database size ",Obj.Size," MB is greater than 90% of available disk space (",FreeSpace*90/100," MB)."
+		 			w !,"Are you sure you want to create the database with ",Obj.Size," MB? <Y>"
+		 			r resp
+		 			if ("Nn"[$E(resp_"X")) {
+			 			s Status=2
+			 			quit
+		 			}
+	 			}
+ 			}
+ 		}
+	 	f  {
+	 		s DBName=""
+			s Status=##Class(%Library.Prompt).GetString("Dataset name of this database in the configuration:",.DBName,0,32,,8)
+			i (+Status=0)!(+Status=2)!(DBName="") q
+			s DBName=$zcvt(DBName,"U")
+			i ##Class(Config.Databases).Exists(DBName,.DBObj){
+				i DBObj.Directory=Obj.Directory {
+					s DBObjExists=1
+				} else {
+					 w !,"Dataset ",DBName_" already exists in the current configuration."
+					 Continue
+				}
+			} else {
+				s DBObjExists=0
+			}
+			s Status=1 q
+		}
+		k cfg
+		i (Status=2)!(DBName="") q
+		i (+Status=0) q
+ 		s MountRequired=0
+ 		s Status=##Class(%Library.Prompt).GetYesNo("Mount "_DBName_" Required At Startup?",.MountRequired,,8)
+ 		i (+Status=0)!(Status=2) q
+ 		s MountAtStartup=0
+ 		if $S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0)&&Obj.ClusterMountMode&&(MountRequired=0) {
+ 			s Status=##Class(%Library.Prompt).GetYesNo("Cluster Mount "_DBName_" At Startup?",.MountAtStartup,,8)
+ 			i (+Status=0)!(Status=2) q
+ 		}
+ 		s Value=1
+ 		s Status=##Class(%Library.Prompt).GetYesNo("Confirm creation of database in "_Obj.Directory_"?",.Value,,8)
+		i (Status=2) Continue
+ 		i (+Status=0) q
+ 		i Value {
+			s jrnenc=$$AskJrnEncOnNewDB(Obj)
+			s RequestedSize=Obj.Size
+ 			W:'DBExist !,"Formatting..." Hang 0
+			s Status=Obj.%Save()
+			i ('Status) {
+				w ! d $SYSTEM.Status.DisplayError(Status) w !
+			} else {
+				i jrnenc {
+					s rc=##class(%SYS.Journal.System).ActivateEncryption()
+					i ('rc) w ! d $SYSTEM.Status.DisplayError(rc) w !
+				}
+				w:'DBExist !,"Database in "_Obj.Directory_" created"
+				s CreatedSize=$p($zu(49,Obj.Directory),",",4)
+ 				i CreatedSize < RequestedSize s display=$SYSTEM.Status.GetErrorText($$Error^%apiOBJ(353,Obj.Directory,CreatedSize,RequestedSize)) w !,$p(display,":",2,$l(display,":")),!
+				s not="",sc=1
+				i 'DBObjExists {
+					s Prop("Directory")=Obj.Directory
+					s Prop("MountAtStartup")=MountAtStartup
+					s Prop("ClusterMountMode")=Obj.ClusterMountMode
+					s Prop("MountRequired")=MountRequired
+					s sc=##Class(Config.Databases).Create(DBName,.Prop)
+					i ('sc) {
+						s not=" NOT"
+						s sc=$SYSTEM.Status.GetErrorText(sc),err=$p(sc,": "),sc=$p(sc,": ",2,99)
+						s sc=$p(sc," ["),err=$p(err,"#",2)
+						i err=646 s not=""
+					}
+				}
+				w !,"Dataset ",DBName,not," added to the current configuration."
+				i '(''sc) w !,sc
+	 		}
+ 		}
+		s Status=1
+ 		q
+	}
+	k Obj
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+EDIT() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q 1
+ f  {
+	s Value=""
+	s Flag=8+8192+512
+ 	s Status=##class(SYS.Database).GetDirectory("Database directory?",.Value,.Obj,,,,Flag)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+ 	i Obj.Mounted=0 w !!,"Database is not mounted, please re-enter",! Continue
+	f  {
+		s OriginalROnly=Obj.ReadOnly
+		s OriginalSize=Obj.Size
+		s RequestedSize=0
+		s oClusterMountMode=Obj.ClusterMountMode
+ 		s Status=##Class(%Library.Prompt).EditFields(.Obj,2)
+		i Obj.Size>OriginalSize {
+			s RequestedSize=Obj.Size
+ 			s Status=##Class(%Library.File).GetDirectorySpace(Obj.Directory,.FreeSpace,.TotalSpace)
+ 			if ('Status) {
+	 			w !,"Failed to get available disk space for ",Obj.Directory
+	 			s Status=0
+	 			quit
+ 			}
+ 			if Obj.Size>TotalSpace {
+	 			w !,"Database is NOT modified, size ",Obj.Size," MB is greater than total disk space ",TotalSpace," MB."
+	 			s Status=0
+	 			quit
+ 			}
+ 			if Obj.Size>(FreeSpace*90/100) {
+	 			w !,"Warning! Database size ",Obj.Size," MB is greater than 90% of available disk space (",FreeSpace*90/100," MB)."
+	 			w !,"Are you sure you want to modify the database with ",Obj.Size," MB? <Y>"
+	 			r resp
+	 			if ("Nn"[$E(resp_"X")) {
+		 			s Status=0
+		 			quit
+	 			}
+ 			}
+		}
+		s ClusterMountMode=Obj.ClusterMountMode
+		i (+Status=0)||(Status=2) q
+ 		s Value=1
+		i Obj.%IsModified()=0 q  
+ 		s Status=##Class(%Library.Prompt).GetYesNo("Confirm update of database "_Obj.Directory_"?",.Value,,8)
+		i (Status=2) Continue
+ 		i (+Status=0) q
+ 		i Value {
+ 			W !,"Updating..." Hang 0
+			s Status=Obj.%Save()
+			i ('Status) {
+				w ! d $SYSTEM.Status.DisplayError(Status) w !
+			} else {
+				i '$$ModWait() {
+					w !,"There was a problem expanding the database."
+				} else {
+					w !,"Database "_Obj.Directory_" updated"
+				}
+				i $g(RequestedSize,0) {
+					s NewSize=$p($zu(49,Obj.Directory),",",4)
+					i NewSize < RequestedSize w ! s display=$SYSTEM.Status.GetErrorText($$Error^%apiOBJ(353,Obj.Directory,NewSize,RequestedSize)) w $p(display,":",2,$l(display,":")) w !
+				}
+				if OriginalROnly,'Obj.ReadOnly,Obj.Mirrored {
+					do AskResetMirroredDB^MIRROR(Obj)
+				}
+	 		}
+ 		}
+ 		s Status=1
+ 		q
+	}
+	i +Status=0 q
+	s DBlist=""
+	s Status=$$DatasetsByDirectory^%SYS.CONFIG("",Obj.Directory,.DBlist)
+	i (''Status)&&(DBlist]"") {
+ 		s modified=(ClusterMountMode'=oClusterMountMode)
+		for i=1:1:$listlength(DBlist) {
+			s dbn=$li(DBlist,i)
+			i '##Class(Config.Databases).Exists(dbn,.dobj) continue
+			s MR=dobj.MountRequired
+			i '$$EMSClient {
+	 			s Status=##Class(%Library.Prompt).GetYesNo("Mount "_dbn_" Required At Startup?",.MR,,8)
+	 			i (+Status=0)!(Status=2) q
+	 			if MR'=dobj.MountRequired {
+						s dobj.MountRequired=MR
+						s modified=1
+	 			}
+			}
+			if $S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0) {
+				if ('ClusterMountMode)||MR {
+					s MS=$s('ClusterMountMode:0,1:dobj.MountAtStartup)
+				} else {
+				s MS=dobj.MountAtStartup
+ 				s Status=##Class(%Library.Prompt).GetYesNo("Cluster Mount "_dbn_" At Startup?",.MS,,8)
+ 				i (+Status=0)!(Status=2) q
+				}
+ 				if MS'=dobj.MountAtStartup {
+					s dobj.MountAtStartup=MS
+					s modified=1
+ 				}
+				s dobj.ClusterMountMode=ClusterMountMode
+			}
+ 			i modified {
+	 			s sc=dobj.%Save()
+	 			i '(''sc) w ! d $SYSTEM.Status.DisplayError(sc) w !
+ 			}
+			k dobj
+		}
+	}
+	k Obj
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+ModWait() PUBLIC {
+ ;wait while database is being modified 
+ s $ZT="ModW2"
+ s X=$ZU(40,2,46)
+ f  s V=$V(X,-2,"1A") q:V'=1  h 1 ;continue until not 'running'
+ i V=2 q 0
+ModW2 s $ZT=""
+ i $G(X) d
+ . V X:-2:1:0 ;reset internal flag so others can use it
+ . I $V(X,-2,1)=2 V X:-2:1:0
+ q 1 ;having an error really doesn't mean anything
+}
+SilentModWait(Modified,NewName,DBName,Directory,Server,MountAtStartup,ClusterMountMode,MountRequired) PUBLIC {
+ ;wait while database is being modified 
+ if '$$ModWait() q 1 ; terminate if failed to expand the DB.
+ s rc=1
+ if Modified {
+	 s Prop("Server")=Server
+	 s Prop("MountAtStartup")=MountAtStartup
+	 s Prop("ClusterMountMode")=ClusterMountMode
+	 s Prop("MountRequired")=MountRequired
+	 if (Directory'="") {
+		 s Prop("Directory")=Directory
+		 Set rc=##class(Config.Databases).Modify(DBName,.Prop)
+	 } else {
+		 Set rc=##class(Config.Databases).Modify(DBName,.Prop)
+	 }
+ }
+ if '('rc),NewName'=DBName {
+	 ;STCxxx^^^fix this to use logic from config.datastorage.RenameDatabaseEx
+	 s rc=##Class(Config.Databases).Get(DBName,.Prop)
+	 s rc=##Class(Config.Databases).Create(NewName,.Prop)
+	 s rc=##Class(Config.Databases).Delete(DBName)
+ }
+ q rc
+}
+LIST() PUBLIC {
+ s $zt="ERROR"
+ f  {
+	s Value=""
+ 	s Flag=8+512+1024+8192
+ 	s Status=##class(SYS.Database).GetDirectory("Database directories?",.Value,,,,,Flag)
+ 	q:(Value="")||(+Status=0)||(Status=2)
+ 	s IO=""
+  	s Status=##class(%Library.Device).Get("Device:",.IO,,8,,4,.IOSL,.IOM,.IOF)
+ 	Continue:(Status=2)
+ 	q:(+Status=0)
+	Set Rset = ##class(%Library.ResultSet).%New("SYS.Database:List")
+	d Rset.Execute(Value,1)  ;1 means include volume info
+ 	u IO
+ 	w !!,Rset.GetColumnName(1),?40,Rset.GetColumnName(2),?51,Rset.GetColumnName(3),?62,Rset.GetColumnName(4)
+ 	While (Rset.Next()) {
+		w !,Rset.Get("Directory")
+		i $x>39 w !
+		w ?40,Rset.Get("MaxSize")
+		w ?51,Rset.Get("Size")
+		w ?62,Rset.Get("Status")
+ 	}
+ 	w !
+	c:IO'=$P IO
+ }
+ q
+ERROR s $zt=""
+ i $d(IO),(IO'="") c:IO'=$P IO
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+DELETE() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q 1
+ f  {
+	s Value=""
+	s Flag=8+8192+512+32768
+ 	s Status=##class(SYS.Database).GetDirectory("Database directory?",.Value,.Obj,,,,Flag)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+	if Obj=0 {
+		s Directory=Value
+	} else {
+		s Directory=Obj.Directory
+		if ##class(SYS.Database).IsSystemDB(Directory) {
+	 		w !!,*7,"Deleting System Database "_Directory_" is not allowed!",!
+	 		k Obj
+	 		Continue
+		}
+		if Obj.Mirrored {
+	 		w !!,*7,"Deleting Mirror Database "_Directory_" is not allowed!",!
+	 		k Obj
+	 		Continue
+		}
+	}
+	f  {
+ 		s rs=##class(%Library.ResultSet).%New("Config.Databases:List")
+ 		d rs.Execute()
+ 		s dblist="",nsplist="",ndir=##class(%Library.File).ComputeFullDBDir(Directory)
+ 		while (rs.Next()) {
+	 		s d=##class(%Library.File).ComputeFullDBDir(rs.Data("Directory"))
+	 		i ndir=d&&(rs.Data("Server")="") {
+				s DBName=rs.Data("Name")
+				;STCxxx^^^add these
+				s rc=##class(Config.Databases).SynonymDBs(DBName,.dblist)
+				s rc=##class(Config.Namespaces).NamespacesByDB(DBName,.nsplist,1)
+				q
+	 		}
+ 		}
+ 		i dblist]"" {
+	 		w !,"Directory "_Directory_" is referenced in the configuration file by"
+	 		w !,"  Dataset" w:$l(dblist,",")'=1 "s" w ": ",dblist
+	 		i nsplist]"" w !,"  Namespace" w:$l(nsplist,",")'=1 "s" w ": ",nsplist
+	 		w !,"which will be removed as well."
+ 		}
+ 		s Value=0
+ 		s Status=##Class(%Library.Prompt).GetYesNo("Confirm deletion of database and CACHE.DAT file in directory "_Directory_"?",.Value,,8)
+		i (Status=2)||(+Status=0) q
+ 		i Value {
+			if Obj=0 goto SkipDelete
+			i 'Obj.Mounted {
+				s Status=Obj.Mount()
+				i (Status=2)||(+Status=0) q
+			}
+			s Status=Obj.Delete()
+			i ('Status) {
+				w ! d $SYSTEM.Status.DisplayError(Status) w !
+			} else {
+SkipDelete
+				w !,"Database in "_Directory_" deleted"
+ 				f i=1:1:$l(nsplist,",") {
+	 				s nsp=$p(nsplist,",",i) i nsp="" Continue
+					s sc=##Class(Config.Namespaces).Delete(nsp)
+					i ('sc) { w ! d $SYSTEM.Status.DisplayError(sc) w ! }
+					else { w !,"Namespace ",nsp," removed from configuration." }
+ 				}
+ 				f i=1:1:$l(dblist,",") {
+	 				s db=$p(dblist,",",i) i db="" Continue
+					s sc=##Class(Config.Databases).Delete(db)
+					i ('sc) { w ! d $SYSTEM.Status.DisplayError(sc) w ! }
+					else { w !,"Dataset ",db," removed from configuration." }
+ 				}
+	 		}
+ 		}
+ 		s Status=1
+ 		q
+	}
+	i +Status=0 q
+	k Obj
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+MOUNT() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q 1
+ f  {
+	s Value=""
+	s Flag=8+8192+512+1024
+ 	s Status=##class(SYS.Database).GetDirectory("Database directory to mount?",.Value,,,,,Flag)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+	Set Rset = ##class(%Library.ResultSet).%New("SYS.Database:List")
+	d Rset.Execute(Value,0)
+	Write !!,"Databases Selected"
+	Write !,"------------------"
+	If Rset.Next() {
+		Do {
+			w !,Rset.Get("Directory")
+		} While (Rset.Next())
+	} Else {
+		w !,$li(Value,1)
+	}
+	Set numdb=$ll(Value)
+	s mirrormember=($SYSTEM.Mirror.GetInfo()[",DEFINED,")  ;true/false
+	s mirrorcatchuprequired=0
+	s startcatchup=1
+    f i=1:1:numdb {
+		Set dir=$li(Value,i)
+		s Obj(i)=##Class(SYS.Database).%OpenId(dir,,.Status)
+		i ('Status) {
+			w ! d $SYSTEM.Status.DisplayError(Status) w !
+			Continue
+		}
+		If Obj(i).Mounted=1 {
+			If $S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0) {
+				w !,"Database "_dir_" is already mounted",! 
+				w !,"If you want to change the mount mode you must dismount the database first." 
+				s Obj(i)="" continue
+			}
+			Else {
+				w !,"Database "_dir_" is already mounted",!
+				s Obj(i)="" continue
+			}
+		}
+		if (mirrormember) {
+			if (Obj(i).Mirrored && 
+				'Obj(i).MirrorActivationRequired && 
+				'Obj(i).InActiveMirror) {
+				s mirrorcatchuprequired=1
+			}
+		}
+	}
+	Set askconfirm=0 f i=1:1:numdb If Obj(i)]"" Set askconfirm=1 Quit  
+	If askconfirm {
+		s confirmed=1
+		s Status=##Class(%Library.Prompt).GetYesNo("Confirm mount of databases?",.confirmed,,8)
+		i (Status=2) || 'confirmed Continue
+		i (+Status=0) q		
+		s readonly=0
+   		s Status=##Class(%Library.Prompt).GetYesNo("Mount Read Only?",.readonly,,8)
+		i (Status=2) Continue
+		i (+Status=0) q
+		If $S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0) {
+			s cluster=0
+			s Status=##Class(%Library.Prompt).GetYesNo("Mount Clustered?",.cluster,,8)
+			i (Status=2) Continue
+			i (+Status=0) q
+		} 		
+		if (mirrorcatchuprequired) {
+			s startcatchup=1
+	   		s Status=##Class(%Library.Prompt).GetYesNo("Start mirror catchup?",.startcatchup,,8)
+			i (Status=2) Continue
+			i (+Status=0) q
+		}
+		f i=1:1:numdb {
+			If Obj(i)]"" {			
+				Set resource=$Piece($zu(49,Obj(i).Directory),",",25)
+				If '##Class(Security.Resources).Exists(resource) {
+					Write !!,"The resource "_resource_" is not in the system table.",!,"We must either add this resource",!,"or modify this database to use an existing resource."
+					s List(1)="Add resource"
+					s List(2)="Modify database"
+					s List(3)="Do not mount this database"
+					s Status=##Class(%Library.Prompt).GetArray("Your choice?",.ans,.List,,,,8+32+128)
+					i (Status=2) Continue
+					i (+Status=0) q
+					If ans=List(1) {
+						Do 
+						.	i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"} ; [Verified STC 10/07/04]
+						.	s Status=##Class(Security.Resources).Create(resource,"Added by ^DATABASE",2)
+						i ('Status) {
+							w ! d $SYSTEM.Status.DisplayError(Status) w ! Continue
+						}
+						i (Status=2) Continue
+						i (+Status=0) q
+						w !,"Resource added"
+					} ElseIf ans=List(2) {
+						s oldrn=Obj(i).ResourceName
+						Do  
+						.	i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"} ; [Verified STC 10/07/04]
+						.	s db=Obj(i)
+						.	s Status=##Class(SYS.Database).ResourceNamePrompt("Resource name?",.db)
+						i (+Status=0) w ! d $SYSTEM.Status.DisplayError(Status) w ! Continue
+						i oldrn'=Obj(i).ResourceName {
+							s Status=Obj(i).%Save()
+							i ('Status) {
+								w ! d $SYSTEM.Status.DisplayError(Status) w ! Continue
+							}
+							d Obj(i).Dismount()
+							w !,"New resource name "_Obj(i).ResourceNameLogicalToDisplay(Obj(i).ResourceName)_" is saved."
+						}
+					} ElseIf ans=List(3) {
+						Write !,"Database not mounted."
+						Continue  
+					}
+				} //resource not known
+				Set Status=Obj(i).Mount(readonly,$g(cluster),0)
+				i ('Status) {
+					w ! d $SYSTEM.Status.DisplayError(Status) w !
+				} else {
+					k Obj(i)
+					s Obj(i)=##Class(SYS.Database).%OpenId($li(Value,i),,.Status)
+					if 'readonly {
+						if Obj(i).Mirrored&&('Obj(i).InActiveMirror)&&('Obj(i).MirrorActivationRequired) {
+							if (startcatchup) {
+								s catchupsfnlist=$G(catchupsfnlist)_$LB(Obj(i).SFN)
+							}
+							w !,"Mirrored database "_Obj(i).Directory_" mounted, required catchup."
+						} elseif Obj(i).ReadOnlyMounted {
+							w !,"Database "_Obj(i).Directory_" mounted read-only. See cconsole.log for details."
+						} else {
+							w !,"Database "_Obj(i).Directory_" mounted."
+						}
+					} else {
+						w !,"Database "_Obj(i).Directory_" mounted."
+					}
+				}
+			} //if Obj(i)
+		} //for
+		if $G(catchupsfnlist)'="" {
+			JOB ##class(SYS.Mirror).CatchupDB(catchupsfnlist)::5
+			i '$T {
+				w !,"Failed to start catchup job for mirrored database(s)"
+			} else {
+				if $LL(catchupsfnlist) > 1 {
+					w !,"A background Catchup job is running for the mirrored databases"
+					w !," You could check whether these databases are still mounted read-only later."
+				} else {
+					w !,"A background Catchup job is running for the mirrored database"
+					w !," You could check whether this database is still mounted read-only later."
+				}
+			}
+		}
+	} //askconfirm
+	Kill Obj
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+DISMOUNT() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q 1
+ f  {
+	s Value=""
+	s Flag=8+8192+512+1024
+ 	s Status=##class(SYS.Database).GetDirectory("Database directory to dismount?",.Value,,,,,Flag)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+	Set Rset = ##class(%Library.ResultSet).%New("SYS.Database:List")
+	d Rset.Execute(Value,0)
+	Write !!,"Databases Selected"
+	Write !,"------------------"
+	If Rset.Next() {
+		Do {
+			w !,Rset.Get("Directory")
+		} While (Rset.Next())
+	} Else {
+		w !,$li(Value,1)
+	}
+	Set numdb=$ll(Value)
+        f i=1:1:numdb {
+		Set dir=$li(Value,i)
+		s Obj(i)=##Class(SYS.Database).%OpenId(dir,,.Status)
+		i ('Status) {
+			w ! d $SYSTEM.Status.DisplayError(Status) w !
+			Continue
+		}
+		if ##class(SYS.Database).IsSystemDB(dir) w !,"Error!!!!! Database "_dir_" is not allowed to be dismounted.",! s Obj(i)="" continue
+		If Obj(i).Mounted=0 w !,"Database "_dir_" is already dismounted",! s Obj(i)="" continue
+	}
+	Set askconfirm=0 f i=1:1:numdb If Obj(i)]"" Set askconfirm=1 Quit  
+	If askconfirm {
+		s confirmed=1
+		s Status=##Class(%Library.Prompt).GetYesNo("Confirm dismount of databases?",.confirmed,,8)
+		i (Status=2) || 'confirmed Continue
+		i (+Status=0) q
+		f i=1:1:numdb {
+			If Obj(i)]"" {
+				Set Status=Obj(i).Dismount()
+				i ('Status) {
+					w ! d $SYSTEM.Status.DisplayError(Status) w !
+				} else {
+					w !,"Database "_Obj(i).Directory_" dismounted"
+				}
+			}
+		}
+	}
+	Kill Obj
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+COMPACT() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q 1
+ s IOMS=$system.Device.GetRightMargin()
+ f  {
+	s Value=""
+	s Flag=8+8192+512+1024+524288+1048576
+ 	s Status=##class(SYS.Database).GetDirectory("Database directories to compact?",.Value,,,,,Flag)
+ 	q:(Value="")||(+Status=0)||(Status=2)
+	Set Rset = ##class(%Library.ResultSet).%New("SYS.Database:List")
+	d Rset.Execute(Value,0)
+	Write !!,"Databases Selected"
+	Write !,"------------------"
+ 	While (Rset.Next()) {
+		w !,Rset.Get("Directory")
+ 	}
+ 	w !
+	K GloSel
+ 	S GloSel=0
+ 	If $ListLength(Value)=1 {
+	 	s Obj=##Class(SYS.Database).%OpenId($Li(Value),,.Status)
+		If ('Status) {
+			w ! d $SYSTEM.Status.DisplayError(Status) w !
+			Continue
+		}
+		if 'Obj.Mounted||(Obj.MirrorNoWrite||Obj.ReadOnly||(Obj.ReadOnlyMounted&&($SYSTEM.Mirror.IsPrimary()||'Obj.Mirrored))) {
+			w !,Obj.Directory," is a ",$s(Obj.ReadOnly||Obj.ReadOnlyMounted:"read-only ",1:""),$s('Obj.Mounted:"dismounted ",1:""),"database, skipped!",!
+			continue
+		}
+	 	S GCFlag=1
+		Do OPT^%GSET(,,,,,$LI(Value),,,.GCFlag,,1,.GloSel)
+	 	Continue:'GCFlag
+		Set GloSel=(GCFlag>0)				// SJ3040
+ 	}
+	s Full=90
+	s Status=##Class(%Library.Prompt).GetNumber("How full do you want the database blocks?",.Full,50,100,,8)
+	i (+Status=0)||(Status=2) q
+	s DisplayGlobals=GloSel
+	s Status=##Class(%Library.Prompt).GetYesNo("Display compacted globals?",.DisplayGlobals,,8)
+	i (Status=2) Continue
+	i (+Status=0) q
+ 	s IO=""
+  	s Status=##class(%Library.Device).Get("Device:",.IO,,8,,4,.IOSL,.IOM,.IOF)
+ 	Continue:(Status=2)
+ 	q:(+Status=0)
+	s confirmed=1
+	s Status=##Class(%Library.Prompt).GetYesNo("Confirm compaction of databases?",.confirmed,,8)
+	i (Status=2) || 'confirmed Close IO Continue
+	i (+Status=0) Close IO q
+	d Rset.Execute(Value,0)
+	Use IO
+	Write !!,##Class(%Library.Utility).Center("Cache Database Compaction",IOM)
+	W !,##Class(%Library.Utility).Center(##Class(%Library.Utility).DateTime(),IOM)
+	If 'DisplayGlobals {
+		Write !,"Database",?25,"MB Processed",?40,"MB Compressed To",?60,"Completed"
+		Write !,"--------",?25,"------------",?40,"----------------",?60,"---------"
+	}
+ 	While (Rset.Next()) {
+		s Obj=##Class(SYS.Database).%OpenId(Rset.Get("Directory"),,.Status)
+		If ('Status) {
+			w ! d $SYSTEM.Status.DisplayError(Status) w !
+			Continue
+		}
+		If DisplayGlobals {
+			Write !!,"Database ",Obj.Directory
+		} Else {
+			Write !!,Obj.Directory
+		}
+		if 'Obj.Mounted||(Obj.MirrorNoWrite||Obj.ReadOnly||(Obj.ReadOnlyMounted&&($SYSTEM.Mirror.IsPrimary()||'Obj.Mirrored))) {
+			w " is a ",$s(Obj.ReadOnly||Obj.ReadOnlyMounted:"read-only ",1:""),$s('Obj.Mounted:"dismounted ",1:""),"database, skipped!",!
+			continue
+		}
+		If GloSel {
+			s Status=Obj.Compact(Full,.MbProcessed,.MbCompressed,DisplayGlobals,IO,.GloSel)
+		} Else {
+			s Status=Obj.Compact(Full,.MbProcessed,.MbCompressed,DisplayGlobals,IO)
+		}
+		If ('Status) {
+			w ! d $SYSTEM.Status.DisplayError(Status) w !
+			Continue
+		}
+		If 'DisplayGlobals {
+			Write ?25,$j(MbProcessed,$l("MB Processed"))
+			Write ?40,$j(MbCompressed,$l("MB Compressed To"))
+			w ?60,$j(##Class(%Library.Utility).Time(),9)
+		}
+		k Obj
+ 	}
+ 	w !
+	c:IO'=$P IO
+ }
+ If $D(IO),IO=$P U IO:/MAR=IOMS
+ q Status
+ERROR s $zt=""
+ If $D(IO),IO=$P,$D(IOMS) U IO:/MAR=IOMS
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+DEFRAG() PUBLIC {
+ s $zt="ERROR"
+ if ($zversion(1)=1) {
+	 w !,"Global defragmentation is not available on VMS"
+	 quit
+ }
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q 1
+getdb
+ f  {
+	s DB=""
+	k Value
+	s Flag=8+8192+512+524288+1048576
+ 	s Status=##class(SYS.Database).GetDirectory("Database directory?",.DB,.Obj,,,,Flag)
+ 	i (+Status=0)||(Status=2)||(DB="") q
+ 	i Obj.Mounted=0 w !!,"Database is not mounted, please re-enter",! Continue
+	if (Obj.MirrorNoWrite||Obj.ReadOnly||(Obj.ReadOnlyMounted&&($SYSTEM.Mirror.IsPrimary()||'Obj.Mirrored))) w !!,"Database is read-only, please re-enter",! Continue
+	s Status = Obj.GetFreeSpace(Obj.Directory,.freespace)
+	i '(''Status) Q
+	s datasize = Obj.Size - freespace
+	s Status = ##class(SYS.Database).FileCompact(Obj.Directory,0,.endfree)
+	i Status'=1 {
+		do $System.Status.DisplayError(Status)
+		quit
+	}
+	s Best = (datasize - endfree)
+	if datasize {
+		w !!,"There are ",datasize,"MB of data to be processed."
+	} else {
+		w !!,"There is less than 1MB of data to be processed."
+	}
+	i Best<=0 {
+		s MaxExpand = -1
+		s Status=##Class(%Library.Prompt).GetYesNo("Ok to begin defragmentation?",.Value,,8)
+		i (Status=2) Continue
+		i (+Status=0) goto getdb
+	    if Value goto defrag
+	    goto getdb ; they said no
+	}
+	if (Best#1)'=0 {
+		s Best=(Best\1)+1
+	}
+	if ((freespace - endfree) < 10) {
+		w !!,"There are ",endfree,"MB of freespace at the end of the database, which is"
+		w !,"insufficient for defragmentation to operate."
+	} else {
+		w !!,"There are ",endfree,"MB of freespace at the end of the database, which is"
+		w !,"insufficient for defragmentation to operate. There is a total of ",freespace,"MB"
+		w !,"freespace in the database; you can go back and compact the freespace to make"
+	    w !,"more available for defragmentation to use."
+	}
+	w !!,"You can continue, in which case the database may expand to accomodate up to"
+	w !,Best,"MB of additional space needed for defragmentation to operate."
+	s Status=##Class(%Library.Prompt).GetYesNo("Continue?",.Value,,8)
+	i (Status=2) Continue
+	i (+Status=0) goto getdb
+	i Value s MaxExpand = -1 goto defrag
+	goto getdb  ;if they said no 
+defrag
+	s Status = ##class(SYS.Database).Defragment(Obj.Directory)
+	i Status'=1 {
+		do $System.Status.DisplayError(Status)
+	} else {
+		w !,"Defragmentation complete"
+	}
+	s Status=1
+	q
+ }
+ i +Status=0 q
+ q Status
+DefragCalc
+	s endtot = endfree + MaxExpand
+	i datasize<=endtot {
+		s Writes = 0
+		q
+	} elseif datasize<=(freespace+MaxExpand) {
+		s Writes = $NORMALIZE(2 + ((datasize - endtot)/datasize),2)
+	} else {
+		s freein = (freespace-endfree)
+		s remainder = datasize-endtot
+		i remainder>freein s remainder = freein
+		s work = freespace + MaxExpand
+		s n = (1 / (work / datasize)), frac = $Normalize(n,-1) i n>frac s n=frac+1
+		s Writes = $NORMALIZE((((n*2)-1)/n)  + (((n*(n+1))/2)/n),2)
+		s Writes = $NORMALIZE(Writes + (remainder/datasize),2)
+	}
+	s Writes = $NORMALIZE((Writes/2),1)
+	q
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+ }
+FREECOUNT(allflag) PUBLIC {
+ s $zt="ERROR"
+ Do {
+	If $Get(allflag)']"" {
+		s Value=""
+		s Flag=8+8192+512+1024
+		s Status=##class(SYS.Database).GetDirectory("Database directory to show free space for (*=All)?",.Value,,,,,Flag)
+		q:(Value="")||(+Status=0)||(Status=2)
+	} Else {
+		If allflag="all" { Set Value="*" }
+		Else { Set Value=$lb(allflag) }
+	}
+	Set Rset = ##class(%Library.ResultSet).%New("SYS.Database:List")
+	d Rset.Execute(Value,0)
+	Write !!,"Databases Selected"
+	Write !,"------------------"
+ 	While (Rset.Next()) {
+	 	if (Rset.Get("StateInt")["Dismounted") continue
+		w !,Rset.Get("Directory")
+ 	}
+ 	s IO=""
+  	s Status=##class(%Library.Device).Get("Device:",.IO,,8,,4,.IOSL,.IOM,.IOF)
+ 	Continue:(Status=2)
+ 	q:(+Status=0)
+	Set Rset = ##class(%Library.ResultSet).%New("SYS.Database:FreeSpace")
+	d Rset.Execute(Value,0)
+	Use IO
+	Write !!,##class(%Library.Utility).Center("Cache Database Free Space",IOM)
+	W !,##class(%Library.Utility).Center(##Class(%Library.Utility).DateTime(),IOM)
+	w !,"Database",?35,"Max Size",?45,"Size",?53,"Available",?63,"%Free",?71,"Disk Free"
+ 	While (Rset.Next()) {
+	 	if (Rset.Data("Available")["Dismounted") continue
+	 	w !,Rset.Data("Directory")
+	 	w:$x>35 ! w ?35,Rset.Data("MaxSize")
+	 	w:$x>45 ! w ?45,Rset.Data("Size")
+	 	w:$x>53 ! w ?53,Rset.Data("Available")
+	 	w:$x>63 ! w ?63,Rset.Data("Free") i Rset.Data("Free")<5 w ?68,"<-",*7
+	 	w:$x>71 ! w ?71,Rset.Data("DiskFreeSpace")
+ 	}
+	w !
+ 	c:IO'=$P IO
+ 	q
+ } While($Get(allflag)']"")
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+DETAIL() PUBLIC {
+ s $zt="ERROR"
+ f  {
+	s Value=""
+ 	s Flag=8+512+1024+8192
+ 	s Status=##class(SYS.Database).GetDirectory("Database directories?",.Value,,,,,Flag)
+ 	q:(Value="")||(+Status=0)||(Status=2)
+ 	s IO=""
+  	s Status=##class(%Library.Device).Get("Device:",.IO,,8,,4,.IOSL,.IOM,.IOF)
+ 	Continue:(Status=2)
+ 	q:(+Status=0)
+	Set Rset = ##class(%Library.ResultSet).%New("SYS.Database:Detail")
+	d Rset.Execute(Value)
+ 	u IO
+	While Rset.Next() {
+		w !,"------------------"
+		f i=1:1:Rset.GetColumnCount() w !,Rset.GetColumnName(i)_":",?25,$S(Rset.GetColumnName(i)["GlobalJournalState":##Class(%Library.JournalState).LogicalToDisplay(Rset.GetData(i)),1:Rset.GetData(i))
+		s DBlist=""
+		s Status=$$DatasetsByDirectory^%SYS.CONFIG("",Rset.Data("Directory"),.DBlist)
+		s cnt=0
+		i (''Status)&&(DBlist]"") {
+			for i=1:1:$listlength(DBlist) {
+				s dbn=$li(DBlist,i)
+				i '##Class(Config.Databases).Exists(dbn,.dobj) continue
+				s MR=dobj.MountRequired
+				w !,"Configured DB Name:",?25,dbn
+				w !,"Mount Required At Startup: ",?25,$s(MR:"Yes",1:"No")
+				if $S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0)&&Rset.Data("ClusterMountMode") {
+					s MS=dobj.MountAtStartup
+					w !,"Cluster Mount At Startup:",?25,$s(MS:"Yes",1:"No")
+				}
+				s cnt=cnt+1
+			}
+		}
+		i 'cnt W !,"No DB Name Configured"
+	}
+ 	w !
+	c:IO'=$P IO
+ }
+ q
+ERROR s $zt=""
+ i $d(IO),(IO'="") c:IO'=$P IO
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+RECREATE() PUBLIC {
+ s $zt="ERROR"
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q 1
+ f  {
+	s Value=""
+	s Flag=8+8192+512
+ 	s Status=##class(SYS.Database).GetDirectory("Database directory?",.Value,.Obj,,,,Flag)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+ 	i Obj.ReadOnly {
+	 	w !!,*7,"Recreate ReadOnly Database is not allowed!"
+	 	w !,"If you really need to recreate it you need to change it to non-ReadOnly DB."
+	 	k Obj
+	 	q
+ 	}
+ 	S DBdir=$zconvert(Value,"U")
+	if ##class(SYS.Database).IsSystemDB(DBdir) {
+	 	w !!,*7,"Recreate System Database "_Value_" is not allowed!",!
+	 	k Obj
+	 	Continue
+	}
+	if Obj.Mirrored {
+	 	w !!,*7,"Recreate mirrored database "_Value_" is not allowed!",!
+	 	k Obj
+	 	Continue
+	}
+	f  {
+  		s Value=0
+		if DBdir["CACHELIB" {
+			W !!,*7,"WARNING!!! Recreating the CACHELIB database could make this Cache system"
+  			W !,"fail to work. It will delete all the Cache system utility programs."
+  			W !,"If this is really a CACHELIB DB it is recommended NOT doing this."
+		} else {
+			W !,"WARNING! Recreating the database will delete all the data in the database."
+		}
+		s Status=##Class(%Library.Prompt).GetYesNo("Confirm recreation of database in "_Obj.Directory_"?",.Value,,8)
+		i (Status=2) q
+ 		i (+Status=0) q
+ 		i Value {
+ 			w !,"Deleting..." Hang 0
+			s Status=Obj.Delete()
+			i ('Status) {
+				w ! d $SYSTEM.Status.DisplayError(Status) w !
+			} else {
+				w !,"Formatting..." Hang 0
+				s Status=Obj.%Save()
+				i ('Status) {
+					w ! d $SYSTEM.Status.DisplayError(Status) w !
+				} else {
+					w !,"Database in "_Obj.Directory_" recreated."
+				}
+			}
+ 		}
+		s Status=1
+ 		q
+	}
+	k Obj
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+}
+DBEncKey() Public { ;Database Encryption Utility; 24-September-2004; CFL1152 11/17/04
+	Do Main Quit
+}
+Main() public {
+	For {
+		Set opt=$$mainopt() Quit:opt=""
+		If opt=1 {
+			Do CreateInt^EncryptionKey()
+		} ElseIf opt=2 {
+			Do ActivateInt^EncryptionKey(1)
+		} ElseIf opt=3 {
+			Do ShowKeyInt^DATABASE1()
+		} ElseIf opt=4 {
+			Do DeleteKeyInt^DATABASE1()
+		} ElseIf opt=5 {
+			Do ManageInt^EncryptionKey()
+		} ElseIf opt=6 {
+			Do ConfigStartInt^DATABASE1()
+		} ElseIf ($zversion(1)=1) && (opt=7) {
+			Write !
+			Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3878210504"),"1) Convert from VMS to UNIX/Windows format")
+			Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3790000669"),"2) Convert from UNIX/Windows to VMS format")
+			Write !!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1221568091"),"Enter option: ")
+			Read opt
+			If (opt=1)||(opt=2) {
+				Read !,"Input file: ",infile
+				Read !,"Output file: ",outfile
+				If $L(infile)&&$L(outfile) {
+					Set err=""
+					If $$Convert^DZCVTFILE(opt,infile,outfile,.err) {
+						Write !,"Conversion done!"
+					} Else {
+						Write !,"Error: ",err
+					}
+				}
+			}
+		}
+	}
+}
+mainopt() {
+	Write !
+op1	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2972613625"),"1) Create new database encryption key and key file")
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"541031759"),"2) Activate database encryption key from key file")
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3288252095"),"3) Show activated database encryption key identifiers")
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"817734760"),"4) Deactivate database encryption key")
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2863853651"),"5) Manage database encryption key file")
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2603582038"),"6) Configure Cache startup options")
+	If ($zversion(1)=1) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"397329707"),"7) Convert database encryption key file format")
+	Write !!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1221568091"),"Enter option: ")
+	Read opt Quit:opt="" ""
+	If ($zversion(1)=1) {
+		If (opt<1)!(opt>7) Write $get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3677302715"),"Invalid option") Goto op1
+	} Else {
+		If (opt<1)!(opt>6) Write $get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3677302715"),"Invalid option") Goto op1
+	}
+	Quit opt
+}
+ConfigStart(mode,journal,cachetemp,keyfile) public {
+	Quit $$ConfigStart^DATABASE1(mode,journal,cachetemp,keyfile)
+}
+Start() public {
+	Quit $$Start^DATABASE1()
+}
+Enable(file,Username,Password) public {
+	Quit $$Enable^DATABASE1(file,Username,Password)
+}
+DeleteKey() public {
+	Quit $$DeleteKey^DATABASE1()
+}
+ReadFile(file,data) public {
+	Quit $$ReadFile^DATABASE1(file,data)
+}
+WriteFile(file,data) public {
+	Quit $$WriteFile^DATABASE1(file,data)
+}
+CreateFile(file,DBEncKeyID) public {
+	Quit $$CreateFile^DATABASE1(file,DBEncKeyID)
+}
+DBTruncat() Public {
+ s $zt="ERROR"
+ if ($zversion(1)=1) {
+	 w !,"Database truncation is not available on VMS"
+	 quit
+ }
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q 1
+ f  {
+	s Value=""
+	s Flag=8+8192+512+524288+1048576
+ 	s Status=##class(SYS.Database).GetDirectory("Database directory?",.Value,.Obj,,,,Flag)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+ 	i Obj.Mounted=0 w !!,"Database is not mounted, please re-enter",! Continue
+	if (Obj.MirrorNoWrite||Obj.ReadOnly||(Obj.ReadOnlyMounted&&($SYSTEM.Mirror.IsPrimary()||'Obj.Mirrored))) w !!,"Database is read-only, please re-enter",! Continue
+	f  {
+		s Value=0
+		s Flag=8
+		w !,"Current size "_Obj.Size_"MB",!
+ 		s Status=##Class(%Library.Prompt).GetNumber("Specify a desired file size (in MB), or 0 to return all:",.TargetSize,0,Obj.Size-1,"Size must be less than current size",Flag)
+ 		i (+Status=0)||(Status=2) q
+		w !,"Returning space... " Hang 0
+		s NewSize=""
+		s Status = ##class(SYS.Database).ReturnUnusedSpace(Obj.Directory,TargetSize,.NewSize)
+		i Status'=1 {
+			do $System.Status.DisplayError(Status)
+		} else {
+			w !,"Database "_Obj.Directory_" file size is now "_NewSize_"MB"
+		}
+ 		s Status=1
+ 		k TargetSize, NewSize, Obj
+ 		q
+	}
+	i +Status=0 q
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+ }
+FileCompact() Public {
+ s $zt="ERROR"
+ if ($zversion(1)=1) {
+	 w !,"Database freespace compaction is not available on VMS"
+	 quit
+ }
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q 1
+ f  {
+	s Value=""
+	s Flag=8+8192+512+524288+1048576
+ 	s Status=##class(SYS.Database).GetDirectory("Database directory?",.Value,.Obj,,,,Flag)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+ 	i Obj.Mounted=0 w !!,"Database is not mounted, please re-enter",! Continue
+	if (Obj.MirrorNoWrite||Obj.ReadOnly||(Obj.ReadOnlyMounted&&($SYSTEM.Mirror.IsPrimary()||'Obj.Mirrored))) w !!,"Database is read-only, please re-enter",! Continue
+	s Status = Obj.GetFreeSpace(Obj.Directory,.FreeSpace)
+	i '(''Status) w !,"Unexpected error: " do $System.Status.DisplayError(Status) q
+	s FreeSpace=FreeSpace\1
+	s Status = ##class(SYS.Database).FileCompact(Obj.Directory,0,.endfree)
+	i ('Status) { do $System.Status.DisplayError(Status) quit }
+	w !,"Current Size: ",Obj.Size,"MB"
+	w !,"Total freespace: ",FreeSpace,"MB"
+	w !,"Freespace at end of file: ",endfree,"MB",!
+	i 'FreeSpace { w !,"No freespace to compact",! continue }
+	i FreeSpace'>endfree { w !,"All freespace is already compacted",! continue }
+	f  {
+		k TargetSize
+		s Flag=8+512
+ 		s Status=##Class(%Library.Prompt).GetNumber("Target freespace at end of file, in MB ("_endfree_"-"_FreeSpace_"): ",.TargetSize,endfree,FreeSpace,,Flag)
+ 		i (+Status=0)||(Status=2)||('TargetSize) q
+		w !,"Compacting freespace... "
+		s NewSize=""
+		s Status = ##class(SYS.Database).FileCompact(Obj.Directory,TargetSize,.NewSize)
+		i Status'=1 {
+			do $System.Status.DisplayError(Status)
+		} else {
+			w !,"Database "_Obj.Directory_" returnable freespace: "_NewSize_" MB"
+		}
+ 		s Status=1
+ 		q
+	}
+	i +Status=0 q
+	w !
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ZE
+ }
+HEADER() PUBLIC {
+ w !,"Block",?7,"# of",?12,"File"    ,?21,"Exp #",?28,"Max #",?34,"New gbl",?42,"New gbl",?50,"Col"
+ w !,"size" ,?7,"vols",?12,"size(MB)",?21,"(MB)" ,?28,"(MB)" ,?34,"pntrs"  ,?42,"data"   ,?50,"type"
+ q
+}
+ALL() PUBLIC {
+ Set Rset = ##class(%Library.ResultSet).%New("SYS.Database:Detail")
+ d Rset.Execute("*")
+ While Rset.Next() {
+	w !,Rset.Data("Directory")
+	w !," "
+	w Rset.Data("BlockSize")
+	w ?7,Rset.Data("Volumes")
+	w ?12,Rset.Data("Size")
+	w ?21,Rset.Data("ExpansionSize")
+	w ?28,Rset.Data("MaxSize")
+	w ?34,Rset.Data("NewGlobalPointerBlock")
+	w ?42,Rset.Data("NewGlobalGrowthBlock")
+	s Collation=##Class(%Library.Collate).DisplayToLogical(Rset.Data("NewGlobalCollation"))
+	w ?50,Collation
+	w !,Rset.Data("Status")
+	w !
+ }
+ q
+}
+AskJrnEncOnNewDB(Obj) public {
+	Quit $$AskJrnEncOnNewDB^DATABASE1(Obj)
+}

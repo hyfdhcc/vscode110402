@@ -1,0 +1,815 @@
+ROUTINE SHDWX [Type=INT]
+SHDWX ;Cluster Shadow Server  ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/shdwx.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ ;caller: CLIENT^SHDWCLI
+ ;special subroutines called: deftype, loadque, loadmap, errlog
+ ;general subroutines called: chkseqgap, savechkpnt, dejrnseq
+ ;input:
+ ; shdw - shadow ID (of the dejournaling job)
+CLUDEJRN(shdw) ;
+ n dbmap,dbcol ; database redirection and collation tables
+ n jrntype ; journal record type table (1 if dejournalable types => sets/kills)
+ n que,q ; que of cluster sequence #s to dejournal (one q item per node)
+ n cst,seq,seqq ; current clu sess ID and seq # to dejournal/queue (seqq>=seq)
+ n oldcst,oldseq ; cst and seq last dejournaled (for detecting sequence gaps)
+ n time ; time ($zh) of last checkpoint (for periodic saving of checkpoints)
+ n reccnt ; # of records processed (NOT necessarily dejournaled) per queue item
+ n wait ; incremental wait time during inactivity (reccnt=0)
+ n saved ; 1 if no activity (reccnt=0) since last checkpoint; 0 otherwise
+ n saveintv ; time interval between two consecutive checkpoints
+ n biggap ; min difference between two sequence #s caused by a new node joining
+ n err
+ n filter ; name of the filter routine (if any)
+ s filter=$g(^SYS("shdwcli",cli,"filter"))
+ n tranopen ; array of open transactions
+ m tranopen=^SYS("shdwcli",cli,"tranopen")
+ n dejrnfunc ; dejournaling method (COS, MultiProc, etc.)
+ n shrid ; ID of shared memory section for dejournaling
+ d InitShare^SHDWCLI(cli)
+ s dejrnfunc=$g(^SYS("shdwcli",cli,"func"),"DejrnMP")
+ s shrid=$g(^SYS("shdwcli",cli,"share"))
+ ;
+ s $zt="etCLUDEJRN"
+ d deftype(.jrntype)
+ s err=$$loadque(shdw) i err s shdwzerr=err ztrap $$traperr^SHDWUTIL(shdwzerr)  ;load que, oldcst, oldseq
+ s err=$$loadmap(shdw) i err d errlog(shdw,err) ;load dbmap, dbcol
+ s (reccnt,wait,saved)=0 ;initialize reccnt and wait
+ s saveintv=$g(^SYS("shdwcli",shdw,"saveintv"),300),biggap=127
+ if que {
+   if dejrnfunc="DejrnMP" {
+     s q=$name(que("")) f  s q=$q(@q) q:q=""  d 
+     . s jrnf=$p(@q,",",2),addr=$p(@q,",",3),dev=$p(@q,",",4),csn=$p(@q,",",5)
+     . i addr<0 s addr=-addr
+     . i $zu(78,53,shrid,1,csn,addr,jrnf)
+   }
+ } else {
+   i $$chkseqgap(.oldcst,.oldseq) d savechkpnt(shdw)
+ }
+ s time=$zh f  s q=$q(que("")) q:q=""  d  q:^SYS("shdwcli",shdw,"stop")
+ . s cst=$qs(q,1),seqq=$qs(q,2) 
+ . i cst>oldcst,$$chkseqgap(.oldcst,.oldseq) d savechkpnt(shdw) q
+ . i cst=oldcst,seqq-biggap>oldseq,$$chkseqgap(.oldcst,.oldseq) d savechkpnt(shdw) q
+ . s seq=+@q d dejrnseq(q,cst,seq) i cst=oldcst,seq>oldseq s oldseq=seq
+ . i reccnt s saved=0 ;changed
+ . i $zh-saveintv>time s time=$zh,saveintv=$g(^SYS("shdwcli",shdw,"saveintv"),300) d savechkpnt(shdw,1)
+ . i reccnt s (reccnt,wait)=0 q  ;don't sleep
+ . ; sleep for a while if all journal threads are inactive (reccnt=0 in a row)
+ . i $i(wait)>$o(^SYS("shdwcli",shdw,"sys",""),-1) d savechkpnt(shdw,1) h wait s:wait>30 wait=wait-1
+etCLUDEJRN ;
+ s $zt="^%ETN"
+ i $ze]"",$ze'["ZSTOP" d ERRLOG^SHDWUTIL($ze_";"_$g(shdwzerr),shdw) k shdwzerr
+ i $ze'["<ZCHK",$ze'["<ZSYNC" d  
+ . s $zt="^%ETN"  ;trap any error from savechkpnt and continue the cleanup
+ . d savechkpnt(shdw)
+ d endcblk(shdw)
+ ;Should we force down cblk jobs if they don't quit??
+ d FreeShare^SHDWCLI(shdw)
+ s ^SYS("shdwcli",shdw,"pid")="",^SYS("shdwcli",shdw,"stat")=0
+ d SetStopStatus^SHDWCLI(shdw)
+ zq  q
+ ;caller: CLUDEJRN
+ ;subroutines: dejrnrec, openjrnf, getquepos, atquepos, chkjrnget
+ ;components:
+ ; dejrnfile - dejournal records with given seq, switching to next file at EOF
+ ; dejrneojt - at end of a journal thread, wait or move on to next queued item
+ ;inputs from caller:
+ ; q,cst,seqdj - parameter passing (seqdj: sequence # to dejournal) 
+ ; shdw,que,dbmap,dbcol,jrntype - 
+ ;local variables:
+ ; jrnf,addr - dejournal location (addr<0 => the location has been dejournaled)
+ ; next - next address or journal file, depending on the context
+ ; dev - device (handler/channel) of the opened journal file (jrnf)
+ ; cli - cluster system # (csn) of the node to which jrnf belongs
+ ; jfcli - ID of the journal fetching job for the csn
+ ; curcst,curseq - most current cluster-wide sequence # (set at dejrneojt)
+ ; curjrn,curend - most current journal end location on csn (postdating curseq)
+ ; wasnoncurrent - 1 if jrnf was not the latest journal file when it was opened
+ ; newcst,seq
+ ; typ,glo,val,dir - used by dejrnrec
+dejrnseq(q,cst,seqdj) ;dejournal records with seqdj (perhaps across files)
+ n next,newcst,x,seq,jrnf,addr,dev,cli,curseq,curcst,curjrn,curend,jfcli,wasnoncurrent,i,typ,glo,val,dir,idx
+ s $zt="etCLUDEJRN"
+ s jrnf=$p(@q,",",2),addr=$p(@q,",",3),dev=$p(@q,",",4),cli=$p(@q,",",5)
+ s jfcli=shdw_"~"_cli
+ i dev="" s dev=$$openjrnf(jrnf)
+ d USEJRN(dev,jfcli)
+ i addr'>0 s addr=-addr  ;record at <jrnf,addr> must have been dejournaled
+ e  i dejrnfunc="DejrnMP" d dejrnrecMP(addr) d:stat<0 ExitOnErrorGetRec i 1  
+ e  d dejrnrec(addr)
+ s (wasnoncurrent,curcst,curseq,curend)=0,curjrn="" ;1st time in the loop
+dejrnfile ;dejournal (in jrnf) records with seqdj until EOJ or a new seq
+ i dev="",^SYS("shdwcli",shdw,"stop") s que(cst,seqdj,$i(que))=(seqdj)_","_(jrnf)_","_(addr)_","_("")_","_(cli) m:+$g(^%ISCLOG("SHDWX")) ^%ISCLOG("SHDWX","que")=que k @q q
+ i dev="" s dev=$$openjrnf(jrnf) d USEJRN(dev,jfcli)
+ d @dejrnfunc
+ i next>0 s que(cst,seq,$i(que))=(seq)_","_(jrnf)_","_(addr)_","_(dev)_","_(cli) m:+$g(^%ISCLOG("SHDWX")) ^%ISCLOG("SHDWX","que")=que k @q q  ;found a new seq
+ i dejrnfunc="DejrnMP",next<0 {
+   s que(cst,seqdj,$i(que))=(seqdj)_","_(jrnf)_","_(-addr)_","_(dev)_","_(cli) m:+$g(^%ISCLOG("SHDWX")) ^%ISCLOG("SHDWX","que")=que k @q
+   d ExitOnErrorGetRec
+ }
+ i $zu(78,7,dev)!1 s dev=""  ;at end of journal file
+ ; if jrnf was not followed by a file before last opened, see if it is now
+ i 'wasnoncurrent g:$$NEXTJRN1^SHDWUTIL(jrnf,jfcli)="" dejrneojt s wasnoncurrent=1 g dejrnfile
+ ; jrnf was followed by a file BEFORE we last opened jrnf (wasnoncurrent=1)
+ s wasnoncurrent=0,next=$$NEXTJRN1^SHDWUTIL(jrnf,jfcli) ;next'=""
+ d ChkJrnEnd^SHDWUTIL(jfcli,jrnf) ;would error out if jrnend didn't match
+ s jrnf=next,dev=$$openjrnf(jrnf) d USEJRN(dev,jfcli)
+ s newcst=$ZU(78,30,0)
+ i newcst'=cst s que(newcst,1,$i(que))=(1)_","_(jrnf)_","_(0)_","_(dev)_","_(cli) m:+$g(^%ISCLOG("SHDWX")) ^%ISCLOG("SHDWX","que")=que k @q q  ;new cluster session
+ s addr=0,curjrn="" g dejrnfile
+dejrneojt ;at the end of a journal thread (addr=address of the last record)
+ i curjrn="" d getquepos(shdw,cli,.curcst,.curseq,.curjrn,.curend)
+ ; if we haven't reached the position to queue, make sure we are still getting
+ ; journal files (if any) from the server, then try dejournaling jrnf again.
+ i '$$atquepos(jfcli,jrnf,addr,curjrn,curend) d chkjrnget(jfcli) g dejrnfile
+ ; now we have reached a point where we can put off dejournaling seqdj...
+ i curcst<$o(que(""),-1) ztrap "CSES" ;should not happen
+ i curcst>cst d savechkpnt(shdw) k @q q  ;a dead thread (stop journal fetching job?)
+ i curseq<$o(que(cst,""),-1) s curseq=$o(que(cst,""),-1) ;shouldn't happen
+ s que(cst,curseq,$i(que))=(seqdj)_","_(jrnf)_","_(-addr)_","_(dev)_","_(cli) m:+$g(^%ISCLOG("SHDWX")) ^%ISCLOG("SHDWX","que")=que k @q  ;curseq'<$o(que,-1)'<seqdj
+ q
+ExitOnErrorGetRec ;
+ i $zu(78,53,shrid,0) ztrap "STOP"
+ s $ze="EEGR" d BACK^%ETN s $ze=""
+ i $g(^SYS("shdwcli",shdw,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",shdw,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+ i $zu(78,49,shrid)<0 s shdwzerr=$$Error^%apiOBJ(1040) ztrap "SYNC"
+ ztrap "QUIT"
+DejrnCOS ;
+ f  s next=$zu(78,17,addr) q:next'>0  s reccnt=reccnt+1,addr=next,seq=$zu(78,11,addr) q:seq>seqdj  d:seq=seqdj dejrnrec(addr)
+ q
+DejrnMP ;
+ s:seqdj=0 seqdj=1 i $zu(78,62,seqdj)
+ n begtime s begtime=$zh
+ i filter]"" {
+   for {
+     s next=$zu(78,17,addr) i next'>0 s next=0 q  ;end of journal
+     s oldaddr=addr,addr=next
+     s reccnt=reccnt+1,seq=$zu(78,11,addr) 
+     i seq>seqdj q   ;addr is the first record w/ higher seq# to queue
+     i seq=seqdj,$$dejrnmpfilt1(addr),stat<0 s addr=oldaddr,next=stat q
+     d $zu(78,54,addr)
+     i $zh-begtime>saveintv {  ;time to create a new checkpoint
+       s que(cst,seqdj,$i(que))=(seqdj)_","_(jrnf)_","_(-addr)_","_(dev)_","_(cli) m:+$g(^%ISCLOG("SHDWX")) ^%ISCLOG("SHDWX","que")=que k @q
+       d savechkpnt(shdw) s begtime=$zh
+     }
+   }
+   q
+ }
+ s init=addr f  s last=$zu(78,47,addr),addr=$p(last,",",2),type=+last q:type'>0  d
+ . i type=4 s pid=$zu(78,10,addr),sys=$ZU(78,25,addr),tranopen(pid,sys)=addr_","_jrnf_","_jfcli,tranopen(pid,sys,"cp")=-1 i 1
+ . e  i type=5 k tranopen($zu(78,10,addr),$ZU(78,25,addr)) i 1
+ . e  i type=13 s info=$ZU(78,35,addr) i $p(info,",",3)=-3 d
+ . . s csn=+$p(info,",",4,$l(info))
+ . . s pid="" f  s pid=$o(tranopen(pid)) q:pid=""  s sys="" f  s sys=$o(tranopen(pid,sys)) q:sys=""  i $p(tranopen(pid,sys),",",3)=csn k tranopen(pid,sys)
+ . i $zh-begtime>saveintv d  ;time to create a new checkpoint
+ . . s que(cst,seqdj,$i(que))=(seqdj)_","_(jrnf)_","_(-addr)_","_(dev)_","_(cli) m:+$g(^%ISCLOG("SHDWX")) ^%ISCLOG("SHDWX","que")=que k @q
+ . . d savechkpnt(shdw) s begtime=$zh
+ s reccnt=reccnt+(addr-init),seq=$zu(78,62) i seq>seqdj s next=addr
+ e  s next=type  ;for-loop exit condition: type<=0
+ q
+dejrnmpfilt1(addr) ;
+ s type=$zu(78,8,addr),stat=0 ;normal stat (0) by default
+ i (type=6)||(type=14)||(type=7)||(type=9) {
+   s node=$zu(78,13,addr),dir=$g(dbmap($p(node,"""",2)))
+   i dir]"",$$Filter^SHDWCBLK() s stat=$zu(78,47,addr,addr) q 1
+   q 0  ;record skipped based on user specification (unmapped or filtered out)
+ }
+ i type=4 s pid=$zu(78,10,addr),sys=$ZU(78,25,addr),tranopen(pid,sys)=addr_","_jrnf_","_jfcli,tranopen(pid,sys,"cp")=-1 q 0
+ i type=5 k tranopen($zu(78,10,addr),$ZU(78,25,addr)) q 0
+ i type=13 s info=$ZU(78,35,addr) i $p(info,",",3)=-3 d
+ . s csn=+$p(info,",",4,$l(info))
+ . s pid="" f  s pid=$o(tranopen(pid)) q:pid=""  s sys="" f  s sys=$o(tranopen(pid,sys)) q:sys=""  i $p(tranopen(pid,sys),",",3)=csn k tranopen(pid,sys)
+ q 0
+dejrnrecMP(addr) ;dejournal a record of type SET or KILL at addr
+ i filter]"" d:'$$dejrnmpfilt1(addr) $zu(78,54,addr) q
+ s stat=0,type=$zu(78,47,addr,addr) i type'>0 s stat=type q
+ i type=4 s pid=$zu(78,10,addr),sys=$ZU(78,25,addr),tranopen(pid,sys)=addr_","_jrnf_","_jfcli,tranopen(pid,sys,"cp")=-1 q
+ i type=5 k tranopen($zu(78,10,addr),$ZU(78,25,addr)) q
+ q
+ ;caller: dejrnseq, where the local variables and error handler are defined
+ ;input: dbmap, dbcol and jrntype defined in CLUDEJRN
+dejrnrec(addr) ;dejournal a record of type SET or KILL at addr
+ s type=$zu(78,8,addr) 
+ i type=6 s node=$zu(78,13,addr),dir=$g(dbmap($p(node,"""",2))) q:dir=""  q:filter]""&&'$$Filter^SHDWCBLK()  s $p(node,"""",2)=dir,col=$ZU(78,27,addr) d:(col'=dbcol(dir)&&('$d(@($p(node,"(",1,$l(dir,"(")))))) $zu(178,dir,$qs(node,0),col) s @node=$zu(78,15,addr) q
+ i type=14 s node=$zu(78,13,addr),dir=$g(dbmap($p(node,"""",2))) q:dir=""  q:filter]""&&'$$Filter^SHDWCBLK()  s $p(node,"""",2)=dir,col=$ZU(78,27,addr) d:(col'=dbcol(dir)&&('$d(@($p(node,"(",1,$l(dir,"(")))))) $zu(178,dir,$qs(node,0),col) s $Bit(@node,$zu(78,36,addr))=$zu(78,37,addr) q
+ i type=7 s node=$zu(78,13,addr),dir=$g(dbmap($p(node,"""",2))) q:dir=""  q:filter]""&&'$$Filter^SHDWCBLK()  s $p(node,"""",2)=dir k @node q
+ i type=9 s node=$zu(78,13,addr),dir=$g(dbmap($p(node,"""",2))) q:dir=""  q:filter]""&&'$$Filter^SHDWCBLK()  s $p(node,"""",2)=dir zk @node q
+ i type=4 s pid=$zu(78,10,addr),sys=$ZU(78,25,addr),tranopen(pid,sys)=addr_","_jrnf_","_jfcli,tranopen(pid,sys,"cp")=-1 q
+ i type=5 k tranopen($zu(78,10,addr),$ZU(78,25,addr)) q
+ i type=13 s info=$ZU(78,35,addr) i $p(info,",",3)=-3 d
+ . s csn=+$p(info,",",4,$l(info))
+ . s pid="" f  s pid=$o(tranopen(pid)) q:pid=""  s sys="" f  s sys=$o(tranopen(pid,sys)) q:sys=""  i $p(tranopen(pid,sys),",",3)=csn k tranopen(pid,sys)
+ q
+ ;caller: dejrnseq, where the local variables and error handler are defined
+ ;subroutine called: runcblk1
+ ;input: 
+ ; jrnf - parameter passing
+ ; shdw - from CLUDEJRN
+ ; cli,jfcli - from dejrnseq
+ ;output:
+ ; dev - device (handler/channel) of the opened journal file (jrnf)
+ ;NB: this is unnecessary if nextjrn^SHDWUTIL checks jrnf availability
+ ;HYY587-
+openjrnf(jrnf) ;open a journal file for read by records (wait until available)
+ n dev,i
+ n csn s csn=$p(jfcli,"~",2)
+ s idx=^SYS("shdwcli",jfcli,"jrnfil") ;jrnf couldn't be newer than this
+ n current s dev=-1 f i=0:1 d  q:dev'<0  h i#10
+ . s current=(jrnf=$g(^SYS("shdwcli",jfcli,"jrnfil",idx,"shdw")))
+ . s jrnend=$g(^SYS("shdwcli",jfcli,"jrnend"))
+ . i 'current||(($p(jrnend,",",2)=jrnf)&&(jrnend>(65536*2)))||($zu(140,1,jrnf)'<(65536*3)) d  q:dev'<0
+ . . i dejrnfunc="DejrnMP" s dev=$zu(78,5,jrnf,0,shrid,csn) i 1
+ . . e  s dev=$zu(78,5,jrnf,0) 
+ . i 'current s shdwzerr=$$Error^%apiOBJ(1100,jrnf) ztrap "FILE"
+ . i $g(^SYS("shdwcli",shdw,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",shdw,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+ . i '$$STATE^SHDWCLI(jfcli),$$runcblk1(jfcli)
+ i $zu(78,6,dev)   ;caller of openjrnf() calls USEJRN()
+ i dejrnfunc="DejrnMP",$$DejrnRedirSetup^SHDWCBLK(shdw,.dbmap,jrnf)
+ i $g(^SYS("shdwcli",jfcli,"locshd"))'=jrnf s ^SYS("shdwcli",jfcli,"locshd")=jrnf
+ q dev
+ ;caller: dejrnseq
+ ;Check whether a journal fetching job is running OK and, if not, restart it
+chkjrnget(cli) ;
+ n stat,rc
+ f  {
+   s stat=$$STATE^SHDWCLI(cli) 
+   i stat {
+     s pid=^SYS("shdwcli",cli,"pid")
+     f  {
+       i '$zu(67,pid) s stat=0 q  ;job no longer exists
+       s $zt="chkjrngetjob" ;trap error from $zu(88) due to busy job??
+       i $zu(88,2,pid,"cli")=cli q  ;running
+       ;not the copier we are looking for -- the old copier must have died
+       s stat=0 q
+     }
+     i stat q  ;running
+     ;clear the old state and fall to the code below to start a new copier
+     s ^SYS("shdwcli",cli,"stat")=0
+   }
+   s rc=$$START^SHDWCLI(cli,2) 
+   h 10 i $g(^SYS("shdwcli",shdw,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",shdw,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+ }
+ q
+chkjrngetjob s $zt="" 
+ d $zu(9,"","[SHADOWING] "_$s(cli="":"DATABASE SERVER",1:"SHADOW SERVER ("_cli_")")_": "_"Error getting stat of copying job "_$g(pid)_": "_$ze,(0>0),0) 
+ h 10
+ q
+ ;caller: dejrnseq (dejrneojt)
+ ;subroutine called: Query
+ ;purpose:
+ ; Get a position (curjrn,curend) of a journal thread (csn), upon reaching 
+ ; which it is OK for us to put off dejournaling the thread until we reach
+ ; the cluster sequence (curcst,curseq) (i.e., queue the thread at curseq).
+ ;input:
+ ; shdw,csn - parameter passing
+ ;output:
+ ; curcst,curseq,curjrn,curend - parameter passing
+ ;variables:
+ ; cli - ID of the journal fetching job for csn
+ ; ip,port - SuperServer connection parameters
+ ; alter - 1 if we should try alternative servers when current one fails
+getquepos(shdw,csn,curcst,curseq,curjrn,curend) ;
+ n cli,ip,port,msg,alter
+ s $zt="etCLUDEJRN"
+ ; contact cluster master for the most current cluster-wide clujrnseq
+ ; this is a two-step procedure: (1) find cluster master; (2) get clujrnseq
+ f  s ip=^SYS("shdwcli",shdw,"ip"),port=^SYS("shdwcli",shdw,"port"),msg=$$Query(shdw,ip,"|TCP|"_port,"CLUSEQ",1) q:'msg  s port=$p(msg,",",2),ip=$p(msg,",",3),msg=$$Query(shdw,ip,"|TCP|"_port,"CLUSEQ",0) q:'msg
+ s curcst=$p(msg,",",2),curseq=$p(msg,",",3)
+ ; it is OK (although less than optimal) not to have curcst/curseq -- we will
+ ; simply use whatever is the last on the queue, but we must have curjrn,curend
+ ; this is a two-step procedure too: (1) find node csn; (2) get curjrn,curend
+ s cli=shdw_"~"_csn,ip=^SYS("shdwcli",cli,"ip"),port=^SYS("shdwcli",cli,"port")
+ s alter=0 f  s msg=$$Query(shdw,ip,"|TCP|"_port_"|"_csn,"CURLOC,"_csn,alter) q:'msg  d
+ . i +msg>0 s alter=0,port=$p(msg,",",2),ip=$p(msg,",",3) q
+ . s alter=1,ip=^SYS("shdwcli",shdw,"ip"),port=^SYS("shdwcli",shdw,"port")
+ s curend=$p(msg,",",2),curjrn=$p(msg,",",3)
+ q 
+ ;caller: dejrnseq (dejrneojt)
+ ;Return 1 if (jrnf,addr) is at or beyond (endjrn,endloc), otherwise 0.
+ ;NB: jrnf is shadow file name whereas endjrn is primary file name
+atquepos(cli,jrnf,addr,endjrn,endloc) ;
+ n i,jrnfi
+ s jrnfi=0,i=$g(^SYS("shdwcli",cli,"jrnfil")) q:'i 0
+ f  s:$g(^SYS("shdwcli",cli,"jrnfil",i,"shdw"))=jrnf jrnfi=i q:$g(^SYS("shdwcli",cli,"jrnfil",i))=endjrn  s i=$o(^SYS("shdwcli",cli,"jrnfil",i),-1) q:i=""
+ i 'i q 0  ;endjrn not found (probably hasn't been fetched yet)
+ i jrnfi>i q 1  ;jrnf is newer than endjrn
+ i jrnfi<i q 0  ;jrnf is older than endjrn
+ q (addr'<endloc) ;jrnf and endjrn are the same file
+ ; Input: cst, seq 
+ ; Modified: que, cst, seq
+ ; Return: >0 if a new element is queued; 0 otherwise. 
+ ; Purpose: Identify ALL nodes that existed at some point between cst,seq
+ ;   and now, queue any missing nodes and set cst,seq to the last visible
+ ;   sequence point so that we won't have to check for new nodes again
+ ;   until that point is reached (i.e., a gap caused by any new node we
+ ;   miss can only appear beyond that point).
+ ; NB: In this context, a 'node' is identified by its csn, not necessarily
+ ; fixed to a specific node of the cluster.
+ ;caller: CLUDEJRN
+ ;subroutines called: Query, configjrnfetch, runcblk1, lookuplocshd
+ ;variables defined in callers:
+ ; shdw,que - from CLUDEJRN
+ ;local variables:
+ ; new - # of new nodes detected and queued for dejournaling
+ ; msg - a $LIST of info on nodes that existed after the given sequence #
+ ; server - port,ip
+ ; csn - cluster system # of a node
+ ; cli - ID of the journal fetching job for csn
+ ; remjrn - the 1st journal file on node csn following the given sequence #
+ ; jrnf - the shadow copy of remjrn
+chkseqgap(cst,seq) ;
+ n new,msg,i,info,csn,remjrn,server,cli,jrnf,q,c
+ s $zt="etCLUDEJRN"
+ i seq<0 s seq=0  ;negative seq comes from ConfigBegloc() presumably
+ s new=0,msg=$$Query(shdw,^SYS("shdwcli",shdw,"ip"),("|TCP|"_^SYS("shdwcli",shdw,"port")),"FOLLOW,"_cst_","_seq,1),msg=$p(msg,",",2,$l(msg)) 
+ i msg="" ztrap "CSES"
+ f i=1:1:$ll(msg) s info=$lg(msg,i) d:info]""
+ . s csn=i-1,remjrn=$p(info,","),server=$p(info,",",2,3),cli=shdw_"~"_csn
+ . i '$$STATE^SHDWCLI(cli),$$configjrnfetch(shdw,csn,remjrn,server),$$runcblk1(cli)
+ . s q=$name(que("")) f  s q=$q(@q) q:q=""  s c=$p(@q,",",5) q:csn=c  k:c="" @q
+ . i q="" d
+ . . s new=new+1
+ . . n i f i=1:1:60 s jrnf=$$lookuplocshd(cli,remjrn) q:jrnf]""  h 1 
+ . . i jrnf="" ztrap "COPY"
+ . . s que(cst,seq,$i(que))=(seq)_","_(jrnf)_","_(0)_","_("")_","_(csn) m:+$g(^%ISCLOG("SHDWX")) ^%ISCLOG("SHDWX","que")=que 
+ s cst=$o(que(""),-1),seq=$o(que(cst,""),-1)  ;can be optimized further
+ q new
+ ;callers: chkseqgap, openjrnf
+ ;input: 
+ ; cli - (parameter passing) ID of the journal fetching job to start)
+ ; shdw - (from CLUDEJRN) shadow ID, dejournaling job
+runcblk1(cli) ;
+ n rc
+ i $$STATE^SHDWCLI(cli)>0 q 1  ;already running
+ s rc=$$START^SHDWCLI(cli,2) i 'rc d ERRLOG^SHDWUTIL(rc,cli) q rc
+ f  s rc=$$STATE^SHDWCLI(cli) q:rc>0  h .1 i $g(^SYS("shdwcli",shdw,"stop"))<0 { s shdwzerr=$$Error^%apiOBJ(1029) ztrap "ABORT" } elseif $g(^SYS("shdwcli",shdw,"stop"))>0 { s shdwzerr="0;INFO: suspend shadowing" ztrap "STOP" } elseif ($$%swstat^SWSET(16)) { s shdwzerr="0;INFO: shut down shadowing" ztrap "STOP" }
+ q 1
+endcblk1(cli) ;
+ i '$$STATE^SHDWCLI(cli) q 1  ;not running
+ q $$SUSPEND^SHDWCLI(cli)
+runcblk(shdw) ;
+ n sys
+ s sys="" f  s sys=$o(^SYS("shdwcli",shdw,"sys",sys)) q:sys=""  s rc=$$runcblk1(shdw_"~"_sys) ;i 'rc d errlog(shdw,rc_",sys "_sys)
+ q
+endcblk(shdw) ;
+ n sys
+ s sys="" f  s sys=$o(^SYS("shdwcli",shdw,"sys",sys)) q:sys=""  s rc=$$endcblk1(shdw_"~"_sys) i 'rc d errlog(shdw,rc_",sys "_sys)
+ q
+loadque(shdw) ;
+ n cnt,q
+ s cnt=+$g(^SYS("shdwcli",shdw,"chkpnt")) i 'cnt q $$Error^%apiOBJ(1041)
+ k que m que=^SYS("shdwcli",shdw,"chkpnt",cnt) i $d(que)\10=0 q $$Error^%apiOBJ(1042,$name(^SYS("shdwcli",shdw,"chkpnt",cnt)))
+ d loadtran^SHDWCBLK(shdw,cnt,.tranopen)
+ s q=$name(que("")) f  s q=$q(@q) q:q=""  s $p(@q,",",4)="",$p(@q,",",6)=""
+ s oldcst=$p(que,",",2),oldseq=$p(que,",",3)
+ q 0
+loadmap(shdw) ;
+ k dbmap m dbmap=^SYS("shdwcli",shdw,"dbmap") i '$d(dbmap) q $$Error^%apiOBJ(1005)
+ d SAVEDBCOL^SHDWCBLK(,.dbmap,.dbcol)
+ q 0
+deftype(jrntype) ;
+ s jrntype(1)=0,jrntype(2)=0,jrntype(3)=0,jrntype(4)=0,jrntype(5)=0
+ s jrntype(6)=1,jrntype(7)=1,jrntype(8)=1,jrntype(9)=1  ;sets and kills
+ s jrntype(10)=0,jrntype(11)=0,jrntype(12)=0
+ s jrntype(13)=0
+ s jrntype(14)=1
+ s jrntype(-1)=0
+ q 
+ ;callers: CLUDEJRN, etCLUDEJRN
+ ; Input: que, oldcst, oldseq, saved
+ ; Modified: ^SYS("shdwcli",shdw,"chkpnt") and subnodes, saved
+ ; noforce = save only if changed
+savechkpnt(shdw,noforce) ;
+ d $zu(78,97,shrid)
+ i +$g(noforce),+$g(saved) q
+ n cnt s cnt=$g(^SYS("shdwcli",shdw,"chkpnt"))+1 ;i cnt>10 s cnt=1 (or kill)
+ i $d(que)\10=0 s shdwzerr=$$Error^%apiOBJ(1045,$g(que)) ztrap "CHKPNT"
+ s que=+que_","_oldcst_","_oldseq k ^SYS("shdwcli",shdw,"chkpnt",cnt) 
+ i $g(shrid)]"",$zu(78,49,shrid)<0 s shdwzerr=$$Error^%apiOBJ(1040) ztrap "SYNC"
+ s oldest=$$xachkpnt^SHDWCBLK(cnt,.tranopen)
+ m ^SYS("shdwcli",shdw,"chkpnt",cnt)=que 
+ k ^SYS("shdwcli",shdw,"opentran",cnt) ;just in case (should be a no-op)
+ m ^SYS("shdwcli",shdw,"opentran",cnt)=tranopen
+ s ^SYS("shdwcli",shdw,"chkpnt")=cnt
+ s cnt=oldest f  s cnt=$o(^SYS("shdwcli",shdw,"chkpnt",cnt),-1) q:cnt=""  k ^SYS("shdwcli",shdw,"chkpnt",cnt),^SYS("shdwcli",shdw,"opentran",cnt)
+ d RequestPurge^SHDWCBLK(shdw)
+ s saved=1
+ q
+errlog(shdw,errcode) ;
+ d ERRLOG^SHDWUTIL(errcode,shdw)
+ ;s ^SYS("shdwcli",shdw,"err",$i(^SYS("shdwcli",shdw,"err")))=errcode
+ q
+Query(shdw,srv,dev,req,alter) ;
+ n ans,rdto,reqid,cluid
+ s ans="",alter=+$g(alter),rdto=10 ;read timeout
+ f  d  q:$g(ans)]""  i +$g(^SYS("shdwcli",shdw,"stop")) ztrap "STOP"
+ . s $zt="QueryE"
+ . s reqid=$g(^SYS("shdwcli",shdw,"DatabaseServerClusterID"))
+ . d connect(srv,dev)
+ . u dev w "JRN",reqid,",",req,! 
+ . s ans="" u dev r ans:rdto e  s shdwzerr=$$Error^%apiOBJ(1071) ztrap "READ"
+ . s cluid=$p(ans,","),ans=$p(ans,",",2,$l(ans)) i cluid=-1 ztrap "CLID"
+ . i cluid="" s shdwzerr=$s(cluid="":$$Error^%apiOBJ(1027,$s(shdw="":"",1:^SYS("shdwcli",shdw,"ip")_"/"_^SYS("shdwcli",shdw,"port"))),1:$$Error^%apiOBJ(1028,$s(shdw="":"",1:^SYS("shdwcli",shdw,"ip")_"/"_^SYS("shdwcli",shdw,"port")),reqid)) ztrap "OPEN"
+ . i reqid="" s ^SYS("shdwcli",shdw,"DatabaseServerClusterID")=cluid q
+ . i cluid'=reqid s shdwzerr=$s(cluid="":$$Error^%apiOBJ(1027,$s(shdw="":"",1:^SYS("shdwcli",shdw,"ip")_"/"_^SYS("shdwcli",shdw,"port"))),1:$$Error^%apiOBJ(1028,$s(shdw="":"",1:^SYS("shdwcli",shdw,"ip")_"/"_^SYS("shdwcli",shdw,"port")),reqid)) ztrap "OPEN"
+ q ans
+QueryE ;
+ s $zt=""
+ i $ze'["READ",$ze'["WRITE",$ze'["OPEN" d ERRLOG^SHDWUTIL($ze_";"_$g(shdwzerr),shdw) k shdwzerr zt $ze ;pass on to upper error handler
+ i $ze["<READ>"!($ze["<WRITE>") i $i?1"|TCP|"1.5N.E s shdwzerr=$$Error^%apiOBJ(1072,$s($ze["<READ>":"READ",1:"WRITE"))
+ d ERRLOG^SHDWUTIL($ze_";"_$g(shdwzerr),shdw) k shdwzerr
+ i $ze["WRITE"!($ze["READ") c dev d:$ze["READ"  q
+ . s ans="",rdto=$s(rdto<40:rdto*1.5\1,1:60) h rdto/10
+ i $ze["OPEN" d  ;unable to open the server (server down or network prob)
+ . i 'alter s ans="-1,OPEN" q
+ . d altersrv(shdw,shdw) s srv=^SYS("shdwcli",shdw,"ip"),dev=("|TCP|"_^SYS("shdwcli",shdw,"port")),ans=""
+ q
+altersrv(cli,clu) ;
+ n srv s srv=^SYS("shdwcli",cli,"port")_","_^SYS("shdwcli",cli,"ip")
+ s srv=$o(^SYS("shdwcli",clu,"servers",srv))
+ i srv="" s srv=$o(^SYS("shdwcli",clu,"servers",""))
+ i srv]"" s ^SYS("shdwcli",cli,"port")=+srv,^SYS("shdwcli",cli,"ip")=$p(srv,",",2)
+ q
+connect(srv,dev) ;
+ i $g(inet(srv))]"" k inetcur d  q:$g(inet(srv))=$g(inetcur)  c dev
+ . s $zt="reusedevE" 
+ . u dev s inetcur=$s($zbitget($zversion(0)_$c(0,0,0,0),42):$SYSTEM.TCPDevice.PeerAddr(1),1:$zu(111,0))
+ c dev 
+ o dev:(srv):10 e  s shdwzerr=$$Error^%apiOBJ(1070,srv,$p(dev,"|",3)) ztrap "OPEN"
+ u dev:(::::65535:65535) s inet(srv)=$s($zbitget($zversion(0)_$c(0,0,0,0),42):$SYSTEM.TCPDevice.PeerAddr(1),1:$zu(111,0))
+ q
+reusedevE s $zt="" i $ze["NOTOPEN" s $ze="" q  ;trap <NOTOPEN> error on closed device
+ zt $ze  ;pass it on to upper error handler
+ ; This is meant to be run before starting cluster shadowing/dejournaling
+ ; to set up or modify all or any of the following properties --
+ ; server: port and ip of the superserver on a node of the server cluster
+ ; jrndir: parent directory of default repositories for fetched journal files
+ ; begloc: Cluster Start Time and clujrnseq to begin dejournaling at
+ ; dcluid: Database Server Cluster ID (PIJ directory of the cluster)
+ConfigCluShdw(shdwid,server,jrndir,begloc,dcluid) ;
+ n rc
+ s $zt="etconfig"
+ i $g(shdwid)="" d  q 0
+ . w !,"Syntax: ",!!,"s rc=$$ConfigCluShdw(shdwid,server,jrndir,begloc), where"
+ . w !!,"server = port,IP"
+ . w !,"begloc = cluster_start_time,clujrnseq"
+ . w !,"cluster start time must be in ","YYYYMMDD HH:MM:SS"," format."
+ s ^SYS("shdwcli",shdwid,"type")=21
+ i $g(server)]"" s rc=$$ConfigServer(shdwid,server) i 'rc q rc
+ i $g(jrndir)]"" s rc=$$ConfigJrndir(shdwid,jrndir) i 'rc q rc
+ i $g(begloc)]"" s rc=$$ConfigBegloc(shdwid,begloc) i 'rc q rc
+ s:$d(dcluid) ^SYS("shdwcli",shdwid,"DatabaseServerClusterID")=$g(dcluid)
+ q 1
+ ; server = "port,IP"
+ConfigServer(shdwid,server) ;
+ n shdw,port,ip
+ s port=$p(server,",") i port'?1.N q "0,invalid format of port number "_port
+ s ip=$p(server,",",2) i ip="" q "0,invalid format: missing IP"
+ s shdw=$name(^SYS("shdwcli",shdwid))
+ s @shdw@("ip")=ip,@shdw@("port")=port
+ i $g(@shdw@("clu"))="" s @shdw@("servers",server)=""
+ e  s ^SYS("shdwcli",@shdw@("clu"),"servers",server)=""
+ q 1
+ ; Redirect journal files from remdir (on DB server) to jrndir (on shadow).
+ ; If remdir is not given, set up parent directory of default repositories.
+ConfigJrndir(shdwid,jrndir,remdir) ;
+ n shdw 
+ s shdw=$name(^SYS("shdwcli",shdwid))
+ s jrndir=$zu(12,jrndir) i '$$VALIDIR(jrndir) q 0_",invalid dir: "_jrndir
+ s @shdw@("jrndir",$g(remdir,0))=jrndir 
+ q 1
+ ; begloc = "cst,seq" 
+ ; cst: cluster start time in YYYYMMDD hh:mm:ss format or time(0) format
+ ; seq: clujrnseq
+ConfigBegloc(shdwid,begloc) ;
+ n shdw,que,cst,seq
+ s shdw=$name(^SYS("shdwcli",shdwid))
+ s cst=$p(begloc,","),seq=+$p(begloc,",",2)
+ i (cst?8N1" "1.2N1":"1.2N1":"1.2N) s cst=$$cvtclustime(cst) i 1
+ e  i '(cst?10N) q "0,invalid format of cluster start time "_cst
+ i 'seq s seq=1
+ i $g(@shdw@("chkpnt"))]"" m que=@shdw@("chkpnt",@shdw@("chkpnt")) i $q(que(cst,seq))=""  ;keep "locshd" as (cst,seq) >= last dejournaled sequence 
+ e  n sys s sys="" f  s sys=$o(@shdw@("sys",sys)) q:sys=""  k ^SYS("shdwcli",shdwid_"~"_sys,"locshd") ;prevent shadow journals from being deleted prematurely
+ k que
+ s que=-1 ;hence initial que=0, triggering chkseqgap at the start of CLUDEJRN
+ s que(cst,seq,$i(que))=(seq)_","_("")_","_("")_","_("")_","_("") m:+$g(^%ISCLOG("SHDWX")) ^%ISCLOG("SHDWX","que")=que
+ s que=que_","_cst_","_seq
+ m @shdw@("chkpnt",$i(@shdw@("chkpnt")))=que
+ q 1
+ConfigDbmap(shdwid,locdir,remdir) ;
+ s ^SYS("shdwcli",shdwid,"dbmap","^^"_remdir)="^^"_locdir
+ q 1
+ ; configures a journal fetching job when it is not running
+configjrnfetch(clu,sys,remjrn,server) ;
+ n shdw,jrnf,cli
+ s $zt="etconfig"
+ s cli=clu_"~"_sys,shdw=$name(^SYS("shdwcli",cli))
+ s @shdw@("type")=12,@shdw@("clu")=clu
+ i $g(server)]"",$$ConfigServer(cli,server)!1
+ e  s @shdw@("ip")=^SYS("shdwcli",clu,"ip"),@shdw@("port")=^SYS("shdwcli",clu,"port")
+ i $g(remjrn)]"",$$lookuplocshd(cli,remjrn)="" s @shdw@("jrnfil",$i(@shdw@("jrnfil")))=remjrn i $$newlocshd^SHDWCBLK(cli)="" ztrap "SDIR"
+ s ^SYS("shdwcli",cli,"stat")=0,^SYS("shdwcli",cli,"stop")=1
+ i $g(^SYS("shdwcli",clu,"intv"))="" s ^SYS("shdwcli",cli,"intv")=1
+ e  s ^SYS("shdwcli",cli,"intv")=^SYS("shdwcli",clu,"intv")
+ s ^SYS("shdwcli",clu,"sys",sys)=""
+ q 1
+ ; Converts time in YYYYMMDD HH:MM:SS format to time(0) format (i.e., number 
+ ; of seconds elapsed since 19700101 00:00:00, UTC) using $zu(99) & bisection.
+cvtclustime(cst) ;
+ n lo,hi,c,t 
+ s lo=0,hi=2*1024*1024*1024 ;time(0) is signed
+ f  s t=(lo+hi)\2,c=$zdt($zdth(t,-2),8) q:c=cst  s:cst]c lo=t s:c]cst hi=t q:(hi-lo)<2
+ i c=cst q t
+ q:lo=t hi q lo ;must be the one that is NOT t (and the other must be t)
+etconfig ;
+ s $zt="" d BACK^%ETN
+ q 0_","_$ze
+lookuplocshd(cli,remjrn) ;given remote journal file, return local shadow journal
+ n idx,shdw,locshd
+ s shdw=$name(^SYS("shdwcli",cli)),idx=+$g(@shdw@("jrnfil")) q:'idx ""
+ f  q:remjrn=@shdw@("jrnfil",idx)  s idx=$o(@shdw@("jrnfil",idx),-1) q:idx=""
+ q $s(+$g(idx):@shdw@("jrnfil",idx,"shdw"),1:"")
+lookupremjrn(cli,locshd) ;given local shadow journal, return remote journal file
+ n idx,shdw,remjrn
+ s shdw=$name(^SYS("shdwcli",cli)),idx=+$g(@shdw@("jrnfil")) q:'idx ""
+ f  q:locshd=@shdw@("jrnfil",idx,"shdw")  s idx=$o(@shdw@("jrnfil",idx),-1) q:idx=""
+ q $s(+$g(idx):@shdw@("jrnfil",idx),1:"")
+ShowStat(cli,detail) d ShowState(cli,detail) q
+ShowState(cli,detail) ;
+ n (cli,detail)
+ s detail=+$g(detail)
+ w !,"Shadow ID",?16,$j("PrimaryServerIP",16),$j("Port",6),$j("R",3),$j("S",2),$j("Err",4)
+ w ! f i=1:1:72 w "-"
+ s shdw=$name(^SYS("shdwcli",cli))
+ s sys="" f  d  s sys=$o(@shdw@("sys",sys)) q:sys=""
+ . s id=cli_$s(sys="":"",1:"~"_sys),node=$name(^SYS("shdwcli",id))
+ . w !,$s(sys="":"",1:"\_ "),id,?16,$j($g(@node@("ip")),16),$j($g(@node@("port")),6),$j($g(@node@("stat")),3),$j($g(@node@("stop")),2),$j($o(@node@("err",""),-1),4)
+ i 'detail q
+ i $g(^SYS("shdwcli",cli,"clu"))]"" q
+ w !!,"Redirection of Global Sets and Kills:"
+ s dir="" f  s dir=$o(^SYS("shdwcli",cli,"dbmap",dir)) q:dir=""  w !,"  ",dir," -> ",^SYS("shdwcli",cli,"dbmap",dir)
+ w !,"Redirection of Master Journal Files:"
+ w !,"  Base directory for auto-redirection: ",^SYS("shdwcli",cli,"jrndir",0)
+ s dir="" f  s dir=$o(^SYS("shdwcli",cli,"jrndir",dir)) q:dir=""  w:dir'=0 !,"  ",dir," -> ",^SYS("shdwcli",cli,"jrndir",dir)
+ w !,"Primary Server Cluster ID: ",$g(^SYS("shdwcli",cli,"DatabaseServerClusterID"),"(to be determined)")
+ w !,"Primary Server Candidates (for failover): "
+ s server="" f  s server=$o(^SYS("shdwcli",cli,"servers",server)) q:server=""  w !,$j($p(server,",",2),20),$j(+server,8)
+ q
+ShowError(cli,max,opt) ;
+ n (cli,max,opt)
+ s opt=$g(opt),max=$g(max,+$o(^SYS("shdwcli",cli,"err",""),-1))
+ s i="" f cnt=1:1:max s i=$o(^SYS("shdwcli",cli,"err",i),-1) q:i=""  d
+ . s err=^SYS("shdwcli",cli,"err",i)
+ . s time=$p(err," ",1,2)
+ . s err(time,i,"pid")=$p(err," ",3)
+ . s err(time,i,"err")=$p($p(err," ",4),";")
+ . s err(time,i,"msg")=$p(err,";",2,$l(err))
+ . s err(time,i,"cnt")=+$g(^SYS("shdwcli",cli,"err",i,"count"),1)
+ . s err(time,i,"beg")=$g(^SYS("shdwcli",cli,"err",i,"begin"),time)
+ w !,$j("Last occurrance",18)
+ w $s(opt["+PID":$j("pid",11),1:"")
+ w $s(opt["-BEG":"",1:$j("1st occurrance",18))
+ w $s(opt["-CNT":"",1:$j("cnt",4))
+ w $s(opt["-ERR":"",1:"   err")
+ w ! f i=1:1:72 w "-"
+ s t="" f  s t=$o(err(t),-1) q:t=""  s i="" f  s i=$o(err(t,i),-1) q:i=""  d
+ . w !,$j(t,18)
+ . w $s(opt["+PID":$j(err(t,i,"pid"),11),1:"")
+ . w $s(opt["-BEG":"",1:$j(err(t,i,"beg"),18))
+ . w $s(opt["-CNT":"",1:$j(err(t,i,"cnt"),4))
+ . w $s(opt["-ERR":"",1:" "_err(t,i,"err"))
+ . w $s(opt["+MSG":" "_err(t,i,"msg"),1:"")
+ q
+ShowWhere(cli,max,opt) ;
+ n (cli,max,opt)
+ s shdw=$name(^SYS("shdwcli",cli)),max=$g(max),opt=$g(opt),init=0
+ s chkpnt=$g(@shdw@("chkpnt")) q:'chkpnt
+ w !,$j("[dejournal checkpoint #"_chkpnt_"]",39)
+ w $j("clu_start",18),$j("clujrnseq",11),$j("address",11)
+ m chkpnt=^SYS("shdwcli",cli,"chkpnt",chkpnt)
+ s q=$name(chkpnt("")) f i=0:1 s q=$q(@q) q:q=""  d
+ . s sys=$p(@q,",",5),jrnf=$p(@q,",",2) i sys="" s init=1 q
+ . s locshd(sys)=i s:jrnf]"" locshd(sys,jrnf)=i
+ . s q(i,"cst")=$s(opt["TIME":$qs(q,1),1:$zdt($zdth($qs(q,1),-2),8))
+ . s q(i,"seqq")=$qs(q,2),q(i,"sys")=sys
+ . s q(i,"seqj")=+@q,q(i,"jrnf")=jrnf,q(i,"addr")=$tr($p(@q,",",3),"-",">")
+ w ! f i=1:1:79 w "-"
+ i init s q=$q(chkpnt("")) w !,?39,$j($zdt($zdth($qs(q,1),-2),8),18),$j($qs(q,2),11)
+ s sys="" f  s sys=$o(^SYS("shdwcli",cli,"sys",sys)) q:sys=""  d
+ . i '$d(locshd(sys)),'max q  ;no show if sys not queued and max not specified
+ . s id=cli_"~"_sys,idx=+$g(^SYS("shdwcli",id,"jrnfil")) q:'idx
+ . w !,id," fetched journal files:"
+ . f i=1:1 d  s idx=$o(^SYS("shdwcli",id,"jrnfil",idx),-1) q:idx=""  q:i=max  i 'max,dejrn q
+ . . s dejrn=$d(locshd(sys,^SYS("shdwcli",id,"jrnfil",idx,"shdw")))
+ . . w !,^SYS("shdwcli",id,"jrnfil",idx) i dejrn w "*"
+ . . i i=1 w ?68,$j(+$g(^SYS("shdwcli",id,"end")),11)
+ . . i opt["DEST" w !,"  -> ",^SYS("shdwcli",id,"jrnfil",idx,"shdw")
+ . . i 'dejrn q
+ . . s j=locshd(sys) k locshd(sys)  ;prevent it from being displayed twice
+ . . w !,?39,$j(q(j,"cst"),18),$j(q(j,"seqj"),11),$j(q(j,"addr"),11)
+ . w !
+ q
+ClearError(cli,max) ;
+ n i
+ i '$d(max) k ^SYS("shdwcli",cli,"err") q
+ f i=1:1:max k ^SYS("shdwcli",cli,"err",i)
+ q
+ ;Input:
+ ;  cli - ID of the copier
+ ;  jrnf - name of the journal file opened
+USEJRN(dev,cli) ;
+ i $zu(78,6,dev)
+ d INIJRNEND^SHDWCBLK(cli,jrnf)
+ q
+ROLLBACK(cli) public {
+ s $zt="ROLLBACKerr"
+ i ^SYS("shdwcli",cli,"type")'=21 q 0_",must be a cluster shadow"
+ i '($g(^SYS("shdwcli",cli,"stat"))=-2),'($g(^SYS("shdwcli",cli,"stop"),2)=2) q 0_",must stop shadowing before rollback"
+ s chkpnt=+$g(^SYS("shdwcli",cli,"chkpnt"))
+ d loadtran^SHDWCBLK(cli,chkpnt,.tranopen)
+ i '$d(tranopen) q 1 ;no open transaction to roll back
+ s xacp=$$xachkpnt^SHDWCBLK(chkpnt,.tranopen)
+ d SortOpenTranByNode(.tranopen,.trannode)
+ d SortChkpntByCsn(cli,.jrnloc)
+ s jfcli="" f  s jfcli=$o(trannode(jfcli)) q:jfcli=""  d
+ . k tranopen m tranopen=trannode(jfcli)
+ . i $g(jrnloc(jfcli))="" ztrap "TRAN"  ;should never happen
+ . s rc=$$RollBack^SHDWCBLK(jfcli,jrnloc(jfcli),.tranopen,1)
+ . m tranerr=tranopen
+ q $$CleanTran^SHDWCBLK(cli,chkpnt,.tranerr,xacp)
+ROLLBACKerr s $zt="" 
+ d ERRLOG^SHDWUTIL($ze,cli)
+ q 0_","_$ze
+}
+SortChkpntByCsn(cli,jrnloc) ;
+ n cp,q,jrnf,addr,dev,csn
+ m cp=^SYS("shdwcli",cli,"chkpnt",$g(^SYS("shdwcli",cli,"chkpnt")))
+ s q=$name(cp("")) f  s q=$q(@q) q:q=""  s jrnf=$p(@q,",",2),addr=$p(@q,",",3),dev=$p(@q,",",4),csn=$p(@q,",",5) s jrnloc(cli_"~"_csn)=addr_","_jrnf
+ q
+SortCheckPoints(ShadowID,jrnfidx,cploc) ;
+ s cpnode=$name(^SYS("shdwcli",ShadowID,"chkpnt"))
+ s chkpnt=$g(@cpnode) f  s chkpnt=$o(@cpnode@(chkpnt),-1) q:chkpnt=""  k cp m cp=@cpnode@(chkpnt) s q=$name(cp("")) f  s q=$q(@q) q:q=""  s jrnf=$p(@q,",",2),addr=$p(@q,",",3),dev=$p(@q,",",4),csn=$p(@q,",",5) i csn]"",jrnf]"",addr]"",$g(jrnfidx(jrnf))]"" s cploc(csn,jrnf,addr,chkpnt)=""
+ q
+SortOpenTranByNode(tranopen,trannode) [] public {
+ s pid="" f  s pid=$o(tranopen(pid)) q:pid=""  s sys="" f  s sys=$o(tranopen(pid,sys)) q:sys=""  d
+ . s traninfo=tranopen(pid,sys)
+ . s jfcli=$p(traninfo,",",3,$l(traninfo)) ;jfcli may contain commas
+ . m trannode(jfcli,pid,sys)=tranopen(pid,sys)
+}
+SortShdwFiles(ShadowID,filelist) [] public {
+ s filenode=$name(^SYS("shdwcli",ShadowID,"jrnfil"))
+ s index=$g(@filenode)+1 f  s index=$o(@filenode@(index),-1) q:index=""  q:$g(@filenode@(index,"shdw"))=""  s filelist(@filenode@(index,"shdw"))=index
+}
+UpgradeCheckPoint(ShadowID) ;
+ n (ShadowID)
+ i $g(^SYS("shdwcli",ShadowID,"type"))'=21 q 0 ;wrong type
+ i $g(^SYS("shdwcli",ShadowID,"locver"))>=4.01 q 1
+ L +^SYS("shdwcli",ShadowID):0 e  q $$Error^%apiOBJ(1012,ShadowID)
+ s $zt="UpgradeError"
+ i '('(+$g(^SYS("shdwcli",ShadowID,"stat")))&&'($g(^SYS("shdwcli",ShadowID,"stop"),2)=2)) {
+   s stopped=($g(^SYS("shdwcli",ShadowID,"stop"),2)=2)
+   L -^SYS("shdwcli",ShadowID)
+   q stopped 
+ }
+ s chkpnt=$g(^SYS("shdwcli",ShadowID,"chkpnt"))
+ i chkpnt="" L -^SYS("shdwcli",ShadowID) q 0
+ s xanode=$name(^SYS("shdwcli",ShadowID,"opentran",chkpnt))
+ m tranopen=@xanode
+ i '$d(tranopen) L -^SYS("shdwcli",ShadowID) q 1 
+ d SortOpenTranByNode(.tranopen,.trannode)
+ d SortShdwFiles(ShadowID,.jrnfidx)
+ d SortCheckPoints(ShadowID,.jrnfidx,.cploc)
+ s jfcli="" f  s jfcli=$o(trannode(jfcli)) q:jfcli=""  s pid="" f  s pid=$o(trannode(jfcli,pid)) q:pid=""  s sys="" f  s sys=$o(trannode(jfcli,pid,sys)) q:sys=""  d
+ . s addr=+trannode(jfcli,pid,sys),jrnf=$p(trannode(jfcli,pid,sys),",",2)
+ . s index=$g(jrnfidx(jrnf)) i index="" s @xanode@(pid,sys,"cp")=0 q
+ . s csn=+$p(jfcli,"~",2) k cploccsn m cploccsn=cploc(csn)
+ . s q=$q(cploccsn(index,addr,""),-1) i q="" s @xanode@(pid,sys,"cp")=0 q
+ . s @xanode@(pid,sys,"cp")=$qs(q,3) ;chkpnt#
+ s ^SYS("shdwcli",ShadowID,"locver")=4.01
+ L -^SYS("shdwcli",ShadowID)
+ q 1
+UpgradeError s $zt="" 
+ L -^SYS("shdwcli",ShadowID) d BACK^%ETN 
+ d $zu(9,"","Error upgrading shadow "_ShadowID_": "_$ze,(0>0),0) 
+ q $$Error^%apiOBJ(5002,$ze)
+ ;Input: 
+ ;  chkpnt - current checkpoint
+ ;  lastcp - checkpoint @ last STOP with ROLLBACK
+CheckPointState(ShadowID) ;
+ n currcst,currseq,lastcst,lastseq,state
+ s currcst=$p(chkpnt,",",2),lastcst=$p(lastcp,",",2) 
+ i currcst>lastcst q 1
+ i lastcst>currcst q 0
+ s currseq=$p(chkpnt,",",3),lastseq=$p(lastcp,",",3) i lastseq>currseq q 0
+ n q,jrnf,addr,dev,csn,jrnfindex,currjrnloc,currcluseq,lastjrnloc,lastcluseq
+ s q=$name(chkpnt("")) f  s q=$q(@q) q:q=""  d
+ . s jrnf=$p(@q,",",2),addr=$p(@q,",",3),dev=$p(@q,",",4),csn=$p(@q,",",5)
+ . i csn="" q
+ . s jrnfindex=$$GetShdwFileIndex^SHDWCBLK(ShadowID_"~"_csn,jrnf)
+ . i addr<0 s addr=1-addr 
+ . s currjrnloc(csn)=addr/(10**10)+jrnfindex,currcluseq(csn)=+@q
+ s state=1,q=$name(lastcp("")) f  s q=$q(@q) q:q=""  d  q:'state
+ . s jrnf=$p(@q,",",2),addr=$p(@q,",",3),dev=$p(@q,",",4),csn=$p(@q,",",5)
+ . i csn="" q
+ . i '$d(jrnloc(csn)) q  ;OK, ignore the dead node
+ . s lastcluseq=+@q
+ . i lastcluseq>currcluseq(csn) s state=0 q
+ . i lastcluseq<currcluseq(csn) q  ;state=1
+ . s jrnfindex=$$GetShdwFileIndex^SHDWCBLK(ShadowID_"~"_csn,jrnf) i jrnfindex="" q
+ . i addr<0 s addr=1-addr 
+ . s lastjrnloc=addr/(10**10)+jrnfindex
+ . i lastjrnloc>currjrnloc(csn) s state=0 q
+ . k currjrnloc(csn),currcluseq(csn)
+ s csn="" f  s csn=$o(currcluseq(csn)) q:csn=""  i currcluseq(csn)'>lastseq s state=0 q
+ q state
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+ ; BITWISE.INC, DPB139 07/09/93
+FIXDIR(dir) ;procedure, dir is passed by reference
+ Q:dir=""
+ i ($zversion(1)=1) d
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ i '($zversion(1)=1) Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))
+ i '($zversion(1)=1) s dir=dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+ Q
+fixdir(dir) ;function
+ Q:dir="" ""
+ i ($zversion(1)=1) d  q dir
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")) dir
+ Q dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+basename(f) ;similar to basename on UNIX
+ Q $P(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),1,$L(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))-1)_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+appdir(d1,d2) ;use $zu(12,d2) to append d2 to canonic dir
+ i ($zversion(1)=1) S $E(d1,$L(d1))="."_d2_"]"
+ i '($zversion(1)=1) S d1=d1_d2
+ Q d1
+VALIDIR(dir) ;validate directory dir and create it if dir doesn't exist
+ new flag
+ s flag=1
+ g vdir2
+validir(dir,flag) ;validate directory dir and optionally create it if it
+vdir2 ; VALIDIR(dir) comes here with flag set to 1
+ quit:$$ChkDirOrSpecEXISTS(dir)'="" 1   ; dir is valid and exists
+ quit:$$ChkDirVALID(dir)="" 0    ; dir is not valid
+ i flag'=1 q 0  ; flag says don't create, return failure
+ new x
+ set x=$$mkdir(dir)  ; returns 0 for success, 1 for failure
+ q:x=1 0  ; failed to create
+ quit:$$ChkDirOrSpecEXISTS(dir)="" 0   ; it doesn't we failed
+ q 1  ; success
+mkdir(dir) ;create a new directory
+ i ($zversion(1)=1) q:$$ChkDirVALID(dir)="" 1  ; dir is invalid, return failure
+ q '##class(%Library.File).CreateDirectoryChain(dir)
+jrnshort(jf,short) ;get/set short form of a journal file name FIXME HYY1999
+         N (jf,short)
+         S len=$L($P(jf,";"))
+         Q:$G(short)="" $E(jf,len-11,len) ;"GET" form
+         S $E(jf,len-11,len)=short ;"SET" form
+         Q jf
+GJrnPrefix(jf) ;extract prefix from the journal file name jf
+         N (jf)
+         S fname=$P(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),$L(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")))       
+         Q $e(fname,1,$l($p(fname,"."))-8)
+GetJrnFileName(path) { 
+	i $f(path,"/") q $p(path,"/",$l(path,"/")) ;presumably a Unix path
+	if $f(path,"\") q $p(path,"\",$l(path,"\")) ;presumably a Windows path
+	s vmsfile=$p(path,"]",2) i vmsfile="" q path ;a name only, not a path
+	q $p(vmsfile,";") ;return name from a VMS path without trailing ";"
+}
+dirinvalidmsg(dir1,dir2) 
+ n valid1,valid2,cnt,msg
+ s valid1=$$VALIDIR(dir1),valid2=$$VALIDIR(dir2)
+ s cnt=valid1+valid2 ; cnt = 0 if both invalid, 1 if one is valid
+ s msg="The following journaling "
+ s:cnt msg=msg_"directory is" 
+ s:'cnt msg=msg_"directories are"
+ s msg=msg_" not valid"_$C(13,10)
+ s:'valid1 msg=msg_"     "_dir1_$C(13,10)
+ s:'valid2 msg=msg_"     "_dir2_$C(13,10)
+ q msg
+ChkDirVALID(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,1)
+ChkDirEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkDirOrSpecEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,3)
+ChkDir(R) N N S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkBad S $ZT="" W !,"<"_$P($P($ZE,"<",2),">")_"> error -- invalid directory"
+ Q ""

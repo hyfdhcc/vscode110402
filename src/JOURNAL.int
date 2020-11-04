@@ -1,0 +1,282 @@
+ROUTINE JOURNAL [Type=INT]
+JOURNAL ;(PTR,PK) JOURNAL UTILITIES ; ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/journal.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ d MENU()
+ q
+MENU() PUBLIC { 
+ s $zt="ERROR"
+ s List(1)="Begin Journaling (^JRNSTART)"
+ s List(2)="Stop Journaling (^JRNSTOP)"
+ s List(3)="Switch Journal File (^JRNSWTCH)"
+ s List(4)="Restore Globals From Journal (^JRNRESTO)"
+ s List(5)="Display Journal File (^JRNDUMP)"
+ s List(6)="Purge Journal Files (PURGE^JOURNAL)"
+ s List(7)="Edit Journal Properties (^JRNOPTS)"
+ s List(8)="Activate or Deactivate Journal Encryption (ENCRYPT^JOURNAL())"
+ s List(9)="Display Journal status (Status^JOURNAL)"
+ k active,pending
+ do getTransactionStatus^JRNROLL(.active,.pending)
+ i $S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0) {
+	 s List(10)="Cluster Journal Restore (CLUMENU^JRNRESTO)"
+ } else {
+	 /* unfortunatly we can't omit option #'s so if we need to
+		include Manage^JRNROLL, we need to have something here */
+	 s List(10)="-not available-"
+	 s Action(10)="NA^JOURNAL"
+ } 
+ if (active || pending) {
+	 s List(11)="Manage pending or in progress transaction rollback (Manage^JRNROLL)"
+ } else {
+	 s List(11)="-not available-"
+	 s Action(11)="NA^JOURNAL"
+ }
+	 s List(12)="Journal catch-up for mirrored databases (MirrorCatchup^JRNRESTO)"
+ s i="" f  s i=$o(List(i)) q:i=""  i $g(Action(i))="" s msg=List(i),act=$p(msg,"(",2,$l(msg)),Action(i)=$e(act,1,$l(act)-1)
+ f  {
+	s msg=$$GetSWDIRoption(),act=$p(msg,"(",2,$l(msg))
+	s List(13)=msg,Action(13)=$e(act,1,$l(act)-1)
+ 	s Value=""
+	s Status=##Class(%Library.Prompt).GetMenu("Option?",.Value,.List,,8+128+4)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+	i Value=13,List(13)'=$$GetSWDIRoption() {
+		w !,"Journal settings have changed. Please try again."
+		continue
+	}
+	s tagrtn=Action(Value) i $g(tagrtn)="" q  ;an "impossible" case
+	d @tagrtn
+ }
+ q Status
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q 0
+ ztrap $ze
+}
+NA() PUBLIC {
+	w !,"Option not available"
+	quit 	
+}
+GetSWDIRoption() PUBLIC {
+ s Status=##class(%SYS.Journal.System).GetTheOtherDirectory(,.Type)
+ i Type=2 {
+   q "Switch Journaling to Secondary Directory (SWDIR^JOURNAL)"
+ } elseif Type=1 {
+   q "Switch Journaling Back to Primary Directory (SWDIR^JOURNAL)"
+ } else { ;Type=0 means no other directory to switch to
+   q "-not available-"
+ }
+}
+SWDIR() PUBLIC { ;switch journaling from current directory to alternate one
+ s rc=##class(%SYS.Journal.System).SwitchDirectory()
+ i rc w !,"Journaling to ",$zu(78,3)
+}
+ENCRYPT() PUBLIC {
+ i $p($zu(78,22,$zu(78,3),5),",",2) {
+ 	w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"435129403"),"Current journal file is encrypted")
+	s Value=1
+ 	s Status=##Class(%Library.Prompt).GetYesNo("Deactivate journal encryption?",.Value,,8)
+ 	i (Status=2)||(+Status=0)||'Value q Status
+	s Status=##class(%SYS.Journal.System).DeactivateEncryption()
+	i Status w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4174399136"),"Journal encryption deactivated") i 1
+	e  d $System.Status.DisplayError(Status)
+ } else {
+ 	w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1439851791"),"Current journal file is NOT encrypted")
+	Set DBEncKeyIDList=$System.Security.System.GetDBEncKeyIDList()
+	If DBEncKeyIDList="" {
+ 	   s err=$System.Status.GetErrorText($$Error^%apiOBJ(1201))
+	   w !,$p($p(err,"["),": ",2) ;strip off error code and tag
+	   q
+	}
+	s Value=1
+ 	s Status=##Class(%Library.Prompt).GetYesNo("Activate journal encryption?",.Value,,8)
+ 	i (Status=2)||(+Status=0)||'Value q Status
+	s Status=##class(%SYS.Journal.System).ActivateEncryption()
+	i Status w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3985593845"),"Journal encryption activated") i 1
+	e  d $System.Status.DisplayError(Status)
+ }
+ q Status
+}
+Status() PUBLIC {
+	d ##class(%SYS.Journal.System).GetDefaults(.curdir,.altdir,.maxsize,.expqty,.prefix,.shortnam)
+	w !
+	i $d(curdir) d
+	.w !,"Primary journal directory:  ",curdir
+	.s x=$zu(140,13,curdir)
+	.w !,"Primary journal directory free space (KB):  ",$p(x,",",2)*$p(x,",",4)/1024
+	i $d(altdir),$g(altdir)'=$g(curdir) d  i 1
+	.w !,"Secondary journal directory:  ",altdir
+	.s x=$zu(140,13,altdir)
+	.w !,"Secondary journal directory free space (KB): ",$p(x,",",2)*$p(x,",",4)/1024
+	e  w !,"Secondary journal directory: [same as primary]"
+	s curfile=##class(%SYS.Journal.System).GetCurrentFileName()
+	s $zt="istests"
+	i $l(curfile) d
+	. s dir=$$basename(curfile)
+	. w !,"Current journal file:  ",curfile
+	. i $d(altdir),$g(altdir)'=$g(curdir) d 
+	. . w !,"                       in ",$s($zu(12,dir)=$zu(12,curdir):"primary",1:"secondary")," journal directory" 
+	.s n=$P($ZU(78,22,curfile,3),",",2) w !,"Current journal file maximum size:" s x=$x w ?(x+1)," ",$J(n,12)
+	.s n=$p($zu(78,4)_","_$zu(78,3),",",1) w !,"Current journal file space used:  ",?(x+1)," ",$J(n,12)
+istests	;
+	i '$p($zu(78,22),"^") W !,"Journaling is disabled." g procs
+	i $p($zu(78,22),"^",3) W !,"Journaling is disabled due to I/O error." g procs
+	i $p($zu(78,22),"^",5) W !,",Journaling is frozen due to I/O error." g procs
+	i $p($zu(78,22),"^",2) W !,"Journal switch in progress." g procs
+	i $p($zu(78,22),"^") W !,"Journaling is enabled."
+procs	;
+	s JRNSTART=+$g(^%SYS("JOURNAL","PROCESS","JRNSTART"))
+	I JRNSTART d
+	.s rtn=$zu(67,5,JRNSTART)
+	.i rtn'="JRNSTART",rtn'="JRNUTIL" s text=" running ^JRNSTART exited abnormally"
+	.e  s text=" running ^JRNSTART."
+	.w !,"Process ",JRNSTART,text
+	s JRNSTOP=+$g(^%SYS("JOURNAL","PROCESS","JRNSTOP"))
+	I JRNSTOP d
+	.s rtn=$zu(67,5,JRNSTOP)
+	.i rtn'="JRNSTART",rtn'="JRNUTIL",rtn'="JRNSTOP" s text=" running ^JRNSTOP exited abnormally"
+	.e  s text=" running ^JRNSTOP."
+	.w !,"Process ",JRNSTOP,text
+	s JRNSWTCH=+$g(^%SYS("JOURNAL","PROCESS","JRNSWTCH"))
+	I JRNSWTCH d
+	.s rtn=$zu(67,5,JRNSWTCH)
+	.i rtn'="JRNSTART",rtn'="JRNUTIL",rtn'="JRNSWTCH" s text=" running ^JRNSWTCH exited abnormally"
+	.e  s text=" running ^JRNSWTCH."
+	.w !,"Process ",JRNSWTCH,text
+	k curdir,altdir,curfile,expqty,jrnall,maxsize,prefix,shortnam,rc
+}
+PURGE() PUBLIC {
+ s Option(1)="Purge any journal NOT required for transaction rollback or crash recovery"
+ s criteria=$g(^%SYS("JOURNAL","LIFESPAN","FILE"))
+ s KeepByDays=+criteria_" days"
+ s KeepByBaks=+$p(criteria,",",2)_" backups"
+ i KeepByDays,KeepByBaks s criteria=KeepByDays_" or "_KeepByBaks
+ e  i KeepByBaks s criteria=KeepByBaks
+ e  i KeepByDays s criteria=KeepByDays
+ e  s criteria="NEVER PURGE"  ;no journal file will be purged
+ s Option(2)="Purge journals based on existing criteria ("_criteria_")"
+ f  {
+ 	s Value=""
+	s Status=##Class(%Library.Prompt).GetMenu("Option?",.Value,.Option,,8+128+4)
+ 	i (+Status=0)||(Status=2)||(Value="") q
+	k ^||%ISC.PurgedJrnFiles ;to record a list of purged journal files 
+	k ^||%ISC.PurgedMirJrnFiles
+	i Value=1 {
+	   s Status=##class(%SYS.Journal.File).PurgeAll() ;always "OK"
+	}
+	i Value=2 {
+	   d PURGE^JRNUTIL
+	}
+	d ShowPurged()
+	q   ;back to main menu
+ }
+}
+ShowPurged() PUBLIC {
+	s purged=0
+	i $g(^||%ISC.PurgedJrnFiles) {
+	  s purged=1
+	  w !
+	  w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1471174535"),"The following journal files have been purged (listed from latest to oldest): "),!
+	  s index="" f  s index=$o(^||%ISC.PurgedJrnFiles(index),-1,purgedfile) q:index=""  w !,index,". ",purgedfile
+	}
+	i $d(^||%ISC.PurgedMirJrnFiles) {
+	  s purged=1
+	  w !
+	  w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3650447038"),"The following mirror journal files have been purged: "),!
+	  s mirror="" f  {
+	    s mirror=$o(^||%ISC.PurgedMirJrnFiles(mirror)) q:mirror=""
+	    w !
+	    s index="" f  s index=$o(^||%ISC.PurgedMirJrnFiles(mirror,index),-1,purgedfile) q:index=""  w !,index,". ",purgedfile
+	  }
+	}
+	i 'purged w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3903454434"),"None purged")
+}
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+ ; BITWISE.INC, DPB139 07/09/93
+FIXDIR(dir) ;procedure, dir is passed by reference
+ Q:dir=""
+ i ($zversion(1)=1) d
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ i '($zversion(1)=1) Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))
+ i '($zversion(1)=1) s dir=dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+ Q
+fixdir(dir) ;function
+ Q:dir="" ""
+ i ($zversion(1)=1) d  q dir
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")) dir
+ Q dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+basename(f) ;similar to basename on UNIX
+ Q $P(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),1,$L(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))-1)_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+appdir(d1,d2) ;use $zu(12,d2) to append d2 to canonic dir
+ i ($zversion(1)=1) S $E(d1,$L(d1))="."_d2_"]"
+ i '($zversion(1)=1) S d1=d1_d2
+ Q d1
+VALIDIR(dir) ;validate directory dir and create it if dir doesn't exist
+ new flag
+ s flag=1
+ g vdir2
+validir(dir,flag) ;validate directory dir and optionally create it if it
+vdir2 ; VALIDIR(dir) comes here with flag set to 1
+ quit:$$ChkDirOrSpecEXISTS(dir)'="" 1   ; dir is valid and exists
+ quit:$$ChkDirVALID(dir)="" 0    ; dir is not valid
+ i flag'=1 q 0  ; flag says don't create, return failure
+ new x
+ set x=$$mkdir(dir)  ; returns 0 for success, 1 for failure
+ q:x=1 0  ; failed to create
+ quit:$$ChkDirOrSpecEXISTS(dir)="" 0   ; it doesn't we failed
+ q 1  ; success
+mkdir(dir) ;create a new directory
+ i ($zversion(1)=1) q:$$ChkDirVALID(dir)="" 1  ; dir is invalid, return failure
+ q '##class(%Library.File).CreateDirectoryChain(dir)
+jrnshort(jf,short) ;get/set short form of a journal file name FIXME HYY1999
+         N (jf,short)
+         S len=$L($P(jf,";"))
+         Q:$G(short)="" $E(jf,len-11,len) ;"GET" form
+         S $E(jf,len-11,len)=short ;"SET" form
+         Q jf
+GJrnPrefix(jf) ;extract prefix from the journal file name jf
+         N (jf)
+         S fname=$P(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),$L(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")))       
+         Q $e(fname,1,$l($p(fname,"."))-8)
+GetJrnFileName(path) { 
+	i $f(path,"/") q $p(path,"/",$l(path,"/")) ;presumably a Unix path
+	if $f(path,"\") q $p(path,"\",$l(path,"\")) ;presumably a Windows path
+	s vmsfile=$p(path,"]",2) i vmsfile="" q path ;a name only, not a path
+	q $p(vmsfile,";") ;return name from a VMS path without trailing ";"
+}
+dirinvalidmsg(dir1,dir2) 
+ n valid1,valid2,cnt,msg
+ s valid1=$$VALIDIR(dir1),valid2=$$VALIDIR(dir2)
+ s cnt=valid1+valid2 ; cnt = 0 if both invalid, 1 if one is valid
+ s msg="The following journaling "
+ s:cnt msg=msg_"directory is" 
+ s:'cnt msg=msg_"directories are"
+ s msg=msg_" not valid"_$C(13,10)
+ s:'valid1 msg=msg_"     "_dir1_$C(13,10)
+ s:'valid2 msg=msg_"     "_dir2_$C(13,10)
+ q msg
+ChkDirVALID(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,1)
+ChkDirEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkDirOrSpecEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,3)
+ChkDir(R) N N S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkBad S $ZT="" W !,"<"_$P($P($ZE,"<",2),">")_"> error -- invalid directory"
+ Q ""

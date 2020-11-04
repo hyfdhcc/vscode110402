@@ -1,0 +1,775 @@
+ROUTINE BACKUP [Type=INT]
+BACKUP ; routine to call the backup menu ; STC2167 01/16/13
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ n rc
+ d MENU()
+ q
+MENU() {
+ 	s List(1)="Backup"
+ 	s List(2)="Restore ALL"
+ 	s List(3)="Restore Selected or Renamed Directories"
+ 	s List(4)="Edit/Display List of Directories for Backups"
+ 	s List(5)="Abort Backup"
+	s List(6)="Display Backup volume information"
+	s List(7)="Monitor progress of backup or restore"
+ 	;
+ 	s help(1)="This utility allows you to backup the Cache' databases "
+ 	s help(2)="or to restore an already created backup. If a list of"
+ 	s help(3)="databases has not been created then all databases will be"
+ 	s help(4)="included in the backup. If a list is created that list will"
+ 	s help(5)="apply to all aspects of the backup system including calls"
+ 	s help(6)="to LISTDIRS^DBACK and CLRINC^DBACK for scripted backups."
+ 	;
+ 	s flags=8+128+4
+	f  {
+ 	   s Value=""
+	   s Status=##Class(%Library.Prompt).GetMenu("Option?",.Value,.List,.help,flags)
+ 	   i (Status=0)||(Status=2)||(Value="") q
+ 	   i Value=1 d RunBackup() Continue
+ 	   i Value=2 d ALL^DBREST Continue
+ 	   i Value=3 d SELECT^DBREST Continue
+ 	   i Value=4 d EditBackupList() Continue
+ 	   i Value=5 d AbortBackup() Continue
+ 	   i Value=6 d VOLUMEINFO^DBREST Continue
+ 	   i Value=7 d STATUS Continue
+    }
+    q Status
+ERROR s $zt=""
+    i $ze["<INTERRUPT>" q 0
+    ztrap $ze
+}
+RunBackup() [bkpmount] {
+	s $ZT="ERROR"
+ 	i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q
+	n bkpmount
+ 	d ^DBACK
+ 	s dir="" f  s dir=$o(bkpmount(dir)) q:dir=""  i $zu(3,dir)
+ 	q 1
+ERROR s $zt=""
+    i $ze["<INTERRUPT>" q 0
+    ztrap $ze
+}
+EditBackupList() {
+	s $ZT="ERROR"
+	s List(1)="Add a database to the backup"
+ 	s List(2)="Remove a database from the backup"
+ 	s List(3)="Show current list of databases included in backups"
+ 	s List(4)="Show list of available databases"
+ 	s List(5)="Display last full backup information"
+ 	;
+ 	s flags=8+128+4
+ 	f  {
+ 		s Value=""
+		s Status=##Class(%Library.Prompt).GetMenu("Option?",.Value,.List,,flags)
+ 		i (Status=0)||(Status=2)||(Value="") q
+ 		i Value=1 d DBAdd() Continue
+ 		i Value=2 d DBRemove() Continue
+ 		i Value=3 d ShowBackupDBList() Continue
+ 		i Value=4 d ShowAllDBList() Continue
+ 		i Value=5 d ShowLastFullBackup() Continue
+ 	}
+ 	q Status
+ERROR s $zt=""
+ 	i $ze["<INTERRUPT>" q 0
+ 	ztrap $ze
+}
+DBAdd() {
+	s $ZT=""
+ 	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s del1=$$del1^%Wprim,del2=$$del2^%Wprim
+	d getListOfAllDBs(.dblist)
+ 	s rc=$$DbList^Wsback(.list)
+ 	if '+rc w !,"Error building list of databases: ",$P(rc,del1,2) q -1 
+ 	s cnt=$L(list,del1)
+ 	f i=1:1:cnt {
+		s db=$P(list,del1,i)
+		s dbname=$P(db,del2,1)
+		q:dbname="" 
+		s dbdir=$P(db,del2,2)
+		s backuplist(dbname)=dbdir
+		s backuplist(dbname,0)=+$p(db,del2,3)  ;read only flag
+		k dblist(dbname)
+ 	}
+ 	if '$D(dblist) {
+	   w !,"All databases are currently part of the backup"
+	   r !,"Press <Enter> to continue",i
+	   q
+	}	 	
+ 	s help(1)="Choose one of the following databases to include"
+ 	s help(2)="in subsequent backups. You will be asked to confirm changes"
+ 	s help(3)="before exiting. Databases added here will also be included in"
+ 	s help(4)="backups initiated via the GUI or BACKUP^DBACK interfaces"
+ 	s help(5)="Note that the 1st backup after a new database has been added"
+ 	s help(6)="to the list must be a full backup. This is enforced when the"
+ 	s help(7)="backup is started, not at this point when the database is"
+ 	s help(8)="added. Press ^ to back up to the prior menu."
+ 	s help(9)="List of databases not already included in the backup"
+ 	s help(10)="     Database          Directory"
+ 	s dbname=""
+ 	s pad="                 "
+ 	s helpbase=$O(help(""),-1)+1
+ 	f i=helpbase:1 {
+	   s dbname=$O(dblist(dbname)) 
+	   q:dbname=""  
+	   s dbnamex=dbname_$s(dblist(dbname,0):" (Read Only)",1:"")
+	   s help(i)="     "_dbnamex_$E(pad,$L(dbnamex),$L(pad))_dblist(dbname) 
+ 	}
+ 	s flag=8+16
+	s prompt="Enter database to add? "
+ 	s newdb=""
+	s rc=##Class(%Library.Prompt).GetString(prompt,.newdb,0,45,.help,flag)
+	while ((rc=1) && $L(newdb)) {
+		s newdb=$ZCVT(newdb,"U")
+		if $D(dblist(newdb)) {
+			s addlist(newdb)=""
+			s backuplist(newdb)=dblist(newdb)
+			s backuplist(newdb,0)=$g(dblist(newdb,0),0)  ; Get read only flag.
+			k dblist(newdb)
+			k help(i-1)
+ 		    f i=helpbase:1 {
+	   		   s dbname=$O(dblist(dbname)) 
+	   		   q:dbname=""  
+			   s dbnamex=dbname_$s(dblist(dbname,0):" (Read Only)",1:"")
+	   		   s help(i)="     "_dbnamex_$E("        ",$L(dbnamex),8)_dblist(dbname) 
+		 	}
+		} elseif '$D(backuplist(newdb)) {
+			w !,"Invalid database name, press ? for help or ^ to back up"
+		}
+ 	    s newdb=""
+	    s rc=##Class(%Library.Prompt).GetString(prompt,.newdb,0,45,.help,flag)
+	} 	
+	if ($D(addlist) && ((rc=1) || (rc=2) || (rc = 3))) {
+		s dbname=$O(addlist(""))
+		s db=$O(addlist(dbname))
+		if db="" {
+			w !,"You've selected "_dbname_" to be added to the backups"
+		} else {
+			w !,"You've selected the following databases to be added to the backups"
+			w !,?5,dbname
+			w !,?5,db
+			f  s db=$O(addlist(db)) q:db=""  w !,?5,db
+		}
+		k resp  ;no default
+		s Status=##Class(%Library.Prompt).GetYesNo("Are you sure you want to do this (yes/no)?",.resp,,8)
+	    if ((Status=1) && (resp=1)) {
+		    s db=""
+		    f  s db=$O(addlist(db)) q:db=""  s ^SYS("BACKUPDB",db)=""
+		    w !,"Completed."
+	    } else {
+		    w !,"Aborted"
+	    }
+	}
+} 
+DBRemove() {
+	s $ZT=""
+ 	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	s del1=$$del1^%Wprim,del2=$$del2^%Wprim
+ 	s rc=$$DbList^Wsback(.list)
+ 	if '+rc w !,"Error building list of databases: ",$P(rc,del1,2) q -1 
+ 	s cnt=$L(list,del1)-1
+ 	f i=1:1:cnt {
+	   s db=$P(list,del1,i)
+	   s dbname=$P(db,del2,1)
+	   q:dbname=""  
+	   s dbdir=$P(db,del2,2)
+	   s backuplist(dbname)=dbdir
+	   s backuplist(dbname,0)=+$p(db,del2,3)  ;read only flag
+ 	}
+ 	s help(1)="Choose one of the following databases to delete from the"
+ 	s help(2)="list of databases included in a backup. You will be asked to"
+ 	s help(3)="confirm your changes. Changes here also affect backups initiated"
+ 	s help(4)="via the GUI or BACKUP^DBACK interfaces. If you remove all of the"
+ 	s help(5)="listed databases then all databases on the system will be included"
+ 	s help(6)="included in the backup."
+ 	s help(7)="Press ^ to back up to the prior menu"
+ 	s help(8)="     Database          Directory"
+ 	s dbname=""
+ 	s helpbase=$O(help(""),-1)+1
+ 	s pad="                 "
+ 	f i=helpbase:1 {
+	 	s dbname=$O(backuplist(dbname)) 
+	 	q:dbname=""
+		s dbnamex=dbname_$s(backuplist(dbname,0):" (Read Only)",1:"")
+	 	s help(i)="     "_dbnamex_$E(pad,$L(dbnamex),$L(pad))_backuplist(dbname) 
+ 	}
+ 	s flag=8+16
+ 	s newdb=""
+	s prompt="Enter database to remove (^ when done)? "
+	s rc=##Class(%Library.Prompt).GetString(prompt,.deldb,0,45,.help,flag)
+	while ((rc=1) && $L(deldb)) {
+		s deldb=$ZCVT(deldb,"U")
+		if $D(backuplist(deldb)) {
+			s remlist(deldb)=""
+			k backuplist(deldb)
+		    k help(i-1)
+		    s dbname=""
+	   	    f i=helpbase:1 {
+	 		   s dbname=$O(backuplist(dbname)) 
+	 		   q:dbname=""  
+			   s dbnamex=dbname_$s(backuplist(dbname,0):" (Read Only)",1:"")
+	 		   s help(i)="     "_dbnamex_$E(pad,$L(dbnamex),$l(pad))_backuplist(dbname) 
+ 	 		}
+ 	 		q:'$D(backuplist)
+		} else {
+			w !,"Invalid database name, press ? for help"
+		}
+		s deldb=""
+		s rc=##Class(%Library.Prompt).GetString(prompt,.deldb,0,45,.help,flag)
+	} 	
+	if ($D(remlist) && ((rc=1) || (rc=2) || (rc = 3))) {
+		s dbname=$O(remlist(""))
+		s db=$O(remlist(dbname))
+		if '$d(backuplist) {
+			w !,"You've deleted all databases on the backup list."
+			w !,"This means that a backup will include all databases on the"
+			w !,"system."
+		} elseif db="" {
+			w !,"You've removed "_dbname_" from the backups"
+		} else {
+			w !,"You've removed the following databases from the backups"
+			w !,?5,dbname
+			w !,?5,db
+			f  s db=$O(remlist(db)) q:db=""  w !,?5,db
+		}
+		k Value ; no default
+		s Status=##Class(%Library.Prompt).GetYesNo("Are you sure you want to do this?",.Value,,8)
+	    if ((Status=1) && (Value=1)) {
+		    s db=""
+		    f  s db=$O(remlist(db)) q:db=""  k ^SYS("BACKUPDB",db)
+		    w !,"Completed."
+	    } else {
+		    w !,"Aborted."
+	    }
+	}
+} 
+ShowBackupDBList() {
+	s $ZT=""
+	s del1=$$del1^%Wprim,del2=$$del2^%Wprim
+ 	s rc=$$DbList^Wsback(.list)
+ 	if '+rc w !,"Error building list of databases: ",$P(rc,del1,2) q -1 
+ 	s cnt=$L(list,del1)-1
+ 	w !,"The following ",cnt," databases are included in backups"
+ 	f i=1:1:cnt {
+		s db=$P(list,del1,i)
+		s dbname=$P(db,del2,1)
+		q:dbname=""  
+		s dbdir=$P(db,del2,2)
+		s dbname=dbname_$s(+$p(db,del2,3):" (Read Only)",1:"")
+		w !,?5,dbname,?30,dbdir
+ 	}
+	q 1
+}
+ShowAllDBList() {
+	s $ZT=""
+	s del1=$$del1^%Wprim,del2=$$del2^%Wprim
+	d getListOfAllDBs(.dblist)
+ 	s rc=$$DbList^Wsback(.list)
+ 	if '+rc w !,"Error building list of databases: ",$P(rc,del1,2) q -1 
+ 	s cnt=$L(list,del1)-1
+ 	f i=1:1:cnt {
+		s db=$P(list,del1,i)
+		s dbname=$P(db,del2,1)
+		q:dbname=""  
+		s dbdir=$P(db,del2,2)
+		s backuplist(dbname)=dbdir
+		s backuplist(dbname,0)=+$p(db,del2,3)  ;read only flag
+ 	}
+ 	w !,"The following is a list of all databases in the configuration."
+ 	w !,"Databases which are part of the backup are marked with (*)"
+ 	s dbname=""
+ 	f  s dbname=$O(dblist(dbname)) q:dbname=""  do
+ 	. w !,?5,$S($D(backuplist(dbname)):"(*) ",1:"    ")
+ 	. w dbname_$s(dblist(dbname,0):" (Read Only)",1:""),?30,dblist(dbname)
+ 	q 1
+}
+ShowLastFullBackup() {
+ i '$d(^SYS("BACKUP","LASTFULL")) {
+	 w !,"No information recorded about a full backup"
+ } else {
+    w !!,"=====Last Full Backup Information=====",!
+    w !,"Date: ",$zd(^SYS("BACKUP","LASTFULL","DATE"),2)
+    w !,"Description: ",^SYS("BACKUP","LASTFULL","DESC")
+    w !,"Device: ",$g(^SYS("BACKUP","LASTFULL","DEVICE"))
+ }
+ quit 1
+}
+getListOfAllDBs(dblist) {
+	s $ZT="ERROR"
+ 	s del1=$$del1^%Wprim,del2=$$del2^%Wprim
+	s context="",list=""
+ 	f  s done=$$List^Wsdba(.list,.context) d  q:done=0 
+ 	. s cnt=$L(list,del1)
+ 	. f i=1:1:cnt d
+ 	. . s db=$p(list,del1,i)
+ 	. . s dbname=$p(db,del2)
+ 	. . q:dbname=""
+	. . s dbdir=$p(db,del2,2)
+ 	. . q:+$p(db,del2,4)=$ZU(173)  ; don't include cachetemp
+ 	. . s dblist(dbname)=dbdir
+ 	. . s dblist(dbname,0)=+$p(db,del2,3) ; set read only flag.
+ERROR ;
+ 	q
+} 	
+AbortBackup() {
+ 	i '$SYSTEM.Security.Check("%Admin_Operate","USE") w !,"Operation requires %Admin_Operate:Use privilege" q
+ 	W !,"Are you sure you want to abort the backup operation ? <No> " r ans
+ 	s ans=$zcvt(ans,"U") i ans'="Y" && (ans'="YES") q
+ 	s ans=##class(Backup.General).AbortBackup()
+ 	i ans=0 w !,"Backup abortion succeed." q
+ 	i ans=1 w !,"No Backup operation is currently running." q
+ 	i ans=2 w !,"Backup already aborted." q
+ 	q
+}
+test ; entry point to set up some backup information for testing
+ i '($zversion(1)=1) q          ;VMS only
+ s ^SYS("BACKUP","HISTORY",54516036000,"TYPE")="Cumulative Incremental"
+ s ^("DEVICE")="@MTX0:",^("DESC")="Description 1"
+ s ^SYS("BACKUP","HISTORY",54515037000,"TYPE")="Incremental"
+ s ^("DEVICE")="@MTa0:",^("DESC")="Description 2"
+ s ^SYS("BACKUP","HISTORY",54514038000,"TYPE")="Incremental"
+ s ^("DEVICE")="@MTY0:",^("DESC")="Description 3"
+ s ^SYS("BACKUP","HISTORY",54513039000,"TYPE")="Cumulative Incremental"
+ s ^("DEVICE")="@MTb0:",^("DESC")="Description 4"
+ s ^SYS("BACKUP","HISTORY",54512040000,"TYPE")="Cumulative Incremental"
+ s ^("DEVICE")="@MTZ0:",^("DESC")="Description 5"
+ s ^SYS("BACKUP","HISTORY",54511041000,"TYPE")="Incremental"
+ s ^("DEVICE")="@MTc0:",^("DESC")="Description 6"
+ s ^SYS("BACKUP","HISTORY",54510042000,"TYPE")="Cumulative Incremental"
+ s ^("DEVICE")="@MTd0:",^("DESC")="Description 7"
+ q
+STATUS
+ n
+ s %1Pid=0
+ s %1Status=1
+ s %1StatusLine=4
+ Set prevspace="^"_$zu(96,12)
+ u 0::"^%X364"	; Set mnemonic space
+ s RM=80
+ s Rate=15,Blank=$j("",RM)
+ d CLEAR(1,24)
+ w /cup(1,1),$$CENTER("Backup/Restore Status",RM)
+ w /cup(2,1),$$CENTER("---------------------",RM)
+ f  {
+ 	s %1Status=$$GetBackupPid(.%1Pid)
+ 	i '(''%1Status) {
+	 	i %1Status=0 {
+			d Status("Switch 10 is set, unable to report status")
+			d CLEAR(5,24)
+	 	} else {
+		 	d Status($System.Status.GetErrorText(%1Status))
+	 	}
+	 	g Prompt
+ 	}
+ 	i %1Pid=0 {
+	 	d Status("Backup or Restore is not running")
+	 	g Prompt
+ 	}
+ 	s %1Status=$$Display()
+ 	i %1Status=0 {
+	 	d Status("Switch 10 is set, unable to report status")
+		d CLEAR(5,24)
+	 	g Prompt
+ 	}
+ 	i '(''%1Status) {
+		d Status($System.Status.GetErrorText(%1Status))
+		g Prompt
+ 	}
+ 	i '$d(BEGTIME) {
+		d Status("Preparing to start backup or restore")
+		d CLEAR(5,24)
+	 	g Prompt
+ 	}
+	w /cup(1,1),$$CENTER("Backup/Restore Status",RM)
+	w /cup(2,1),$$CENTER("---------------------",RM)
+Prompt
+	s Key=$$GetKey("(Q)uit => ",1)
+ 	i (Key=81)!(Key=113) q
+ }
+ u 0::prevspace
+ q 
+Display()
+ n (%1Pid,RM)
+ s %1Status=$$GetVars(%1Pid)
+ i '(''%1Status) q %1Status
+ i '$d(BEGTIME)&&($g(StartVolume,0)=0) q 1
+ s FirstLoop=1
+ i $d(BEGTIME) g BackupDisplay
+ g RestoreDisplay
+RestoreDisplay
+ w /cup(1,1),$$CENTER("Restore Status",RM),$j("",80-$x)
+ w /cup(2,1),$$CENTER("--------------",RM),$j("",80-$x)
+ i DEV="" s DEV=$g(INCDEV)
+ i $$IsTape(DEV) q $$Error^%apiOBJ(5001,"Status not available on tape device "_DEV)
+ s %1StartTime=$g(StartTime,$h)
+ k %1FinishTime
+ s %1RestoreFileSize=$fn(##class(%Library.File).GetFileSize(DEV)/(1024*1024),"",0)
+ s %1PrevDEV=DEV
+ f  {
+	d RestoreInfo
+	i ($g(%1PercentCompleted)>=90)||(FirstLoop=1)||($g(%1Seconds,0)<120) {
+		s Rate=5
+		s FirstLoop=0
+	} else {
+		s Rate=15
+	}
+	i %1PercentCompleted=100 s Rate=1
+	s Key=$$GetKey("(Q)uit => ",Rate)
+ 	i (Key=81)!(Key=113) {
+	 	s %1Status=1
+	 	q
+ 	}
+ 	s %1PrevPid=%1Pid
+	s %1Status=$$GetBackupPid(.%1Pid)
+	i '(''%1Status) q
+	i %1Pid=0 continue
+	i (%1PrevPid=0),(%1Pid'=0) {
+		s %1Status=1
+		q
+	}
+	s %1PrevStartVolume=+$g(StartVolume)
+	s %1Status=$$GetVars(%1Pid)
+	i '(''%1Status) q
+	i (%1PrevStartVolume'=$g(StartVolume))&&(StartVolume=1) q
+  }
+  i (%1PrevStartVolume'=$g(StartVolume))&&(StartVolume=1) g RestoreDisplay
+  q %1Status
+RestoreInfo
+ q:%1Pid=0
+ s %1rinbpoff=$zu(40,2,78) ;mcom offset of rinbp 
+ s %1rinbp=$v(%1rinbpoff,-2,"P") ;virtual memory address rinbp in the DBREST job
+ q:%1rinbp=0
+ Try {
+	s %1rinxtblkoff=$zu(40,39,0) ; Offset to counter
+ } catch {
+  	s %1rinxtblkoff=256 ; MAY NEED TO CHANGE THIS IF PORTED WITHOUT SYSTEM CODE
+ }
+ i ($zversion(1)=1) {
+ 	s %1rinxtblk=$fn($v(%1rinbp+%1rinxtblkoff,%1Pid,8)*512/(1024*1024),"",0) ;pid of DBREST job 
+ } else {
+	s %1rinxtblk=$fn($v(%1rinbp+%1rinxtblkoff,%1Pid,8)/(1024*1024),"",0) ;pid of DBREST job 
+ }
+ s %1PrevRestoredSize=$g(%1RestoredSize,0)
+ s %1RestoredSize=%1rinxtblk
+ i '$d(%1PrevPercentCompleted) s %1PrevPercentCompleted=0
+ s %1PrevBackupZH=$g(%1BackupZH,$zh)
+ s %1BackupZH=$zh
+ s %1Seconds=$fn(%1BackupZH-%1PrevBackupZH,"",0)
+ i %1RestoredSize>%1RestoreFileSize {
+	s %1RestoredSize=%1RestoreFileSize
+ 	i %1PrevRestoredSize>%1RestoredSize s %1PrevRestoredSize=%1RestoredSize
+ }
+ s %1MBDone=%1RestoredSize-%1PrevRestoredSize
+ i %1Seconds=0 {
+	s %1RestoreRate=0
+ } else {
+	s %1RestoreRate=$fn(%1MBDone/%1Seconds,"",0)
+ }
+ s %1MBToGo=%1RestoreFileSize-%1RestoredSize
+ i %1MBToGo<0 s %1MBToGo=0
+ i %1RestoreRate=0 {
+	s %1SecondsToGo="N/A"
+ } else {
+	s %1SecondsToGo=$fn(%1MBToGo/%1RestoreRate,"",0)
+ }
+ i %1SecondsToGo<0 s %1SecondsToGo=0 
+ i +%1SecondsToGo'=0 {
+	s %1FinishTime=(+$h*86400+$p($h,",",2)+%1SecondsToGo)
+ 	s %1FinishTime=(%1FinishTime\86400)_","_(%1FinishTime#86400)
+ } else {
+	 s %1FinishTime=$g(%1FinishTime,$h)
+ }
+ i %1RestoreFileSize=0 {
+	 s %1PercentCompleted=100
+ } else {
+	s %1PercentCompleted=$fn(%1RestoredSize/%1RestoreFileSize*100,"",0)
+ }
+ i %1PercentCompleted>100 s %1PercentCompleted=99
+ i %1Pid=0 s %1PercentCompleted=100
+ i %1PercentCompleted=100 {
+	 s %1TotalTime=(+%1FinishTime*86400+$p(%1FinishTime,",",2))-(+%1StartTime*86400+$p(%1StartTime,",",2))
+ } else {
+	 s %1TotalTime=(+$h*86400+$p($h,",",2))-(+%1StartTime*86400+$p(%1StartTime,",",2))
+ }
+ i %1TotalTime=0 s %1TotalTime=1
+ s %1TotalRate=$fn(%1RestoreFileSize/%1TotalTime,"",0)
+ s %1Line=4
+ d Status($s(%1Pid=0:"Completed",DEV="":"Completed",DEV'=%1PrevDEV:"Completed",1:"Running")_$s($d(ze):" - Error: "_ze,1:""))
+ w /cup($i(%1Line),1),"Restore process pid:",?30,$s(%1Pid=0:"",1:$s(($zversion(1)=1):$zhex(+%1Pid),1:%1Pid)),$j("",80-$x)
+ w /cup($i(%1Line),1),"Restore file:",?30,$g(%1PrevDEV,"UNKNOWN"),$j("",80-$x)
+ w /cup($i(%1Line),1),"Description:",?30,$g(DESCRIPTION,"UNKNOWN"),$j("",80-$x)
+ w /cup($i(%1Line),1),"Type:",?30,$g(BACKTYPE,"UNKNOWN"),$j("",80-$x)
+ w /cup($i(%1Line),1),"Start time:",?30,$zdatetime(%1StartTime,3),$j("",80-$x)
+ i %1PercentCompleted=100 {
+	w /cup($i(%1Line),1),"Finish time:",?30,$zdatetime(%1FinishTime,3),$j("",80-$x)
+ } else {
+	w /cup($i(%1Line),1),"Estimated finish time:",?30,$zdatetime(%1FinishTime,3),$j("",80-$x)
+ }
+ w /cup($i(%1Line),1),"Total time (hh:mm:ss):",?30,$ztime(%1TotalTime),$j("",80-$x)
+ w /cup($i(%1Line),1),"Time remaining (hh:mm:ss):",?30,$ztime(%1SecondsToGo),$j("",80-$x)
+ w /cup($i(%1Line),1),"Restore file size:",?30,$$memfmt(%1RestoreFileSize),$j("",80-$x)
+ w /cup($i(%1Line),1),"Restore size completed:",?30,$$memfmt(%1RestoredSize),$j("",80-$x)
+ i %1PercentCompleted=100 {
+	w /cup($i(%1Line),1),"Restore rate:",?30,$$memfmt(%1TotalRate),"/sec",$j("",80-$x)
+ } else {
+	w /cup($i(%1Line),1),"Current restore rate:",?30,$$memfmt(%1RestoreRate),"/sec",$j("",80-$x)
+ }
+ w /cup($i(%1Line),1),"% Completed",?30,%1PercentCompleted,$j("",80-$x)
+ q 
+BackupDisplay
+ w /cup(1,1),$$CENTER("Backup Status",RM),$j("",80-$x)
+ w /cup(2,1),$$CENTER("-------------",RM),$j("",80-$x)
+ i $$IsTape(DEV) q $$Error^%apiOBJ(5001,"Status not available on tape devices")
+ s %1Status=$$GetTotalDBSize(.%1TotalDBSizeMin)
+ i '(''%1Status) q
+ s PREVBACKHDATE=BACKHDATE
+ k %1FinishTime
+ s %1StartTime=$h
+ f  {
+	d BackupInfo
+	i ($g(%1PercentCompleted)>=90)||(FirstLoop=1)||($g(%1Seconds,0)<120) {
+		s FirstLoop=0
+		s Rate=5
+	} else {
+		s Rate=15
+	}
+ 	i $e(%1PercentCompleted)'=$e(%1PrevPercentCompleted) ||
+ 	  ((%1PercentCompleted>96)&&(%1PercentCompleted'=%1PrevPercentCompleted)) {
+	 	s StartCalcTime=$zh
+	 	s %1Status=$$GetTotalDBSize(.%1TotalDBSizeMin)
+		s %1PrevPercentCompleted=%1PercentCompleted
+		i '(''%1Status) q
+		s CalcTime=$zh-StartCalcTime
+		d Status("Running")
+		i CalcTime<Rate s Key=$$GetKey("(Q)uit => ",Rate-CalcTime)
+		u 0:(:"F") ;May take a while, flush input skip prompt
+ 		Continue
+ 	}
+	i %1PercentCompleted=100 s Rate=1
+	s Key=$$GetKey("(Q)uit => ",Rate)
+ 	i (Key=81)!(Key=113) {
+	 	s %1Status=1
+	 	q
+ 	}
+ 	s %1PrevPid=%1Pid
+	s %1Status=$$GetBackupPid(.%1Pid)
+	i '(''%1Status) q
+	i %1Pid=0 continue
+	i (%1PrevPid=0),(%1Pid'=0) {
+		s %1Status=1
+		q
+	}
+	s %1Status=$$GetVars(%1Pid)
+	i '(''%1Status) q
+	i BACKHDATE'=PREVBACKHDATE {
+		s %1Status=$$Error^%apiOBJ(5001,"Backup has restarted")
+		s PREVBACKHDATE=BACKHDATE
+  		q
+	}
+  }
+  q %1Status
+BackupInfo
+ i '$d(%1PrevPercentCompleted) s %1PrevPercentCompleted=0
+ s %1PrevBackupSize=$g(%1BackupSize,0)
+ s %1PrevBackupZH=$g(%1BackupZH,$zh)
+ s %1BackupSize=$$GetBackupSize(DEV)
+ s %1BackupZH=$zh
+ i %1PrevBackupSize=0 s %1PrevBackupSize=%1BackupSize
+ s %1Seconds=$fn(%1BackupZH-%1PrevBackupZH,"",0)
+ s %1MBDone=%1BackupSize-%1PrevBackupSize
+ i %1Seconds=0 {
+	s %1BackupRate=0
+ } else {
+	s %1BackupRate=$fn(%1MBDone/%1Seconds,"",0)
+ }
+ s %1MBToGo=%1TotalDBSizeMin-%1BackupSize
+ i %1MBToGo<0 s %1MBToGo=0
+ i %1BackupRate=0 {
+	s %1SecondsToGo="N/A"
+ } else {
+	s %1SecondsToGo=$fn(%1MBToGo/%1BackupRate,"",0)
+ }
+ i +%1SecondsToGo'=0 {
+	s %1FinishTime=(+$h*86400+$p($h,",",2)+%1SecondsToGo)
+ 	s %1FinishTime=(%1FinishTime\86400)_","_(%1FinishTime#86400)
+ } else {
+	 s %1FinishTime=$g(%1FinishTime,$h)
+ }
+ s %1PercentCompleted=$fn(%1BackupSize/%1TotalDBSizeMin*100,"",0)
+ i %1PercentCompleted>100 s %1PercentCompleted=99
+ i %1Pid=0 s %1PercentCompleted=100
+ i %1PercentCompleted=100 {
+	 s %1TotalTime=(+%1FinishTime*86400+$p(%1FinishTime,",",2))-(+%1StartTime*86400+$p(%1StartTime,",",2))
+ } else {
+	 s %1TotalTime=(+$h*86400+$p($h,",",2))-(+%1StartTime*86400+$p(%1StartTime,",",2))
+ }
+ i %1TotalTime=0 s %1TotalTime=1
+ s %1TotalRate=$fn(%1BackupSize/%1TotalTime,"",0)
+ s %1Line=4
+ d Status($s(%1Pid=0:"Completed",1:"Running")_$s($d(ze):" - Error: "_ze,1:""))
+ w /cup($i(%1Line),1),"Backup process pid:",?30,$s(%1Pid=0:"",1:$s(($zversion(1)=1):$zhex(+%1Pid),1:%1Pid)),$j("",80-$x)
+ w /cup($i(%1Line),1),"Backup file:",?30,$g(DEV,"UNKNOWN"),$j("",80-$x)
+ w /cup($i(%1Line),1),"Description:",?30,$g(DESCRIPTION,"UNKNOWN"),$j("",80-$x)
+ w /cup($i(%1Line),1),"Log file:",?30,$g(logfile,"UNKNOWN"),$j("",80-$x)
+ w /cup($i(%1Line),1),"Type:",?30,$g(TYPE,"UNKNOWN"),$j("",80-$x)
+ w /cup($i(%1Line),1),"Start time:",?30,$zdatetime(%1StartTime,3),$j("",80-$x)
+ i %1PercentCompleted=100 {
+ 	w /cup($i(%1Line),1),"Finish time:",?30,$zdatetime(%1FinishTime,3),$j("",80-$x)
+ } else {
+	w /cup($i(%1Line),1),"Estimated finish time:",?30,$s($g(TYPE)="Full":$zdatetime(%1FinishTime,3),1:"N/A"),$j("",80-$x)
+ }
+ w /cup($i(%1Line),1),"Total time (hh:mm:ss):",?30,$ztime(%1TotalTime),$j("",80-$x)
+ w /cup($i(%1Line),1),"Time remaining (hh:mm:ss):",?30,$s($g(TYPE)="Full":$ztime(%1SecondsToGo),1:"N/A"),$j("",80-$x)
+ w /cup($i(%1Line),1),"Estimated backup size:",?30,$s($g(TYPE)="Full":$$memfmt(%1TotalDBSizeMin),1:"N/A"),$j("",80-$x)
+ w /cup($i(%1Line),1),"Current backup size:",?30,$$memfmt(%1BackupSize),$j("",80-$x)
+ i %1PercentCompleted=100 {
+	w /cup($i(%1Line),1),"Backup rate:",?30,$$memfmt(%1TotalRate),"/sec",$j("",80-$x)
+	w /cup($i(%1Line),1),"% Completed",?30,%1PercentCompleted,$j("",80-$x)
+ } else {
+	w /cup($i(%1Line),1),"Current Backup rate:",?30,$$memfmt(%1BackupRate),"/sec",$j("",80-$x)
+	w /cup($i(%1Line),1),"% Completed",?30,$s($g(TYPE)="Full":%1PercentCompleted,1:"N/A"),$j("",80-$x)
+ }
+ q
+IsTape(DEV) {
+ I DEV?2N,$G(^%IS(DEV,0))="Magnetic tape" q 1
+ q 0
+}
+memfmt(mem)
+ q:(mem<=0) 0
+ if (mem>1048576) {
+    s unit="TB",mem=mem/10485764
+ } elseif (mem>1024) {
+    s unit="GB",mem=mem/1024
+ } else {
+    s unit="MB"
+ }
+ q $normalize($fn($e(mem,1,6),"",2),10)_unit	; Remove trailing zeroes and trailing period
+GetBackupPid(Pid) {
+ s $zt="Error"
+ i $SYSTEM.Util.GetSwitch(10) q 0
+ s Pid=0
+ Set Rset=##class(%Library.ResultSet).%New("%SYS.LockQuery:List")
+ s Status=Rset.Execute("")
+ i '(''Status) q Status
+ While Rset.Next() {
+ 	s Lock=Rset.Data("LockString")
+ 	i Lock="^DBACK" {
+	 	s Pid=Rset.Data("Owner")
+	 	q
+ 	}
+ }
+ q 1
+Error s $zt=""
+ q $$Error^%apiOBJ(5002,$ze)
+}
+GetVars(Pid) {
+ s $zt="Error"
+ i $SYSTEM.Util.GetSwitch(10) q 0
+ q:Pid=0 1
+ Set Rset=##class(%Library.ResultSet).%New("%SYS.ProcessQuery:VariableByPid")
+ s Status=Rset.Execute(Pid,"")
+ i '(''Status) q Status
+ While Rset.Next() {
+ 	Try {
+	 	s Var=$e(Rset.Data("Name"),1,7)
+	 	i Var="%ST" continue
+	 	i Var="dbrtext" continue
+ 		s @Rset.Data("Name")=Rset.Data("Value")
+ 	} catch {
+	}
+ }
+ q 1
+Error s $zt=""
+ q $$Error^%apiOBJ(5002,$ze)
+ }
+GetTotalDBSize(%1TotalDBSizeMin)
+ s $zt="Error"
+ s (%1TotalDBSizeMin)=0
+ s %1Dir=""
+ s %1Size=0
+ s %1Status=1
+ d Status($s(%1Pid=0:"Completed",1:"Running")_" (Calculating)")
+ f  {
+	s %1Dir=$o(DIRNAM(%1Dir)) q:%1Dir=""
+	s %1DBObj=##class(SYS.Database).%OpenId(%1Dir)
+	s %1Status=%1DBObj.GetFreeSpace(%1Dir,.%1Free)
+	s %1Size=%1Size+(%1DBObj.Size-%1Free)
+ }
+ s %1TotalDBSizeMin=$fn(%1Size*1.03125,"",0) ; 3% overhead
+ q 1
+Error s $zt=""
+ q $$Error^%apiOBJ(5002,$ze)
+GetBackupSize(DEV) Public {
+ s $zt="Error"
+ i ($zversion(1)=1) {
+	q:##class(%Library.File).Exists(DEV)=0 0
+	s File=##class(%Library.File).TempFilename()
+	s x=$zf(-1,"Dir/grand/size=allocation/output="_File_" "_DEV)
+	Try {
+		o File:"RD":5 
+		i $t {
+			u File r Record r Record
+			c File
+			s Blocks=+$e($p(Record,",",3),2,*)
+		} else {
+			s Blocks=0
+		}
+	} catch {
+		c File
+		s Blocks=0
+	}
+	d ##class(%Library.File).Delete(File)
+	s Size=(Blocks*512)/(1024*1024)
+ } else {
+	s Size=$fn(##class(%Library.File).GetFileSize(DEV)/(1024*1024),"",0)
+ }
+ q Size
+Error s $zt=""
+ i $d(File) d ##class(%Library.File).Delete(File)
+ q 0
+Directories
+ s %1Dir=""
+ w !,"Directory"
+ w !,"---------"
+ f  {
+	s %1Dir=$o(DIRNAM(%1Dir)) q:%1Dir=""
+ 	w !,%1Dir
+ }
+ q
+}
+CENTER(str,rm) {
+ Q $J(str,$L(str)+rm\2)
+}
+CLEAR(first,last)
+ w /cup(first,1)
+ f i=first:1:last w /cup(i,1),Blank 
+ w /cup(1,1)
+ q
+GetKey(Prompt,Rate) w /cup(23,1)
+ u 0:(:"+S")
+ w Prompt
+ r *Key:Rate
+ u 0:(:"-S")
+ q Key 
+Status(Msg)
+ w /cup(4,1),"Status:",?30,Msg,$j("",80-$x)
+ q 
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R

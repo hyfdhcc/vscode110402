@@ -1,0 +1,596 @@
+ROUTINE Buttons1 [Type=INT]
+Buttons1 ;;;Collect Evidence and Log;Build 080;Written for Cach?2008.1
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+	Quit
+AskEnsemble(EnsReport,Namespace,Production,Big,Dir="",CacheDir="",Body=0) PUBLIC {
+	Set EnsReport="N",Namespace="",Production="",Big=0
+ 	If $$IsEnsembleBuild() {
+	 	Do {
+	 		Write !!,"Report Ensemble-specific info? [Yes] " Read EnsReport Set:EnsReport="" EnsReport="Y"
+	 		If EnsReport="^" Quit
+	 		If ",Y,N,YES,NO,"[(","_$ZConvert(EnsReport,"U")_",") {
+		 		Set EnsReport=$Extract($ZConvert(EnsReport,"U"))
+	 		} Else {
+	 			Write "  Yes or No"
+	 			Set EnsReport=""
+	 		}
+	 	} While ($Get(EnsReport)="")
+	 	Quit:EnsReport="^" '1
+	 	Quit:EnsReport="N" 1
+	 	;
+	 	Set Namespace=$$AskNamespace() If Namespace="^" Quit '1
+	 	Set Production=$$AskProduction(Namespace) If Production="^" Quit '1
+		Set CacheDir=$$AskDirCacheDat() If CacheDir="^" Quit '1
+	 	Set Big=0 ;Set Big=$$AskBigSmall() If Big="^" Quit '$$$OK
+	 	Set Body=0 ;Set Body=$$AskHeader() If Body="^" Quit '$$$OK
+ 	}
+ 	Quit 1
+}
+IsEnsembleBuild() {
+	Quit $Data(^%SYS("Ensemble"))>0
+}
+AskNamespace() {
+	Merge nsp=^%SYS("Ensemble","InstalledNamespace")
+	Set nsp1=$Order(nsp("")) If $Order(nsp(nsp1))="" Quit nsp1
+	Do {
+		Set n=""
+		Write !!,"Select the namespace from the list below:"
+		For i=1:1 {
+			Set n=$Order(nsp(n)) Quit:n=""
+			Set insp(i)=n
+			Write !,$Justify(i,3),". ",n
+		}
+		Set max=i-1
+		Read !!,"Namespace: ",r Quit:r="^"
+		If r'?.N!(r<1)!(r>max) Write "  Enter a number between 1 and "_max_".",! Continue
+		Set n=insp(r) Write " - ",n
+	} While (n="")
+	Quit:r="^" "^"
+	Quit n
+}
+AskProduction(Nsp) {
+	Quit ""
+}
+AskBigSmall() {
+	Write !!,"Big reports dump entire logs and may produce huge files."
+	Write !,"Small reports dump only the latest 100 entries.",!
+	Do {
+		Write !,"1. Big report",!,"2. Small report"
+		Read !!,"Option: ",r Quit:r="^"
+		If r'?.N!(r<1)!(r>2) Write "  Enter a number between 1 and 2.",! Continue
+	} While (r="")
+	Quit:r="^" "^"
+	Quit r=1
+}
+DbgLog(msg) PUBLIC {
+	Quit:'$Data(^%SYS("Buttons","Debug"))
+	Set io=$IO Use 0 Write !,msg Use io Quit
+}
+OldPlusEnsemble(LogType,EnsNsp,EnsProd,Big,Quiet,OutputDir,Debug,Body,rc)
+	Do DbgLog("OldPlusEnsemble(Type="_LogType_",Nsp="_EnsNsp_",Dir="_OutputDir_",Big="_Big_",Body="_Body_")")
+	New (Debug,Stats,LogDirectory,LogType,Quiet,%NOCCONSOLE,%NOCSTAT,EnsReport,EnsNsp,EnsProd,Big,OutputDir,Body,rc)
+	Do Init^Buttons
+	If OS?1"***".e Quit ""
+	If LogFile="" Quit ""
+	Do GetNoRun^Buttons
+	Do LogHeader^Buttons
+	If LogType="Basic" Do BasicLog^Buttons
+	If LogType="Advanced" Do AdvancedLog^Buttons
+	Do LogTrailer^Buttons
+	Use PDev Close LogFile
+	If 'Quiet Write !,"Ensemble info from """_EnsNsp_""" now being collected. Please wait..."
+	If '1 {
+		Set rc=$$EnsembleBasicLog(EnsNsp,OutputDir,Big,Body)
+	} Else {
+		Set rc=$$Ensemble(EnsNsp,OutputDir,Big,Body,,,,,Quiet)
+	}
+	If ('rc) {
+		Write:'Quiet !,$System.Status.GetErrorText(rc)
+	} Else {
+		Set LogFile=LogFile_","_OutputDir_"CACHE.DAT"_","_OutputDir_"Prod.xml"
+	}
+	Do DbgLog("OldPlusEnsemble about to return rc="_$System.Status.GetErrorText(rc))
+	Quit LogFile
+Ensemble(EnsNsp,OutputDir,Big,Body,AllClasses,MsgCnt,EvtCnt,RuleCnt,Quiet) PUBLIC {
+	Set Big=$Get(Big,0),Body=$Get(Body,0),Quiet=$Get(Quiet,0)
+	Set rc=1,$ZTrap="EnsErr"
+	Do DbgLog("Ensemble("_EnsNsp_",Dir="_OutputDir_",Big="_Big_",Body="_Body_")")
+	;
+	Set rc=$$Init(EnsNsp,OutputDir,.AllClasses,.MsgCnt,.EvtCnt,.RuleCnt,Quiet)
+	If ('rc) { Set zrc=rc Do Cleanup(OutputDir) Quit zrc }
+	;
+	Set rc=$$EnsembleBasicLog(EnsNsp,OutputDir,Big,Body,Quiet)
+	If ('rc) { Do Cleanup(OutputDir) Quit rc }
+	Set d=$ZUtil(12,OutputDir)
+	Write:'Quiet !!,"FTP the following files to ISC Support:"
+	Write:'Quiet !,d,"CACHE.DAT in binary mode",!,d,"Prod.xml in text mode"
+	;
+EnsErr	;
+	Do Cleanup(OutputDir)
+	Quit rc
+}
+Init(EnsNsp,r,AllClasses,MsgCnt,EvtCnt,RuleCnt,Quiet) {
+	Set EnsNsp=$ZConvert(EnsNsp,"U")
+	If '$Data(^%SYS("Ensemble","InstalledNamespace",EnsNsp)) {
+		Set msg="Invalid namespace: "_EnsNsp
+		Write:'Quiet !,msg
+		Quit $$Error^%apiOBJ(5001,msg)
+	}
+	Do DbgLog("Init(Nsp="_EnsNsp_", r="_r_")")
+	Set $ZTrap="ERR"
+	;Set Maj=##class(%SYSTEM.Version).GetMajor()
+	Set rc=$$GetDatabaseStatus^%SYS.DATABASE(r,.status)
+	If ('rc) { Write:'Quiet !,$System.Status.GetErrorText(rc) Quit rc }
+	If status {
+		Set msg=$ZUtil(12,r)_"CACHE.DAT already exists. You must select an empty directory."
+		Write:'Quiet !,msg
+		Do DbgLog("Init: "_msg)
+		Quit $$Error^%apiOBJ(5001,msg)
+	}
+	If ##class(%Library.File).Exists($ZUtil(12,r)_"Prod.xml") {
+		Set msg=$ZUtil(12,r)_"Prod.xml already exists. You must select an empty directory."
+		Write:'Quiet !,msg
+		Do DbgLog("Init: "_msg)
+		Quit $$Error^%apiOBJ(5001,msg)
+	}
+	Set rc=##class(SYS.Database).CreateDatabase(r)
+	If ('rc) {
+		Write:'Quiet !,$System.Status.GetErrorText(rc)
+		Do DbgLog("Init: "_$System.Status.GetErrorText(rc))
+		Quit rc
+	}
+	// TBD: Open database r and modify its default global collation to be the same as
+	// the source DB's.
+	Set dest=##class(%SYS.Namespace).GetGlobalDest(EnsNsp),gdir=$Piece(dest,"^",2)
+	Set db=##class(SYS.Database).%OpenId(gdir)
+	Do DbgLog("db="_db)
+	Set GloColl=db.NewGlobalCollation Kill db
+	Do DbgLog("GloColl="_GloColl)
+	Set db=##class(SYS.Database).%OpenId(r)
+	Do DbgLog("db2="_db)
+	Set db.NewGlobalCollation=GloColl,rc=db.%Save()
+	If ('rc) Write:'Quiet !,$System.Status.GetErrorText(rc)
+	For g="Ens.MessageHeaderD","Ens.Util.LogD","Ens.Rule.RuleLogD","EnsLib.H.MessageD" {
+		Do DbgLog("For gdir="_gdir_", g="_g)
+		Set rc=$$GetCollationType^%SYS.DATABASE(gdir,g,.GCol)
+		Do DbgLog("Collation: "_g_" ("_$Get(GCol)_")")
+		If ('rc) {
+			Write:'Quiet !,"Global ^",g," does not exist in namespace ",EnsNsp,". Not copied."
+		} Else { // CFL1549
+			If $Get(GCol)]"" {
+				Set rc=$$CreateGlobal^%SYS.DATABASE("^^"_r,g,GCol)
+				If ('rc) Write:'Quiet !,$System.Status.GetErrorText(rc)
+			}
+		}
+	}
+	Set MsgCnt=$Get(MsgCnt,300),EvtCnt=$Get(EvtCnt,100),RuleCnt=$Get(RuleCnt,100)
+	Set ^CacheTemp("eButtons",$Job,"MsgCnt")=MsgCnt,^("EvtCnt")=EvtCnt,^("RuleCnt")=RuleCnt
+	Set ^("AllClasses")=$Get(AllClasses,1)
+	Quit 1
+ERR	;
+	Set $ZTrap="" Write !,$ZError Quit $$Error^%apiOBJ(5001,$ZError)
+}
+Cleanup(OutputDir) {
+	Do DbgLog("Cleanup("_OutputDir_")")
+	ZNSpace "%SYS"
+	;Set Maj=##class(%SYSTEM.Version).GetMajor()
+	Kill ^CacheTemp("eButtons",$Job)
+	Set rc=##class(SYS.Database).DismountDatabase(OutputDir)
+	;If $$$ISERR(rc) Write !,$System.Status.GetErrorText(rc)
+	Quit
+}
+EnsembleBasicLog(EnsNsp,OutputDir,Big,Body,Quiet) {
+	If '1 {
+		Do DbgLog("EnsembleBasicLog(Nsp="_EnsNsp_",Dir="_OutputDir_",Big="_Big_",Body="_Body_")")
+		ZNSpace EnsNsp
+		Set prj=##class(%Studio.Project).%New()
+		Set prj.Name="Test"
+		Set ix="%zzzzzzzz"
+		For {
+			Set ix=$Order(^oddDEF(ix)) Quit:ix=""
+			Continue:ix?1"%".E  Continue:ix?1"CSPX.".E  Continue:ix?1"Ens.".E
+			Continue:ix?1"EnsLib.".E  Continue:ix?1"csp.".E
+			Set sc=prj.AddItem(ix,"CLS")
+			If ('sc) {
+				Use 0 Write !,$System.Status.GetErrorText(sc) Break
+			} Else {
+				;Use 0 Write !,"Added ",ix," to project."
+			}
+		}
+		Set rc=prj.Deploy(OutputDir,"kc-d",.log) Use 0
+		If ('rc) Write !,$System.Status.GetErrorText(rc)
+		;
+		Set sc = $$MountDatabase^%SYS.DATABASE(OutputDir)
+		If ('rc) Write !,$System.Status.GetErrorText(rc)
+		ZNSpace "%SYS"
+		If Big {
+			Set Incl("^Ens.MessageHeaderD")=""
+			Set:Body Incl("^Ens.MessageBodyD")=""
+			Set Incl("^Ens.Util.LogD")=""
+			Set Incl("^Ens.Rule.RuleLogD")=""
+			Set Incl("^EnsLib.H.MessageD")=""
+			Set rc=$$CopyGlobal(EnsNsp,,OutputDir,.Incl,.Excl)
+			If ('rc) Write !,$System.Status.GetErrorText(rc)
+		} Else {
+			Set rc=$$CopyMessages(EnsNsp,,OutputDir,Body)
+			;Set rc=$$CopyHL7Messages(EnsNsp,,OutputDir,Body)
+			Set rc=$$CopyEvents(EnsNsp,,OutputDir)
+			Set rc=$$CopyRules(EnsNsp,,OutputDir)
+		}
+	} Else {
+		Do DbgLog("EnsembleBasicLog(Src="_EnsNsp_",Dir="_OutputDir_",Big="_Big_",Body="_Body_")")
+		Set rc=$$EnsembleProd(EnsNsp,OutputDir,Quiet)
+		If ('rc) Write:'Quiet !,$System.Status.GetErrorText(rc) ;;;Quit rc
+		If Big {
+			Set Incl("^Ens.MessageHeaderD")=""
+			Set:Body Incl("^Ens.MessageBodyD")=""
+			Set Incl("^Ens.Util.LogD")=""
+			Set Incl("^Ens.Rule.RuleLogD")=""
+			Set Incl("^EnsLib.H.MessageD")=""
+			Set rc=$$CopyGlobal(EnsNsp,OutputDir,.Incl,.Excl)
+			If ('rc) Write !,$System.Status.GetErrorText(rc) ;;;Quit rc
+		} Else {
+			Set rc=$$CopyMessages(EnsNsp,OutputDir,Body,Quiet)
+			If ('rc) Write:'Quiet !,$System.Status.GetErrorText(rc)
+			Set rc=$$CopyEvents(EnsNsp,OutputDir,Quiet)
+			If ('rc) Write:'Quiet !,$System.Status.GetErrorText(rc)
+			Set rc=$$CopyRules(EnsNsp,OutputDir,Quiet)
+			If ('rc) Write:'Quiet !,$System.Status.GetErrorText(rc)
+		}
+		ZNSpace "%SYS"
+	}
+	Quit 1
+}
+EnsembleProd(EnsNsp,OutputDir,Quiet) {
+	Set Quiet=$Get(Quiet,0)
+	Do DbgLog("EnsembleProd(Src="_EnsNsp_",Dir="_OutputDir_")")
+	Set Dst="^^"_OutputDir
+	ZNSpace EnsNsp
+	Set AllClasses=$Get(^CacheTemp("eButtons",$Job,"AllClasses"),1)
+	Set xmlfile=OutputDir_"/Prod.xml" Kill exp
+	If ('AllClasses) {
+		Set rc=$System.OBJ.GetPackageList(.Array,"*")
+		If ('rc) { ZNSpace "%SYS" Quit rc }
+		Set Exclude("Ens")="",Exclude("EnsLib")="",Exclude("CSPX")=""
+		Set Exclude("EnsPortal")="",Exclude("csp")=""
+		Set c=""
+		For {
+			Set c=$Order(Array(c)) Quit:c=""  Set p=$Piece(c,".")
+			If p?1"%".E Continue
+			If $Data(Exclude(p)) Continue
+			If $s($d(^oddCOM(c,"m","%IsA",44))#2:^(44),$d(^oddCOM($g(^(2),c),"m","%IsA",44))#2:^(44),1:$s($d(^oddDEF($g(^oddCOM(c,"m","%IsA",2),c),"m","%IsA",44))#2:^(44),1:0)),$ZObjClassMethod(c,"%IsA","Ens.Production") {
+				Set exp(c_".cls")=""
+			}
+		}
+	} Else {
+		Set rs=##class(%Library.ResultSet).%New("%Dictionary.ClassDefinition:Summary")
+		If 'rs.Execute() Write:'Quiet !,"Error in Execute()" ZNSpace "%SYS" Quit $$Error^%apiOBJ(5001,"Error in Execute")
+		For {
+			Quit:'rs.Next()
+			Set name=rs.Get("Name"),hidden=rs.Get("Hidden")
+			If hidden Continue
+			If name?1"%".e Continue
+			If rs.Get("System") Continue
+			If name'?1"csp.".e Set exp(name_".cls")=""
+		}
+		Set rs=##class(%Library.ResultSet).%New("%Library.Routine:RoutineList")
+		If 'rs.Execute("*.inc") Write:'Quiet !,"Error in Execute2()" ZNSpace "%SYS" Quit $$Error^%apiOBJ(5001,"Error in Execute2")
+		For {
+			Quit:'rs.Next()
+			Set name=rs.Get("Name")
+			If name?1"%".e Continue
+			If name'?1"Ens".e Set exp(name)=""
+		}
+	}
+	Set rc=$System.OBJ.Export(.exp,xmlfile,"-d",.err)
+	If ('rc) { Write:'Quiet !,$System.Status.GetErrorText(rc) ZNSpace "%SYS" Quit rc }
+	ZNSpace "%SYS"
+	Quit 1
+}
+CopyMessages(EnsNsp,OutputDir,Body,Quiet) {
+	Set Quiet=$Get(Quiet,0)
+	Set $ZTrap="CpMsg" ZNSpace EnsNsp
+	Do DbgLog("CopyMessages(Src="_EnsNsp_",Dir="_OutputDir_",Body="_Body_")")
+	Set Src=""""_EnsNsp_""""
+	Set Dst="""^^"_OutputDir_""""
+	;
+	Set g=$name(^Ens.MessageHeaderI("TimeCreated","")),cnt=0
+	Set maxcnt=$Get(^CacheTemp("eButtons",$Job,"MsgCnt"),300)
+	For {
+		Set g=$Query(@g,-1)
+		;Do DbgLog("g="_g)
+		Quit:g=""  Quit:$QSubscript(g,1)'="TimeCreated"
+		Set id=$QSubscript(g,3),time=$QSubscript(g,2),key=$QSubscript(g,1),zid(id)=""
+		Quit:$Increment(cnt)>=maxcnt
+	}
+	Set id="" For {
+		Set id=$Order(zid(id)) Quit:id=""
+		Set g="Ens.MessageHeaderD",s="^"_g,d="^|"_Dst_"|"_g
+		;Do DbgLog("Merge "_$name(@d@(id))_"="_$name(@s@(id)))
+		Merge @d@(id)=@s@(id)
+		If Body {
+			Set m=##class(Ens.MessageHeader).%OpenId(id)
+			If $IsObject(m) {
+				Set bodyid=m.MessageBodyId
+				Set g="Ens.MessageBodyD",s="^"_g,d="^|"_Dst_"|"_g
+				If bodyid]"",$Data(@s@(bodyid)) {
+					;Do DbgLog("Merge "_$name(@d@(bodyid))_"="_$name(@s@(bodyid)))
+					Merge @d@(bodyid)=@s@(bodyid)
+				}
+			}
+			Kill m
+		}
+	}
+	ZNSpace "%SYS"
+	Quit 1
+CpMsg	;
+	Set $ZTrap="" Use:'Quiet 0 Write:'Quiet !,$ZError ZNSpace "%SYS"
+	Quit $$Error^%apiOBJ(5001,$ZError)
+}
+CopyEvents(EnsNsp,OutputDir,Quiet) {
+	Set Quiet=$Get(Quiet,0)
+	Set $ZTrap="CpEvents"
+	Do DbgLog("CopyEvents(Src="_EnsNsp_",Dir="_OutputDir_")")
+	Set Src=""""_EnsNsp_""""
+	Set Dst="""^^"_OutputDir_""""
+	;
+	Set g=$name(^|EnsNsp|Ens.Util.LogI("TimeLogged","")),cnt=0
+	Set maxcnt=$Get(^CacheTemp("eButtons",$Job,"EvtCnt"),100)
+	For {
+		Set g=$Query(@g,-1)
+		;Do DbgLog("g="_g)
+		Quit:g=""  Quit:$QSubscript(g,1)'="TimeLogged"
+		Set id=$QSubscript(g,3),time=$QSubscript(g,2),key=$QSubscript(g,1),zid(id)=""
+		Quit:$Increment(cnt)>=maxcnt
+	}
+	Set id=0 For {
+		Set id=$Order(zid(id)) Quit:id=""
+		Set g="Ens.Util.LogD",s="^|"_Src_"|"_g,d="^|"_Dst_"|"_g
+		;Do DbgLog("Set "_$name(@d@(id))_"="_$name(@s@(id)))
+		Set @d@(id)=@s@(id)
+	}
+	Quit 1
+CpEvents	;
+	Set $ZTrap="" Use:'Quiet 0 Write:'Quiet !,$ZError
+	Quit $$Error^%apiOBJ(5001,$ZError)
+}
+CopyRules(EnsNsp,OutputDir,Quiet) {
+	Set Quiet=$Get(Quiet,0)
+	Set $ZTrap="CpRules"
+	Do DbgLog("CopyRules(Src="_EnsNsp_",Dir="_OutputDir_")")
+	Set Src=""""_EnsNsp_""""
+	Set Dst="""^^"_OutputDir_""""
+	;
+	Set g=$name(^|EnsNsp|Ens.Rule.RuleLogD("")),cnt=0
+	Set maxcnt=$Get(^CacheTemp("eButtons",$Job,"RuleCnt"),100)
+	For {
+		Set g=$Query(@g,-1)
+		;Do DbgLog("g="_g)
+		Quit:g=""
+		Set id=$QSubscript(g,1),zid(id)=""
+		Quit:$Increment(cnt)>=maxcnt
+	}
+	Set id=0 For {
+		Set id=$Order(zid(id)) Quit:id=""
+		Set g="Ens.Rule.RuleLogD",s="^|"_Src_"|"_g,d="^|"_Dst_"|"_g
+		;Do DbgLog("Merge "_$name(@d@(id))_"="_$name(@s@(id)))
+		Merge @d@(id)=@s@(id)
+	}
+	Quit 1
+CpRules	;
+	Set $ZTrap="" Use:'Quiet 0 Write:'Quiet !,$ZError
+	Quit $$Error^%apiOBJ(5001,$ZError)
+}
+CopyGlobal(EnsNsp, OutputDir, Include, Exclude) {
+	Do DbgLog("CopyGlobal(Src="_EnsNsp_",Dir="_OutputDir_")")
+	Set $ZTrap="CpGblErr"
+	Set Src=""""_EnsNsp_"""",ix=""
+	Set Dst="""^^"_OutputDir_""""
+	For {
+		Set ix=$Order(^$|EnsNsp|GLOBAL(ix)) ;Use 0 Write !,"ix=",ix
+		Quit:ix=""  Set incl=""
+		For {
+			Set incl=$Order(Include(incl)) Quit:incl=""  Set all=0,pref=incl
+			Set:$Extract(pref,$Length(pref))="*" all=1,pref=$Extract(pref,1,$Length(pref)-1)
+			;Use 0 Write !,"all=",all,", pref=",pref
+			Continue:$Extract(ix,1,$Length(pref))'=pref
+			Continue:'all&(ix'=pref)
+			Set glo=ix,g=$Piece(glo,"^",2),s="^|"_Src_"|"_g,d="^|"_Dst_"|"_g
+			;Do DbgLog("Merge "_d_"="_s_" ???")
+			If '$Data(Exclude(ix)) {
+				Do DbgLog("Merge "_d_"="_s)
+				Merge @d=@s
+			}
+		}
+	}
+	Quit 1
+CpGblErr	;
+	Set $ZTrap="" Quit $$Error^%apiOBJ(5002,$ZError)
+}
+AskDirCacheDat() {
+	Do {
+		Write !!,"Enter an empty directory where a CACHE.DAT with the relevant Ensemble info will be created."
+		Write " Make sure you enter a directory with R/W permission and enough disk space."
+		Write !!,"Directory: " Read r Quit:r="^"  Continue:r=""
+		Set r=##class(%Library.File).NormalizeDirectory(r),f=r_"CACHE.DAT"
+		If ##class(%Library.File).Exists(f) {
+			Write !!,f_" already exists."
+			Write !,"To minimize the risk of accidentally erasing a production database,"
+			Write !,"this utility will not overwrite any CACHE.DAT."
+			Write !,"Manually delete "_f_" or"
+			Write !,"enter a different directory with no CACHE.DAT."
+			Set r="" Continue
+		}
+		If '##class(%Library.File).CreateDirectoryChain(r) {
+			Write !,"Could not create directory "_r
+			Set r="^" Quit
+		}
+		If '1 {
+			// The DB creation should be moved from here anyway
+			Set rc=##class(SYS.Database).CreateDatabase(r)
+			If ('rc) {
+				Write !,"Database creation in "_r_" failed.",!,"Status: "_$System.Status.GetErrorText(rc)
+				Set r="^"
+			} Else {
+			// TBD: Open database r and modify its default global collation to be the same as
+			// the source DB's.
+			}
+		}
+	} While (r="")
+	Quit:r="^" "^"
+	Quit r
+}
+AskHeader() {
+	Write !!,"Including message data produces a more complete dataset, which may be helpful"
+	Write !,"or even crucial for debugging purposes.",!
+	Write !,"The flip side of the coin is the dataset is bigger, takes longer to upload and"
+	Write !,"may contain sensitive data, which you may not want to disclose."
+	Write !!,"Make your choice:"
+	Do {
+		Write !,"1. With message data",!,"2. Without message data"
+		Read !!,"Option: ",r Quit:r="^"
+		If r'?.N!(r<1)!(r>2) Write "  Enter a number between 1 and 2.",! Continue
+	} While (r="")
+	Quit:r="^" "^"
+	Quit r=1
+}
+Timeup
+	Set $ZTrap="TimeupErr"
+	do WriteLog^Buttons("")
+	set timein=$ZHorolog\1, now=$Horolog
+	set timeup=timein
+	set days=timeup\86400
+	set timeup=timeup-(days*86400)
+	set hours=timeup\3600
+	set timeup=timeup-(hours*3600)
+	set minutes=timeup\60
+	set timeup=timeup-(minutes*60)
+	set seconds=timeup
+	do WriteLog^Buttons("As of this report Cach?has been up for "_days_" days "_hours_" hours "_minutes_" minutes "_seconds_" seconds")
+	set today=+now
+	set secs=$Piece(now,",",2)
+	set now=(today*86400)+secs
+	set then=now-timein
+	set odays=then\86400
+	set osecs=then-(odays*86400)
+	set oh=odays_","_osecs
+	do WriteLog^Buttons("Started on "_$ZDATETIME(oh))
+	quit
+TimeupErr
+	Set $ZTrap=""
+	Do WriteLog^Buttons("Error: "_$ZError)
+	Quit 
+Patch
+	Set $ZTrap="PatchErr"
+	do WriteLog^Buttons("")
+	set patchvar=$Order(^%qPatch(""))
+	While (patchvar'=""){
+		Set data=^%qPatch(patchvar)
+		set patchvar2=$Order(^%qPatch(patchvar))		
+		do WriteLog^Buttons("Adhoc: "_$list(data))
+		do WriteLog^Buttons("   Description: "_$list(data,2))
+		do WriteLog^Buttons("   Created at: "_$list(data,5))
+		do WriteLog^Buttons("   Created on $zv: "_$piece($list(data,6),")",1,2)_")")
+		do WriteLog^Buttons("   Applied on: "_$list(data,7))
+		do WriteLog^Buttons("   Applied by: "_$list(data,8))
+		do WriteLog^Buttons("")
+		set patchvar=$Order(^%qPatch(patchvar))
+	}
+	Quit
+PatchErr
+	Set $ZTrap=""
+	Do WriteLog^Buttons("Error: "_$ZError)
+	Quit 
+BinDir Set $ZTrap="BinDirErr"
+	; CKEY^%SYS.LICENSE
+	Use LogFile
+	Write !,"<hr noshade size=""4"">"
+	Write !,"<br>"
+	Write !,"<b><font face=""Arial, Helvetica, sans-serif"" size=""4"" color=""#0000FF""><a name=""bindir""></a>Bin Dir</font></b>"
+	Write !,"<pre>"
+	Do WriteLog^Buttons("Bin Directory contains:")
+	Write ?60, "bytes", ?75, "Created on:",!
+	Use LogFile Do BinExe Use PDev
+	Use LogFile Write !,"</pre>" Use PDev
+	Quit
+BinDirErr Set $ZTrap=""
+	Do WriteLog^Buttons("Error: "_$ZError)
+	Quit 
+BinExe
+	Set $ZTrap="BinExeErr"
+	do WriteLog^Buttons("")
+	; note that Unix executables do not have an .exe suffix
+	; c* gets us most of the relevant exe's, but we could add a specific list here
+	Set file=$ZSEARCH(BinDir_$Select(OS="UNIX":"/c*",OS="VMS":"*.exe",1:"\*.exe"))
+	While file'="" {
+		set size=$zutil(140,1,file)
+		set timestamp=$zutil(140,3,file)
+		set exe=$Zdatetime(timestamp) 
+		Write file, ?60, size, ?75, exe,!
+		SET file=$ZSEARCH("")
+	}
+	quit
+BinExeErr
+	Set $ZTrap=""
+	Do WriteLog^Buttons("Error: "_$ZError)
+	Quit 
+Journal
+	Set $ZTrap="JournalErr"
+	; CKEY^%SYS.LICENSE
+	Use LogFile
+	Write !,"<hr noshade size=""4"">"
+	Write !,"<br>"
+	Write !,"<b><font face=""Arial, Helvetica, sans-serif"" size=""4"" color=""#0000FF""><a name=""journal""></a>Journal</font></b>"
+	Write !,"<pre>"
+	do WriteLog^Buttons("")
+	Write "Database", ?15,"Journaling on:",!!
+	Set Maj=##class(%SYSTEM.Version).GetMajor()
+	If Maj<2009 {
+		Set result=##class(%Library.ResultSet).%New( "Config.DataStorage:LocalDatabaseList")
+	} Else {
+		Set result=##class(%Library.ResultSet).%New( "Config.Databases:LocalDatabaseList")
+	}
+	Set sc=result.Execute() If ('sc) Do DisplayError^%apiOBJ(sc) Quit
+	While result.Next(.sc) {
+		If ('sc) Quit
+		Write result.Data("Name") Write ?15,result.Data("Journal"),!
+	}
+	If ('sc) Do DisplayError^%apiOBJ(sc)
+	quit
+JournalErr
+	Set $ZTrap=""
+	Do WriteLog^Buttons("Error: "_$ZError)
+	Quit 
+Setup(nsp,prod) PUBLIC {
+	ZNSpace nsp
+	Set sc=$System.OBJ.Load(prod,"dc")
+	If ('sc) Write !,$System.Status.GetErrorText(sc)
+	Set sc=##class(Ens.MessageHeader).%BuildIndices()
+	If ('sc) Write !,$System.Status.GetErrorText(sc)
+	Set sc=##class(Ens.MessageBody).%BuildIndices()
+	If ('sc) Write !,$System.Status.GetErrorText(sc)
+	Set sc=##class(Ens.Util.Log).%BuildIndices()
+	If ('sc) Write !,$System.Status.GetErrorText(sc)
+	;Set sc=##class(EnsLib.HL7.Message).%BuildIndices()
+	;If $$$ISERR(sc) Write !,$System.Status.GetErrorText(sc)
+	;Set sc=##class(EnsLib.HL7.SearchTable).%BuildIndices()
+	;If $$$ISERR(sc) Write !,$System.Status.GetErrorText(sc)
+	Do $System.OBJ.CompileAll()
+	Do $System.CSP.LoadPageDir("/csp/"_$ZConvert(nsp,"l"),"c")
+	ZNSpace "%SYS"
+}

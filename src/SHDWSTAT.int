@@ -1,0 +1,167 @@
+ROUTINE SHDWSTAT [Type=INT]
+SHDWSTAT ;Server side status ;HYY1627 02/20/11
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+ q
+TranslateCount(count) ;
+	Quit:count<10000 count
+	Set cntbyk=count/1000 
+	Quit:cntbyk<10000 (cntbyk+.5)\1_"K"
+	Set cntbymil=cntbyk/1000
+	Quit:cntbymil<10000 (cntbymil+.5)\1_"M"
+	Quit (cntbymil+500)\1000_"G"
+TranslateSize(bytesize) ;
+	Quit:bytesize<2 $s(bytesize\1=bytesize:bytesize,1:$j(bytesize,0,3))_" "_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2646645358"),"byte")
+	Quit:bytesize<10000 bytesize\1_" "_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2979611598"),"bytes")
+	Set kbsize=bytesize/1024 
+	Quit:kbsize<10000 kbsize\1_" KB"
+	Set mbsize=kbsize/1024
+	Quit:mbsize<10000 mbsize\1_" MB"
+	Quit mbsize\1024_" GB" 
+TranslateTime(secs) ;
+	Quit:secs<2 $s(secs\1=secs:secs,1:$j(secs,0,3))_" "_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3055489385"),"second")
+	Quit:secs<300 secs\1_" "_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"802556390"),"seconds")
+	Set mins=secs/60
+	Quit:mins<300 mins\1_" "_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2691386019"),"minutes")
+	Set hours=mins/60
+	Quit:hours<48 hours\1_" "_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2317008269"),"hours")
+	Quit hours\24_" "_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3957652582"),"days")
+TranslateTimeRange(timelo,timehi) ;interval (timelo,timehi) in seconds
+	New timelotxt,timehitxt
+	Set timehitxt=$$TranslateTime(timehi)
+	Quit:timelo=timehi timehitxt
+	If (timelo>timehi)||(timelo'>0) {
+		Quit "<"_timehitxt
+	}
+	Set timelotxt=$$TranslateTime(timelo)
+	Quit:$p(timehitxt," ",2)[$p(timelotxt," ",2) $p(timelotxt," ")_"~"_$p(timehitxt," ")_" "_$p(timehitxt," ",2)
+	Quit timelotxt_" ~ "_timehitxt
+Monitor(ID) [] public {
+ i $g(ID)="" {
+   i $g(ID) w !,"Object to monitor is not specified",! q
+ } else {
+   s IsShadow=##class(SYS.Shadowing.Shadow).IsValid(ID)
+ }
+ i IsShadow d MonShadow(ID) i 1  ;monitor a shadow
+ e  d MonSource(ID)              ;monitor a source process
+}
+MonShadow(ShadowID) [] public {
+ s $zt="Error"
+ s gcntprv=0,bufhitprv=0,logrdprv=0,lastaddprv=0,findblkprv=0
+ for  {
+   s rc=##class(SYS.Shadowing.Shadow).Stat(ShadowID,.latency,.shdwstat,.gapsiz,.shdwrate,.shdwraterec,.shdwrateavg)
+   i 'rc {
+     i $i(NAcnt)>1 w "."
+     e  w !,"[No info available at this time] "
+   } else {
+     s NAcnt=0
+     i $i(RowCnt)>1
+     w !,$zdt($h,3)
+     i $g(latency)="" {
+       w !,$j("Latency: ",16),"N/A"
+       w !,$j("ReadRate: ",16),"N/A"
+     } else {
+       w !,$j("Latency: ",16),$$TranslateTime(latency)," (",$$TranslateSize(gapsiz),"/",$$TranslateSize(shdwrate),"ps)"
+       w !,$j("ReadRateRec: ",16),$$TranslateSize(shdwraterec),"ps (",$$TranslateSize($p(shdwstat,",",3)),"/",$$TranslateTime($p(shdwstat,",",4)),")"
+       w !,$j("ReadRateAvg: ",16),$$TranslateSize(shdwrateavg),"ps (",$$TranslateSize($p(shdwstat,",",5)),"/",$$TranslateTime($p(shdwstat,",",6)),")"
+     }
+     s sharid=^SYS("shdwcli",ShadowID,"share"),sys=0
+     s shdwstat=$zu(78,53,sharid,1,sys)
+     s jrnfcur=$p(shdwstat,",",1),addrcur=$p(shdwstat,",",3)
+     w !,$j("JrnPos: ",16),$j(addrcur,10)," @ ",$case($ZBITGET($ZVERSION(0),46),0:$case($f(jrnfcur,";"),0:$e(jrnfcur,*-8-$l($p(jrnfcur,".",$l(jrnfcur,"."))),*),:$e(jrnfcur,*-8-$l($p(jrnfcur,".",$l(jrnfcur,"."))),$f(jrnfcur,";")-2)),:jrnfcur)
+     s gupdstat=$zu(78,73,sharid,2) ;glob stat of updaters
+     s grefstat=$zu(78,73,sharid,3) ;glob stat of prefetchers
+     s numpref=$l(grefstat,",")
+     s perfstat=$zu(78,68,sharid)
+     s readwaitcnt=$p(perfstat,"^",3)
+     s readwaittim=$p(perfstat,"^",2)/1000 ;converted to sec from msec
+     s readwaitmax=$p(perfstat,"^",4)/1000 ;converted to sec from msec
+     w !,$j("QueueWaitTime: ",16),"max=",$$TranslateTime(readwaitmax)
+     i readwaitcnt w ", avg=",$$TranslateTime(readwaittim/readwaitcnt)," (",readwaittim,"/",readwaitcnt,")"
+     s stkswwaitcnt=$p(perfstat,"^",6)
+     s stkswwaittim=$p(perfstat,"^",5)/1000 ;converted to sec from msec
+     s stkswwaitmax=$p(perfstat,"^",7)/1000 ;converted to sec from msec
+     w !,$j("StackWaitTime: ",16),"max=",$$TranslateTime(stkswwaitmax)
+     i stkswwaitcnt w ", avg=",$$TranslateTime(stkswwaittim/stkswwaitcnt)," (",stkswwaittim,"/",stkswwaitcnt,")"
+     s q=1
+     s updstat=$p(perfstat,";",q)
+     s waittim=$p(updstat,",")/1000 ;converted to sec from msec
+     s waitmax=$p(updstat,",",2)/1000 ;converted to sec from msec
+     s convoycnt=$p(updstat,",",3)
+     s convoymax=$p(updstat,",",4)
+     s updatecnt=$p(updstat,",",5)
+     s gstat=$p(gupdstat,",",q)
+     s jobnum=$p(gstat,":")
+     w !,?20,"-- Shadow Database Update Daemon (Job #",jobnum,") --"
+     w !,$j("ConvoySize: ",16),"max=",convoymax
+     i convoycnt w ", avg=",$j(updatecnt/convoycnt,0,2)," (",updatecnt,"/",convoycnt,")"
+     w !,$j("WaitTime: ",16),"max=",$$TranslateTime(waitmax)
+     i convoycnt w ", avg=",$$TranslateTime(waittim/convoycnt)," (",$$TranslateTime(waittim),"/",convoycnt,")"
+     s hr="" s $p(hr,"-",72)="-" w !,?4,hr
+     w !,$j("GlobStat: ",16)
+     w ?16,"gcnt:+",?32,"lastadd:+",?48,"logrd:+",?64,"bufhit:+"
+     w !,hr,"----"
+     s q=1
+     s gstat=$p(gupdstat,",",q)
+     s jobnum=$p(gstat,":")
+     s gcnt=$p(gstat,":",2),gcntinc=gcnt-$g(gcntprv(jobnum)),gcntprv(jobnum)=gcnt
+     s bufhit=$p(gstat,":",3),bufhitinc=bufhit-$g(bufhitprv(jobnum)),bufhitprv(jobnum)=bufhit
+     s logrd=$p(gstat,":",5),logrdinc=logrd-$g(logrdprv(jobnum)),logrdprv(jobnum)=logrd
+     s lastadd=$p(gstat,":",6),lastaddinc=lastadd-$g(lastaddprv(jobnum)),lastaddprv(jobnum)=lastadd
+     w !,"Update, Job #",jobnum
+     w ?16,gcnt,":",gcntinc,?32,lastadd,":",lastaddinc,?48,logrd,":",logrdinc,?64,bufhit,":",bufhitinc
+     f p=1:1:numpref d
+     . s gstat=$p(grefstat,",",p)
+     . s jobnum=$p(gstat,":")
+     . s gcnt=$p(gstat,":",2),gcntinc=gcnt-$g(gcntprv(jobnum)),gcntprv(jobnum)=gcnt
+     . s bufhit=$p(gstat,":",3),bufhitinc=bufhit-$g(bufhitprv(jobnum)),bufhitprv(jobnum)=bufhit
+     . s logrd=$p(gstat,":",5),logrdinc=logrd-$g(logrdprv(jobnum)),logrdprv(jobnum)=logrd
+     . s findblk=$p(gstat,":",6),findblkinc=findblk-$g(findblkprv(jobnum)),findblkprv(jobnum)=findblk
+     . w !,"Pref#",p," Job #",jobnum
+     . w ?16,gcnt,":",gcntinc,?32,findblk,":",findblkinc,?48,logrd,":",logrdinc,?64,bufhit,":",bufhitinc
+     w !
+   }
+   h 10
+ }
+Error s $zt="" i $ze'["INTERRUPT" w $ze,!
+ q
+}
+MonSource(pid) [] public {
+ for  {
+   s rc=$$STAT^SHDWSBLK(pid,.latency,.shdwstat,.shdwrate,.gapsiz)
+   i 'rc {
+     i $i(NAcnt)>1 w "."
+     e  w !,"[No info available at this time] "
+   } else {
+     s NAcnt=0
+     i $i(RowCnt)>1 {
+       s n=0 w $j("Latency",8)
+       s n=n+8 w ?n,$j("GapSiz",8)
+       s n=n+8 w ?n,$j("RateRec (Copied/Time)",24)
+       s n=n+24 w ?n,$j("RateAvg (Copied/Time)",24)
+       s n=n+24 w ?n,$j("Range (Beg,End)",16)
+       s n=n+16 w ?n,"File"
+     }
+     s n=0 w $j($$TranslateTime(latency),8)
+     s n=n+8 w ?n,$j($$TranslateSize(gapsiz),8)
+     s n=n+8 w ?n,$j($$TranslateSize(shdwraterec)_" ("_$$TranslateSize(totalcopied),24)
+   }
+   h 10
+ }
+}

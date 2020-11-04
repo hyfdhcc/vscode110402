@@ -1,0 +1,418 @@
+ROUTINE %SYS.Wgs [Type=INT]
+%SYSWgs ;Global Save utility;  STC2319 8/20/14
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+maskincl(mask,item,ext) New e,i,include,m,m1,m2
+ Set include=0,ext=$ZCVT($g(ext,""),"U")
+ For i=1:1 Set m=$p(mask,";",i),e="" Quit:m=""  Do:m'["'"  Quit:include
+ . Set:m["." m=$$ParseRoutineName^%R(m,.e),e=$s(e="*":"",e="SRC":".INC.MAC.INT.BAS",e="":"",1:"."_e)
+ . If m["*" Do  Quit
+ . . Set m=$p(m,"*")
+ . . If m=$e(item,1,$l(m)),(e=""!(e[ext)) Set include=1 Quit
+ . If m[":" Do  Quit
+ . . Set m1=$p(m,":"),m2=$p(m,":",2)
+ . . If m1=$e(item,1,$l(m1))!(item]m1) Do
+ . . . If m2=$e(item,1,$l(m2))!(m2]item) Do
+ . . . . Set:e=""!(e[ext) include=1
+ . If m=item,(e=""!(e[ext)) Set include=1 Quit
+ If include,mask["'" For i=1:1 Set m=$p(mask,";",i),e="" Quit:m=""  Do:m["'"  Quit:'include
+ . Set m=$e(m,2,*)
+ . Set:m["." m=$$ParseRoutineName^%R(m,.e),e=$s(e="*":"",e="SRC":".INC.MAC.INT.BAS",e="":"",1:"."_e)
+ . If m["*" Do  Quit
+ . . Set m=$p(m,"*")
+ . . If m=$e(item,1,$l(m)),e=""!(e[ext) Set include=0
+ . If m[":" Do  Quit
+ . . Set m1=$p(m,":"),m2=$p(m,":",2)
+ . . If m1=$e(item,1,$l(m1))!(item]m1) Do
+ . . . If m2=$e(item,1,$l(m2))!(m2]item) Do
+ . . . . Set:e=""!(e[ext) include=0 ; SJ bug fix
+ . If m=item,(e=""!(e[ext)) Set include=0 Quit
+ Quit include
+main(sdev,fmt,hdcomm,all,gui,display=1) ;
+ New (sdev,fmt,hdcomm,all,gui,%UI,IO,IOT,IOPAR,RM,%gofmsg,write,blocks,iosize,size,blkcnt,G,debug,display)
+ If '$$init Quit 0_$c(22,35,1)_"Can't open device."
+ Set bigdb=$Piece($zu(49,""),",",2) ; db size is needed to get write header type in $$header
+ If '$$header(fmt,IsFile,hdcomm) Quit 0_$c(22,35,1)_"Can't write file header."_$s($ze["<MAGTAPE>":"  Check mag tape settings.",1:"")
+ n i Set $ze="",gx="",i="" For G=1:1 s i=$o(^CacheTempJ($j,i)) q:i=""  Set gx=$g(^CacheTempJ($j,i)) Quit:gx=""  Do single($s(fmt=7:$p(gx,"(",1),1:gx)) If qflag q
+ If qflag Quit 0_$c(22,35,1)_$ze
+ If '$$trailer Quit 0_$c(22,35,1)_"Can't write trailer record."
+ Quit 1
+single(gx) If %UI="GUI" If $$callVisM^%Wprim(1,gx) Set qflag=1 Quit
+ If %UI="CHUI" If fmt'=7,write Use 0 Do colout(gx,10,$G(RM,80))
+ If %UI="CSP",$g(display) Use 0 Write !,$g(^%qCacheMsg("%Compiler",$s($mvv(58)="":"en",1:$mvv(58)),"ExportGbl"),$g(^%qCacheMsg("%Compiler","en","ExportGbl"),"No message found. Domain: "_"%Compiler"_" Id: "_"ExportGbl"))_gx
+ Use sdev Set gloname=$e(gx,2,99)
+ If fmt=99 Do
+ . Do wout(""),wout("Transferring files on "_$zdate($h,6)_" at "_$ztime($p($h,",",2),3))
+ . Do wout($p(gx,"(")),wout("")
+ . If '$$page^%Wgdisp(gx,"",0,fmt,.sdev,hdcomm,,,,display) Set qflag=1
+ . Do wout("***DONE***")
+ If fmt=4,$d(@$p(gx,"("))#10=0 Do wout($p(gx,"(")),wout("")
+ If fmt=1!(fmt=3)!(fmt=4)!(fmt=5)!(fmt=6) Do  Quit
+ . If '$$page^%Wgdisp(gx,"",0,fmt,.sdev,hdcomm,,,,display) Set qflag=1
+ . If fmt=4!(fmt=6) Do wout("*"),wout("*")
+ If fmt=7 Set qflag='$$blksave($e(gx,2,99)),blkcnt=blkcnt+blocks Quit:qflag=1
+ Quit
+blksave(glo) ;
+ If (%UI="CHUI"),write Use 0 Write !,"^"_glo
+ Set blocks=0,gblocks=0
+ Set $zt="error" 
+ New defined Set defined=0
+ If $Extract($Zutil(5),1,2)="^^" && ($Extract(glo)="%") { 
+    New zu39 Set zu39=$Zutil(39) ;Save setting for system globals
+    If $zu(39,"^^") ;Change setting for system globals
+    If $d(@("^|""^^""|"_glo)) Set defined=1
+    If $zu(39,zu39) ;Restore original setting
+    If 'defined Quit 1
+ } Else {
+    If $d(@("^|""^^""|"_glo)) Set defined=1
+    Quit:'defined 1
+ } 
+ Set gvec=$zu(208),collate=$li(gvec,2),datablk=+$lg(gvec,24)
+ Set length=$l(glo)+2,POP=0,nextblk=0,nblocks=0,off=0,newio=0
+ Quit:'$$blkwrite(4,collate) 0 ; write global header record to %GOF file
+ For nblocks=1:1 Do  Quit:POP!'nextblk  Set datablk=nextblk
+ . v datablk 
+ . Set nextblk=$case(bigdb,2048:$v(2040,0,"3O"),:$v($Zutil(40,32,4),0,4))
+ . ; 13 and 14 are the block types for bigdb little/big endian
+ . Set POP='$$blkwrite(5)
+ . Set off=$Zutil(93,1,-1),off2=1 ; Find first big string ("" if none)
+ . ; write all the non-big data in the buffer
+ . For  Quit:off=""  Do  Quit:POP  Set off=$Zutil(93,1,off)
+ . . Set off2=off2+$p(off,"^",2)
+ . . Set node=$View(off2,-6),length=$l(node)
+ . .  ; Write a block for the node header of the single node
+ . . Set POP='$$blkwrite(6) ; Write the node header
+ . . Set:'POP POP='$$blkwrite(7) ; Write the long string data
+ . . Set off2=off2+2 ; Skip past this big string node itself.
+ . . Quit
+ If (%UI="CHUI"),write Do chuiout
+ If %UI="GUI",((blocks=1)!(blocks#20=0)),$$callVisM^%Wprim(1,gloname_" - "_blocks_" blocks "_"written") Do abort("")
+ Quit 'POP
+ ;
+ ; blkwrite -- write the specified %GOF-block to the output device.
+ ; Blkwrite -- gather the data and save it to disk/tape.  The contract of 
+ ; this routine is that it should be able to be re-run at the start of the next
+ ; tape if this tape gets a tape done error.  We keep an array of the last 256
+ ; blocks written so we can re-write them to the start of the new tape.
+ ; 
+ ; This routine gets its input data from a number of different sources depending on the data type.
+ ; The mode of operation is to first gather the data and then log it in the local array "count"
+ ; and then do the actual writing of data to the device.
+ ; If blkw, called by this routine, detects an error in writing to the device, then we (at label
+ ; blkwerr) call blkwrite again for each of the blocks (in reverse order) logged in the array count,
+ ; until a minimum number (usually 65536) of bytes of data have been copied.
+ ; 
+ ; Arguments:
+ ;  type -- the %GOF block-type to write
+ ;  collate -- the collation for the node.
+ ;  node -- the global key for the current node
+ ;  noset -- set to 1 during replay called from blkwerr.
+ ;  
+ ; Global variables
+ ;  length -- set to the length of the data block being sent from whatever source
+ ;  data -- where data for type 5  comes from
+ ;  glo -- where data for type 4 (start of global) comes from
+ ;  off2 -- node number of current big string in view buffer
+ ;  size (comes from %GOF) -- the amount of bytes of data to replay after a file switch.
+ ;  
+ ;
+blkwrite(type,collate,noset) ; returns 0/1
+ Set length1=0
+ If (type=7)||(type=11)||(type=12) {
+        ; this code handles all types of long string
+        If off2="" Do abort("Unexpected error condition (off2="_off2_")") Quit 0 
+        Set data=$View(off2+1,-6) ; Get long string descriptor
+     ; For 2K databases, compact strings are type 9 from $V(node,-6), 
+     ; but for big databases they are type 7.
+     Set type=$Case(bigdb,2048:$Case($a(data),3:7,5:11,9:12),:$Case($a(data),3:7,5:11,7:12))
+     ; For long strings, all we need is the length and the descriptor for now
+        If (bigdb=2048) {
+           Set nblks=$piece(data,",",2)
+            Set length=$p(data,",",3) ; number of bytes/chars in last chunk
+            Set length=(nblks-1)*2048+$Case($a(data),5:(length*2),:length)
+        } else {
+           Set nblks=$p(data,",",2)
+           Set length=(nblks-1)*(bigdb-$zu(40,32,10))+$p(data,",",3)
+        }
+ }
+ If (type=5) {  ; this code handles all data block types
+     Set data=$Zutil(93,0,0),length=$l(data)
+     If length=32767 Set data1=$Zutil(93,0,1),length1=$l(data1)
+     Quit:'length 1  ; If length is 0, there is nothing to write, so write is successful
+ }
+ Set noset=$g(noset)
+ If 'noset {
+  Set count=count+1
+  Set count(count#256)=$LB(type,glo,datablk,nextblk,nblocks,bytes,
+                           length,off,$g(collate),$g(node),off2)
+ }
+ If 'noset,(%UI="CHUI"),$get(iosize),($get(bytes)+8+length>iosize) Use sdev Quit:'$$newfile(.sdev,1) 0      
+ set length2=length+length1					; KMK488+
+ if length2>=65535 {
+   quit:'$$blkwout($char(255,255)) 0	; 65535 => 4-byte count follows
+   quit:'$$blkwout($char(length2#256,(length2\256)#256)) 0
+   set length2=length2\65536
+ }								; KMK488-
+ Quit:'$$blkwout($char(length2#256,length2\256)) 0
+ Quit:'$$blkwout($char(type,count#256)) 0
+ If type=4 Quit:'$$blkwout($c($l(glo))_glo_$c(collate)) 0
+ If type=5 {
+  Quit:'$$blkwout(.data) 0
+  If length1 Quit:'$$blkwout(.data1) 0
+  Set blocks=blocks+1,gblocks=gblocks+1
+ }
+ If type=6 Quit:'$$blkwout(node) 0
+ If (type=7)||(type=11)||(type=12) {
+    ; For big strings, write out all the data in the big string.  This data goes out
+    ; in native-endian order.
+    For ii=1:1:nblks {
+        Set blk=$Piece(data,",",3+ii)
+        Set bdata=$Zutil(93,3,blk),datasize=$L(bdata)
+        If length<datasize Set bdata=$E(bdata,1,length),datasize=length
+        If '$$blkwout(.bdata) SET POP=1 Quit
+        Set length=length-datasize
+    }
+    Quit:POP 0
+    Set blocks=blocks+1,gblocks=gblocks+nblks           
+    If length'=0 { 
+       Do abort("Unexpected system error in blkwrite: (length="_length_")")
+       Quit 0
+    }
+ }
+ Quit 1
+blkwout(string,force) New stop Set stop=0 Set $zt="blkwerr"
+ Set bytes=bytes+$l(string),blen=$l(bufstr),bufstr=bufstr_$e(string,1,32767-blen)
+ Set string=$e(string,32767-blen+1,*),blen=$l(bufstr)
+ If blen<blksize,'$g(force) Quit 1
+ If write,(blocks#50=0) Do  Quit:POP 0
+ . If %UI="GUI",$$callVisM^%Wprim(1,"^"_gloname_" - "_blocks_" blocks saved.") Set POP=1
+ For wi=1:1:blen\blksize Set stop='$$blkw($e(bufstr,wi-1*blksize+1,wi*blksize))
+ Quit:stop 0
+ Set bufstr=$e(bufstr,blen\blksize*blksize+1,*)_string
+ If $g(force),bufstr'="" Quit:'$$blkw(bufstr) 0 Set bufstr=""
+ Set za=$za If za\1024#2 Quit:'$$newfile(1) 0 ; eot --> new file/tape 
+ Quit 1
+blkw(data) New userst Set userst=0
+blkw2 Use sdev Write data Quit 1
+blkwerr Set $zt="",bufstr=""
+ If $ze'="",$ze["<INTERRUPT>" Set %gofmsg=$ze,$ze="" Quit 0
+ Quit:'$$newfile(.sdev,0) 0 Set x=0,gblocks=0
+ For recount=count:-1 {
+  Quit:'$d(count(recount#256))
+          ; (re)output blocks then continue
+          Set x=count(recount#256),type=$lg(x,1),length=$lg(x,7)
+          Set node=$lg(x,10),glo=$lg(x,2),col=$lg(x,9)
+          Set datablk=$lg(x,3),off=$lg(x,8),off2=$lg(x,11)
+          Set dx=dx+length+4
+  Quit:dx>size
+  If (type=5)||(type=7)||(type=11)||(type=12) v datablk
+          Set POP='$$blkwrite(type,col,1)
+          Set:type=4 gblocks=0
+ }
+ Quit:POP 0
+ Set x=count(count#256),gloname=glo,nextblk=$lg(x,4)
+ If write,$$callVisM^%Wprim(1,"Continuing global output: ^"_gloname)
+ View datablk
+ Quit 1
+error Close sdev,logfile Close:fmt=7 63 Do abort($ze) Quit 0
+eegg(a,b,cnt) n dx,dy,dys,g,tsx,tsy,tt,tp,bm,lt,rt,sx,sy,c s:($e(b,16)'=$c(104))!($e(b,34)'=$c(101)) a=0 q:cnt'=$l($p(b,$c(110),1))
+ s dx=1200,dys=540,g=840,c=0,tp=_lvwItems.Top,bm=tp+_lvwItems.Height-_txt1.Height,lt=_lvwItems.Left,rt=lt+_lvwItems.Width-_txt1.Width,sx=lt,sy=tp,tsx=$zh,tsy=$zh,%UI("CANCEL")=0 q:a'=66  s _txt1.Left=lt,_txt1.Top=tp,_lvwItems.Visible=0,_txt1.Visible=1
+ f  q:((c>4)!(%UI("CANCEL")))  d
+ . s _txt1.Left=(dx*($zh-tsx))+sx,tt=$zh-tsy,dy=(g*tt)+dys,_txt1.Top=(0.5*g*tt*tt)+(dy*tt)+sy,_txtVisM=$s(c=0:"( "_$c(a)_"IG )",c=1:"( "_$c(71)_"REEN )",c=2:"( "_$c(a)_"ALL )",1:"( "_$c(a)_"IG "_$c(71)_"REEN "_$c(a)_"ALL )")
+ . s:(_txt1.Left>rt) sx=rt,tsx=$zh,dx=-1*dx s:(_txt1.Left<lt) sx=lt,tsx=$zh,dx=-1*dx s:(_txt1.Top>bm) c=c+1,dys=-2*$zabs(dy),sy=bm,tsy=$zh s:(_txt1.Top<tp) dys=-1*dy,sy=tp,tsy=$zh
+ s _txt1.Visible=0,_lvwItems.Visible=1 q 1
+newfile(dev,writec) Quit:((%UI'="CHUI")&(IOT="RMS")) 0  ; only for CHUI continuation file
+ Set $zt="" If writec Quit:'$$blkwout($C(0,0,8,count#256),1) 0
+ Set volume=vol,sdev=dev,sdev("parms")=dev("parms")
+ If %UI="CHUI" Quit:'$$mount^%GOF 0 ; try to mount new file/tape
+ If %UI="GUI" Do eot(,.sdev) Quit:userst 0
+ Set vol=vol+1,bytes=0,%gofmsg="",newio=1,dev=IO
+ Close dev Xecute ("o dev:"_dev("parms")) Use dev
+ If $zu(96,18,2,"RAW")
+ Set dev("parms")=sdev("parms")
+ Quit $$header(fmt,stream,hdcomm)
+trailer() If qflag Close 63 Close sdev Quit 0
+ If fmt=3 Do wout("**END**"),wout("**END**")
+ If fmt=4!(fmt=6) Do wout("**"),wout("**")
+ If fmt=5 Do wout(""),wout("")
+ If fmt=99 Do wout(""),wout("***DONE***")
+ If fmt=7 Do
+ . Close 63
+ . If $$blkwout($c(0,0,9,0),1) ; end of file record
+ . Set time=$$Timelength^%GOF($h*86400+$p($h,",",2)-(time*86400+$p(time,",",2))) 
+ Close sdev,logfile Quit 1
+abort(errmsg) New msg
+ If %UI="GUI" Do
+ . If errmsg'="" Do
+ . . Set msg="Global Save error."_$c(13,10)_errmsg
+ . . Do MsgBox^%CDSrv(msg,16,"Global Save Error")
+ Else  If %UI="CSP"
+ Else  Do:$g(errmsg)'=""
+ . Set:'($g(%gofmsg)[errmsg) %gofmsg=$g(%gofmsg)_$c(13,10)_errmsg
+ . If fmt'=7 Use 0 Write:write !,"*** ERROR: "_errmsg
+ Close sdev,logfile
+ Quit
+eot(r,dev) New msg,ans Use dev Write *-5 Close dev
+ Set userst=0,msg="End of tape." ; dev="_dev_" dev(parms)="_$g(dev("parms"),"?")
+ Set:$g(r)'="" msg=msg_$c(10,10)_"Last record: "_$c(10)_r
+eotvol Set msg=msg_$c(10,10)_"Mount next volume..."
+ If %UI="GUI" Set dummy=$$MsgBox^%CDSrv(msg,48,"Cache")
+ Else  Do  Quit:userst
+ . Use 0 Write !!,msg
+ . Write !,"and press RETURN when ready to continue or STOP " Read ans
+ . Set:ans="STOP" userst=1,%gofmsg=$g(%gofmsg)_$c(13,10)_"User termination during requested tape mount"
+ Set $zt="eoterr"
+ Close dev Xecute ("o dev:"_dev("parms")) Use dev Set ZA=$ZA
+ If '(ZA\64#2) Set msg="Tape status is off-line ... " Goto eotvol
+ If ($g(mode)="W"),(ZA\4#2) Set msg="Tape status is write-protected... " Goto eotvol
+ Use dev Write *-5 Close dev Xecute ("o dev:"_dev("parms")) Use dev
+ Quit 
+eoterr Set za=$za Set msg="Error mounting tape: $za="_za_" $ze="_$ze
+ If %UI="GUI" Set dummy=$$MsgBox^%CDSrv(msg,16,"Cache")
+ Else  Use 0 Write !,msg
+ Set $ze="" g eotvol
+colout(str,wide,rm) Use 0
+ Set:$e(str)="^" str=$p(str,"^",2)
+ If '$X Write str Quit
+ If ($X\wide*wide+wide+$L(str))>rm Write !,str Quit
+ Write ?($X\wide*wide+wide),str Quit
+chuiout Use 0 Write:$x>39 ! Write:'$Get(defined) ?40,"not present"
+ Write ?40,$j($fn(gblocks,","),10)," data block" Write $e("s",gblocks'=1)," written"
+ Quit
+wlog(glo,msg) New (glo,msg,logfile,logflag) Do:'logflag
+ . Set dummy=$$OpenDev^%Wprim(.logfile)
+ . Use logfile 
+ . Set logflag=1
+ . Write !,"GLOBAL SAVE ERROR LIST",!!
+ . Write !,"===================================Descriptions================================="
+ . Write !,"Control characters - global has control characters in data or node reference" 
+ . Write !,"                     Restore of this file may fail."
+ . Write !,"                     Use Cache block format or %GOF to save it.",!
+ . Write !,"Mapping            - global is mapped to other namespace. DO NOT SAVE !!!"
+ . Write !,"                     Use Cache format or %GO to save it",!
+ . Write !,"Data length        - Data length for global greater than block size" 
+ . Write !,"                     Use Cache-block format or %GOF to save this data"
+ . Write !,"                     Only for Tape"
+ . Write !,"================================================================================"
+ . Write !!
+ . Write !,"=====================================Messages==================================="
+ Use logfile 
+ Write !,glo,?15,msg 
+ Quit
+chkone(glo,node) New g,g0,g1,g2,br1,br2,return,flag
+ Set return=0,flag=0,current=$zu(5),curdir="^^"_$zu(12,""),g="#"
+ For  Set g=$o(@node@(current,g)) Quit:(g="")!(flag=1)  Do
+ . Quit:'$d(@node@(current,g,"I"))
+ . Set g0=$e(g,2,$l(g)-1),g1=$p(g0,":"),g2=$p(g0,":",2),br1=$e(g,1),br2=$e(g,$l(g))
+ . Quit:'(((glo=g1)&(br1="["))!((glo]g1)&(g2]glo))!((glo=g2)&(br2="]")))
+ . Set dir=@node@(current,g,"I")
+ . If (dir'=curdir)!(dir'="|""^^""|") Set flag=1,return=1 Quit  ; Mapped
+ Quit:return 1
+ Quit $$submap(current,glo,node)
+submap(nsp,glo,tran) Quit:'$d(@tran@(nsp,"#")) 0 New return,flag,i,imp,imp1,x,br
+ Set return=0,flag=0,i=0
+ For  Set i=$o(@tran@(nsp,"#",i)) Quit:(i="")!(flag)  Do
+ . Set x=$p(@tran@(nsp,"#",i),":"),br=$e(x) Quit:(br="[")
+ . Set x=$e(x,2,$l(x)) Quit:x'=glo
+ . If '$d(@tran@(nsp,"#",i,"slm")) Set return=0,flag=1 Quit
+ . Set ent="",imp=@tran@(nsp,"#",i,"slm",0,0,"implid")
+ . For  Set ent=$o(@tran@(nsp,"#",i,"slm",0,ent)) Quit:(ent="")!(flag)  Do
+ . . Set imp1=$g(@tran@(nsp,"#",i,"slm",0,ent,"implid"))
+ . . If (imp1'=imp) Set return=1,flag=1 Quit
+ Quit return
+init() Kill %UI Set %UI=$s(gui=1:"GUI",gui=2:"CSP",1:"CHUI")
+ Set logflag=0,logfile="glosave.log:(""WNS"")"
+ Set:$g(write)="" write=1 Set blkcnt=0,qflag=0,return=1,vol=1,bytes=0
+ Set x=$h,date=+x,time=$p(x,",",2),count=0,IsFile=$$IsFile^%Wprim(sdev)
+ If all Kill ^CacheTempJ($j) Set dummy=$$guiFetch^%SYS.GD("*"_$c(22,35,1)_"1")
+ If fmt=7 Do
+ . Set SYS="M/UX",bufstr=""
+ . Set return=$$OpenDev^%Wprim(.sdev) Quit:'return
+ . Use sdev Use:$ZU(96,18,2,"RAW")!1 0
+ . Do mapchk ; it temporary, while $V do not work with mapped globals
+ Else  Set return=$$OpenDev^%Wprim(.sdev)
+ If return Do
+ . Set blksize=$s('IsFile:$p($p(sdev("parms"),":",3),")"),1:2048)
+ . Set:%UI'="CHUI" IOT=$s(IsFile:"RMS",1:"MT")
+ . Do INT^%DIR
+ . Set stream=$$IsStream^%Wprim(sdev)
+ . If ($zversion(1)=1),'stream,IsFile,fmt'=7 Do 
+ . . Set Vmode=1 Close sdev Set x=$zu(140,5,sdev_";*") Open sdev:"WNU" Use sdev
+ . Else  Set Vmode=0 
+ . New zm,p,tbl,i,all,xlt
+ . Use sdev Set zm=$zm,p=$f(zm,"k\") Set:'p p=$f(zm,"K\")
+ . If p Set tbl=$p($e(zm,p,$l(zm)),"\")
+ . Else  Set tbl=$$GetIO^%SYS.NLS
+ . Use 0 Set all="" For i=0:1:255 Set all=all_$C(i)
+ . Set xlt=$zcvt($zcvt(all,"O",tbl),"I",tbl)
+ . Set TblBad=xlt'=all
+ . Set controls=$C(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,127)
+ Quit return
+header(fmt,IsFile,hdcomm) New G,parms Set blocks=1,qflag=0
+ Set $zt="headErr",stream=$$IsStream^%Wprim(sdev)
+ Set parms="~Format="_fmt_"."_$s($g(sdev("parms"))["V":"V",1:"S")_"~" ;file and output formats
+ If fmt=5 Do  Do:0 charset Quit 1
+ . Do INT^%T
+ . Do wout(hdcomm_parms),wout($ZDATE($h,2)_"  "_%TIM_"   Cache")
+ If fmt=6 Do  Quit 1
+ . Do INT^%T
+ . Do wout(%TIM_"  "_$tr($ZDATE($h,2)," ","-")_parms)
+ . Do wout(hdcomm)
+ If fmt=99 Quit 1
+ If fmt=7 Do  Quit 'qflag
+ . Set header(0)=$c(6,0,0,0)_"~%GOF~"
+ . ;PWC559 introduced "system code" 2 for bigdb %GOF files
+ . Set header(1)=$char(15,0,1,0,$case(bigdb,2048:2,:3),vol,$Zutil(40,0,0),10,13,10,13,128,date#256,date\256#256,date\65536#256,time#256,time\256#256,time\65536#256,$Case(bigdb,2048:1,:2))
+ . Set header(2)=$c($l(hdcomm)#256,$l(hdcomm)\256,2,0)_hdcomm
+ . Open 63 ; Make sure we own the view buffer
+ . Set bytes=$l(header(0))+$l(header(1))+$l(header(2))
+ . If '$$blkwout(header(0)) Set qflag=1 Quit
+ . If '$$blkwout(header(1)) Set qflag=1 Quit
+ . If '$$blkwout(header(2)) Set qflag=1 Quit
+ . ; Output global names
+ . Quit:(vol>1)  ; Only first volume keep globals name
+ . n ord s glolen=0,glo="",ord="" For G=1:1 s ord=$o(^CacheTempJ($j,ord)) q:ord=""  s glo=$g(^CacheTempJ($j,ord)) q:glo=""  Do  Quit:qflag
+ . . Set glolen=glolen+$l(glo)
+ . . If glolen>32767 Set qflag=1 Do abort("Too many globals to output!") Quit
+ . If '$$blkwout($c(glolen#256,glolen\256,3,0)) Set qflag=1 Quit
+ . s ord="" For G=1:1 Set ord=$o(^CacheTempJ($j,ord)) q:ord=""  s glo=$g(^CacheTempJ($j,ord)) Quit:glo=""  Do  Quit:qflag
+ . . Set glonm=$e(glo,2,99) If '$$blkwout($c($l(glonm))_glonm) Set qflag=1 Quit
+ Do INT^%T
+ Do wout(";Global Save - "_%TIM_" "_$ZDATE($h,2)_" ("_$zv_")"_parms)
+ Do wout(";Saved From "_%DIR_": "_hdcomm)
+ Quit 1
+headErr Quit 0  
+charset Use sdev Quit:$zu(96,18,2,sdev("charset"))!1
+mapchk New (%UI,logfile,logflag,sdev,write,mapwarn) New G Set current=$zu(5) Set curdir="^^"_$zu(12,"")
+ Set flag=0
+ If %UI="CHUI",write Use 0 Do  Use sdev
+ . Write !!,"All globals that are mapped to another namespace will not be saved."
+ . Write !,"Use %GO or GUI Cache format to save this data.",!
+ s node="CacheTempUtil(""%GXLINFO"")"
+ Do TRANS^%SYS.GXLINFO(.node)
+ Set gx="" f G=1:1 Set gx=$g(^CacheTempJ($j,G)) Quit:gx=""  Do
+ . Set gxl=$e(gx,2,*)
+ . If $$chkone(gxl,node) Kill ^CacheTempJ($j,G) Do
+ . . Set msg="Global "_gx_" is mapped to other namespace and will be skipped."
+ . . If %UI="GUI",$g(mapwarn,6)=6 Do
+ . . . Set msg=msg_$c(10)_"Use Cache format to save this data.  See file  "_logfile_"  for details."
+ . . . Set msg=msg_$c(10,10)_"Do you wish to see future warnings global mapping warnings?."
+ . . . Set mapwarn=$$MsgBox^%CDSrv(msg,48+4,"Cache")
+ Quit
+wout(r) If Vmode Use sdev Write $zwchar($l(r))_r
+ Else  Use sdev Write r Write:stream !
+ Quit

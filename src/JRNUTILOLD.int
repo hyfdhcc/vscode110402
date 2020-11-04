@@ -1,0 +1,276 @@
+ROUTINE JRNUTILOLD [Type=INT]
+JRNUTILOLD ;Old utilities for converting journal history; HYY1398 07/31/08
+ Q
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+HISTCVT ;convert old form of journal history to new form (with trailing "J")
+ n jrnhist,jf
+ i +$g(^%SYS("JOURNAL","HISTORYVERSION"))'<1 q  ;alread updated
+ s jrnhist=$name(^%SYS("JOURNAL","HISTORY"))
+ s $zt="etHISTCVT"
+ s jf="" f  s jf=$o(@jrnhist@(jf)) q:jf=""  d:jf'["J"
+ . m @jrnhist@(jf_"J")=@jrnhist@(jf)  
+ . k @jrnhist@(jf)  
+ s ^%SYS("JOURNAL","HISTORYVERSION")=1
+ q    
+etHISTCVT ;
+ s $zt=""
+ i $ze'="" d $zu(9,"","HISTCVT:"_$ze,(0>0),0)
+ q
+ ; input: 
+ ;   jrnfile: long form of new-styled journal file name
+ ;   within (default=0): 1=stay within [START,STOP] boundary
+ ;   mgdir when present is where to find %SYS. This is used in
+ ;       restoring other cluster member's journal files when we
+ ;       need to read their journal history.
+ ; output:
+ ;   prevfile: long form of prev journal file name (""=no prev file)
+ ;   return 1 (=success) or errcode (0 or negative)
+ ; error code:
+ ;   0=file name format not supported or bad jrnfile (nonexistent or corrupted)
+ ;  -1=previous file is not a journal file or does not exist
+ ;  -2="missing directory information"
+ ;  -3="program error"
+ ;  -4="<UNDEFINED> error likely due to incomplete history record"
+ ;  -5="weird"
+ ;  -6=infinite loop in journal file link, possibly the resutl of setting
+ ;     back system date
+PREVJRN(jrnfile,prevfile,within,mgdir) 
+ s $zt="etNXPVJRN"
+ n mgns,return,jrnhist,ret,next,curdir,altdir,prefix,pfile,prev
+ i '$D(mgdir) s mgdir=$ZU(12)
+ s mgns="^^"_mgdir
+ s return=$zu(78,22,jrnfile,1),prevfile=$p(return,",",2)
+ s within=$g(within) q:within +return
+ ;jrnfile is corrupted (return=-1) or nonexistent (return=0)
+ q:+return'=1 0
+ ;or prevfile is located via back pointer
+ q:prevfile'="" 1
+ s jrnfile=$case($ZBITGET($ZVERSION(0),46),0:$case($f(jrnfile,";"),0:$e(jrnfile,*-8-$l($p(jrnfile,".",$l(jrnfile,"."))),*),:$e(jrnfile,*-8-$l($p(jrnfile,".",$l(jrnfile,"."))),$f(jrnfile,";")-2)),:jrnfile)
+ q:jrnfile'?8N1"."3N 0 
+ s jrnhist=$name(^|mgns|%SYS("JOURNAL","HISTORY"))
+ ;by now we know jrnfile should be a START entry in journal history
+ ;it may or may not be preceded by a STOP entry though (due to a crash)   
+ s prev=$o(@jrnhist@(jrnfile_"J"),-1) q:prev="" 1  ;no previous file (prevfile="")
+ s prevfile=$g(@jrnhist@(prev,"FULLNAME"),$p(prev,"J"))
+ n jrnflist s jrnflist=$name(^||JrnFileList($i(^||JrnFileList))) k @jrnflist
+ f  s @jrnflist@(prevfile)="",ret=$$NEXTJRN(prevfile,.next,0,mgdir) q:ret'>0  q:next=""  q:$case($ZBITGET($ZVERSION(0),46),0:$case($f(next,";"),0:$e(next,*-8-$l($p(next,".",$l(next,"."))),*),:$e(next,*-8-$l($p(next,".",$l(next,"."))),$f(next,";")-2)),:next)'<jrnfile  s prevfile=next i $d(@jrnflist@(prevfile)) s ret="-6,"_prevfile q
+ k @jrnflist
+ i ret>0 s prevfile=$case($ZBITGET($ZVERSION(0),46),0:$case($f(prevfile,";"),0:$e(prevfile,*-8-$l($p(prevfile,".",$l(prevfile,"."))),*),:$e(prevfile,*-8-$l($p(prevfile,".",$l(prevfile,"."))),$f(prevfile,";")-2)),:prevfile),next=$case($ZBITGET($ZVERSION(0),46),0:$case($f(next,";"),0:$e(next,*-8-$l($p(next,".",$l(next,"."))),*),:$e(next,*-8-$l($p(next,".",$l(next,"."))),$f(next,";")-2)),:next)
+ i ret<0 q ret
+ i 'ret {
+   i prevfile=$g(@jrnhist@(prev,"FULLNAME"),$p(prev,"J")) {
+     i $l($g(@jrnhist@(prev,"DATE")),"^")>1 q -1 ;jrnfile's prev no longer exists
+   }
+   q -1
+ }
+ i next>jrnfile q -5 ;weird
+ i '$d(@jrnhist@(prev,"CURDIR")) d  q:ret'>0 ret ;must be a STOP entry
+ . s prev=$o(@jrnhist@(prev),-1) s:prev="" ret=-2
+ s curdir=@jrnhist@(prev,"CURDIR"),altdir=@jrnhist@(prev,"ALTDIR")
+ i $d(@jrnhist@(prev,"PREFIX")) s prefix=@jrnhist@(prev,"PREFIX")
+ e  d
+ . s prefix=$$GJrnPrefix(@jrnhist@(prev,"FULLNAME"))
+ s pfile=curdir_prefix_prevfile,ret=$zu(78,22,pfile) 
+ i 'ret,altdir'=curdir s pfile=altdir_prefix_prevfile,ret=$zu(78,22,pfile)
+ s prevfile=pfile ;set prevfile regardless of ret value
+ ;return -1 if previous file is nonexistent (ret=0) or corrupted (ret=-1)
+ q $s(ret=1:1,1:-1)  
+ ;---------------------------------------------------------------
+ ; input: 
+ ;   jrnfile: long form of new-styled journal file name
+ ;   within (default=0): 1=stay within [START,STOP] boundary
+ ;   mgdir when present is where to find %SYS. This is used in
+ ;       restoring other cluster member's journal files when we
+ ;       need to read their journal history.
+ ; output:
+ ;   nextfile: long form of next journal file name (""=no next file)
+ ;   return 1 (=success) or errcode (0 or negative)
+ ; error code:
+ ;   0="file name format not supported"
+ ;  -1="next is not a journal file"
+ ;  -2="missing directory information"
+ ;  -3="program error"
+ ;  -4="<UNDEFINED> error likely due to incomplete history record"
+NEXTJRN(jrnfile,nextfile,within,mgdir) ;
+ s $zt="etNXPVJRN"
+ n mgns,jrnhist,prev,x,ret,found
+ n dir1,dir2,prefix,date,hdate,seq ;associated with jrnfile
+ n limit,limitj,seql,dirl ;associated with limit
+ i '$D(mgdir) s mgdir=$ZU(12)
+ s mgns="^^"_mgdir
+ i jrnfile'?8N1"."3N s nextfile=$zu(78,22,jrnfile,2) q:+nextfile'=2 0 s nextfile=$p(nextfile,",",2) q:nextfile]"" 1
+ ;no next journal for old-styled journal file or wrong file
+ s:jrnfile'?8N1"."3N jrnfile=$case($ZBITGET($ZVERSION(0),46),0:$case($f(jrnfile,";"),0:$e(jrnfile,*-8-$l($p(jrnfile,".",$l(jrnfile,"."))),*),:$e(jrnfile,*-8-$l($p(jrnfile,".",$l(jrnfile,"."))),$f(jrnfile,";")-2)),:jrnfile)
+ q:jrnfile'?8N1"."3N 0 
+ ;from now on, jrnfile has the format yyyymmdd.nnn
+ s within=+$g(within),nextfile="" ;no next file
+ s jrnfile=jrnfile_"J" ;now jrnfile has a trailing "J" (used in global)
+ s jrnhist=$name(^|mgns|%SYS("JOURNAL","HISTORY"))
+ s x=$d(@jrnhist@(jrnfile))
+ ;either jrnfile itself is an entry in history
+ i x q:$l($g(@jrnhist@(jrnfile,"DATE")),"^")>1&within 1 s prev=jrnfile
+ ;or prev is a START or SWITCH (no 2nd field in "DATE")
+ i 'x s prev=$o(@jrnhist@(jrnfile),-1) q:prev="" -2  ;q:$l(@jrnhist@(prev,"DATE"),"^")>1 -2
+ ;limit = where to stop (last journal file to restore)
+ s limit=$o(@jrnhist@(jrnfile))
+ ;if jrnfile is a STOP entry, its next file (if any) must be recorded in 
+ ;journal history (as a START entry), thus must be the "limit" entry
+ i x,$p($g(@jrnhist@(jrnfile,"DATE")),"^",2)'="" d:limit'=""  q 1
+ . s nextfile=@jrnhist@(limit,"CURDIR")_@jrnhist@(limit,"PREFIX")_$p(limit,"J")
+ i limit="" s limit=$zd($h,8)_".999" ;last jrn file from today
+ e  i within,$g(@jrnhist@(limit,"DATE"))]"",$l(@jrnhist@(limit,"DATE"),"^")=1 d  q:jrnfile=limit 1
+ . ;since we are required to stay within the boundary and next entry is
+ . ;a START, the "limit" must be one file earlier than that.
+ . s limit=$p(limit,"J") d decrement(.limit) s limit=limit_"J"
+ s dir1=@jrnhist@(prev,"CURDIR")
+ s dir2=@jrnhist@(prev,"ALTDIR") s:dir2=dir1 dir2=""
+ i $d(@jrnhist@(prev,"PREFIX")) s prefix=@jrnhist@(prev,"PREFIX")
+ e  d
+ . s prefix=$$GJrnPrefix(@jrnhist@(prev,"FULLNAME"))
+ ;we don't use @jrnhist@(jrnfile) anymore, so remove "J" from jrnfile and limit
+ s jrnfile=$p(jrnfile,"J"),limit=$p(limit,"J")
+ s date=$p(jrnfile,"."),hdate=$zdh(date,8),seq=+$p(jrnfile,".",2)
+ n ret1,ret2
+ s ret2=0,ret1=$$nextseq(dir1_prefix_date,seq,.nextfile) i ret1>0 q ret1 ;found
+ i dir2]"" s ret2=$$nextseq(dir2_prefix_date,seq,.nextfile) i ret2>0 q ret2
+ i ret1!ret2 q -1 ;next file is invalid
+ s found=0 f  s hdate=hdate+1,date=$zd(hdate,8) q:date>limit  d  q:found
+ . s nextfile=dir1_prefix_date_".001"
+ . s ret2=0,ret1=$zu(78,22,nextfile) i ret1>0 s found=ret1 q  ;found
+ . i dir2]"" s nextfile=dir2_prefix_date_".001",ret2=$zu(78,22,nextfile) i ret2>0 s found=ret2 q
+ . i ret1!ret2 s found=-1 q  ;next file is invalid
+ i found q found ;however, found=-1 means nextfile is a non-journal file
+ ;our last hope: limit itself is the next file (in a different directory
+ ;or with a different prefix -- that is why we couldn't find it)
+ s limitj=limit_"J",nextfile="" ;first assume nextfile not found (found=0)
+ i $d(@jrnhist@(limitj)) d 
+ . s dirl=@jrnhist@(limitj,"CURDIR") q:dirl=""  
+ . n prefixl s prefixl=$g(@jrnhist@(limitj,"PREFIX"),prefix)
+ . i prefixl=prefix,(dirl=dir1)||(dirl=dir2) q  ;already searched 
+ . s seql=$p(limit,".",2) i seql'="001",seql-seq'=1 q
+ . s nextfile=dirl_prefixl_limit
+ . s found=$zu(78,22,nextfile)
+ q $s(found:found,1:1)  ;return 1 (and nextfile="") if no nextfile found
+etNXPVJRN 
+ s $zt=""
+ i $ze["UNDEFINED" s $zt="etNXPVJRN" q "-4missing "_$zr_" ?"  ;$zr would never generate <UNDEFINED> error
+ q -3_$ze
+ERNXPVJRN(err,file,order) ;order: 1=errors in NEXTJRN, -1=PREVJRN
+ s $zt="etERNXPVJRN"
+ n errcode s err=$g(err),file=$g(file),errcode=+err,order=+$g(order,1)
+ i errcode=-1 q "the "_$s(order=-1:"prev",1:"next")_" file of "_file_" is not a journal file or does not exist"
+ i errcode=-2 q "missing directory information in journal history"
+ i errcode=-3!(errcode=-4) q $e(err,3,$l(err))
+ i errcode=-5,order=-1 q "error in finding previous file of "_file
+ i errcode=-6,order=-1 q "infinite loop @ "_$p(err,",",2)_" in journal file link, possibly resulting from setting back system date"
+ i errcode=0 q file_" is not a journal file or does not exist"
+ q ""
+etERNXPVJRN
+ s $zt=""
+ q $ze
+prevseq(preseq,seq,file) 
+ q:seq=1 0
+ s file=preseq_"."_$e(1000+seq-1,2,4)
+ i ''$ZU(140,4,file) q 0
+ q $zu(78,22,file) 
+nextseq(preseq,seq,file) 
+ q:seq=999 0
+ s file=preseq_"."_$e(1000+seq+1,2,4)
+ i ''$ZU(140,4,file) q 0
+ q $zu(78,22,file) 
+decrement(short) 
+ n date,seq
+ s date=$p(short,"."),seq=$p(short,".",2)
+ i seq>1 s short=date_"."_$e(1000+seq-1,2,4) q
+ s short=$zd($zdh(date,8)-1,8)_".001"
+ q
+ ; BITWISE.INC, DPB139 07/09/93
+FIXDIR(dir) ;procedure, dir is passed by reference
+ Q:dir=""
+ i ($zversion(1)=1) d
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ i '($zversion(1)=1) Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))
+ i '($zversion(1)=1) s dir=dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+ Q
+fixdir(dir) ;function
+ Q:dir="" ""
+ i ($zversion(1)=1) d  q dir
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")) dir
+ Q dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+basename(f) ;similar to basename on UNIX
+ Q $P(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),1,$L(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))-1)_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+appdir(d1,d2) ;use $zu(12,d2) to append d2 to canonic dir
+ i ($zversion(1)=1) S $E(d1,$L(d1))="."_d2_"]"
+ i '($zversion(1)=1) S d1=d1_d2
+ Q d1
+VALIDIR(dir) ;validate directory dir and create it if dir doesn't exist
+ new flag
+ s flag=1
+ g vdir2
+validir(dir,flag) ;validate directory dir and optionally create it if it
+vdir2 ; VALIDIR(dir) comes here with flag set to 1
+ quit:$$ChkDirOrSpecEXISTS(dir)'="" 1   ; dir is valid and exists
+ quit:$$ChkDirVALID(dir)="" 0    ; dir is not valid
+ i flag'=1 q 0  ; flag says don't create, return failure
+ new x
+ set x=$$mkdir(dir)  ; returns 0 for success, 1 for failure
+ q:x=1 0  ; failed to create
+ quit:$$ChkDirOrSpecEXISTS(dir)="" 0   ; it doesn't we failed
+ q 1  ; success
+mkdir(dir) ;create a new directory
+ i ($zversion(1)=1) q:$$ChkDirVALID(dir)="" 1  ; dir is invalid, return failure
+ q '##class(%Library.File).CreateDirectoryChain(dir)
+jrnshort(jf,short) ;get/set short form of a journal file name FIXME HYY1999
+         N (jf,short)
+         S len=$L($P(jf,";"))
+         Q:$G(short)="" $E(jf,len-11,len) ;"GET" form
+         S $E(jf,len-11,len)=short ;"SET" form
+         Q jf
+GJrnPrefix(jf) ;extract prefix from the journal file name jf
+         N (jf)
+         S fname=$P(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),$L(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")))       
+         Q $e(fname,1,$l($p(fname,"."))-8)
+GetJrnFileName(path) { 
+	i $f(path,"/") q $p(path,"/",$l(path,"/")) ;presumably a Unix path
+	if $f(path,"\") q $p(path,"\",$l(path,"\")) ;presumably a Windows path
+	s vmsfile=$p(path,"]",2) i vmsfile="" q path ;a name only, not a path
+	q $p(vmsfile,";") ;return name from a VMS path without trailing ";"
+}
+dirinvalidmsg(dir1,dir2) 
+ n valid1,valid2,cnt,msg
+ s valid1=$$VALIDIR(dir1),valid2=$$VALIDIR(dir2)
+ s cnt=valid1+valid2 ; cnt = 0 if both invalid, 1 if one is valid
+ s msg="The following journaling "
+ s:cnt msg=msg_"directory is" 
+ s:'cnt msg=msg_"directories are"
+ s msg=msg_" not valid"_$C(13,10)
+ s:'valid1 msg=msg_"     "_dir1_$C(13,10)
+ s:'valid2 msg=msg_"     "_dir2_$C(13,10)
+ q msg
+ChkDirVALID(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,1)
+ChkDirEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkDirOrSpecEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,3)
+ChkDir(R) N N S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkBad S $ZT="" W !,"<"_$P($P($ZE,"<",2),">")_"> error -- invalid directory"
+ Q ""

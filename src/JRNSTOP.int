@@ -1,0 +1,103 @@
+ROUTINE JRNSTOP [Type=INT]
+JRNSTOP ;Stop Journalling, ;$Change: 4521965 $
+	;Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/jrnstop.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+MAIN N curfile,dummy,jrnflag,jrninfo
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+ D INIT
+ I curfile="" W !,"Not journaling now." QUIT
+ if $SYSTEM.Mirror.GetInfo()[",PRIMARY," {
+	 w !,"Journaling cannot be stopped on the primary mirror member"
+	 quit
+ }
+ I $p($zu(78,22),"^",2) W ! DO  d ask("N") q  ;PAUSED (JRNSWITCH)
+ . W !,"Note: Journaling is currently PAUSED because JRNSWITCH is"
+ . w !,"      running. Stopping journaling now will cause journal"
+ . w !,"      data to be lost. This should only be used if JRNSWITCH"
+ . w !,"      is hung or if it is not possible to switch to another"
+ . w !,"      journal file due to limited disk space."
+ I ($p($zu(78,22),"^")&&$p($zu(78,22),"^",3)) W ! DO  d ask("Y") q  ;DISABLED DUE TO I/O ERROR
+ . W !,"Note: Journaling of database updates is currently DISABLED -- "
+ . W !,"      there has been an journal I/O error that has not yet been"
+ . W !,"      resolved and the journaling system is in the process of"
+ . w !,"      retrying the failed I/O or a failed journal file expansion"
+ . w !,"      to preserve the journal data prior to the disabling of"
+ . W !,"      journaling. Stopping journal I/O now will cause that journal"
+ . w !,"      data to be lost. In any case, some journaling information" 
+ . W !,"      has been lost since database updates ceased being journaled."
+ . W !,"      (This is just an informational message, there is no"
+ . W !,"      reason not to stop journaling at this point)"
+ I $p($zu(78,22),"^",4) W ! DO  d ask("N") q  ;I/O RETRY IN PROGRESS
+ . W !,"Note: The journaling system is currently in the process of"
+ . w !,"      retrying a failed I/O or a failed journal file"
+ . w !,"      expansion. Stopping journaling now will cause journal"
+ . w !,"      data to be lost. This should only be used if JRNSWITCH"
+ . w !,"      is hung or if it is not possible to switch to another"
+ . w !,"      journal file due to limited disk space."
+ w !,*7,?20,"***WARNING***"
+ w !,"Transaction rollbacks will fail until journaling is restarted."
+ w !,"Database updates will be missing from the journal and databases" 
+ w !,"will no longer be able to be fully recovered from journal files.",!
+ d ask("N")
+ q
+ask(yndef) ;
+ n stoptype s stoptype=$s($p($zu(78,22),"^",6):"journaling",1:"journal I/O")
+ I $$YN("Stop "_stoptype_" now",yndef)'="Y" W !,stoptype_" remains active." q -1
+ n err,stopped s stopped=$$INT(.err,0)
+ i 'stopped w !,"Failed to stop "_stoptype
+ e  w !,"Journaling stopped"
+ w:$g(err)'="" !,"ERROR: ",err
+ q stopped
+INT(err,io) ; Internal Entry Point (for SHUTDOWN, etc.)
+ N curfile,jrninfo,jrnflag,stopped,glo,i,islocked s stopped=0
+ s $zt="etINT"
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") s err="Operation requires %Admin_Manage:Use privilege" q 0
+ i $d(io),$e(io)="^" s glo=io k io ;ideally I should try a SET on glo
+ D INIT ;curfile/jrninfo should always be updated to be safe
+ I curfile="" s err=(-3_",Not journaling") q 0  ; Not journaling
+ S stopped=$zu(78,2,1)
+ i stopped'=1 d  q 0 ;to caller, 0 is failure
+ . i stopped=-1 s err=(-5_",Access to journal file "_$zu(78,3)_" denied") q
+ . i stopped=-2 s err=(-6_",Unable to open journal file "_$zu(78,3)_" for write access") q
+ . i stopped=-3 s err=(-8_",Cannot stop journaling on the primary mirror member") q   ;JO2141
+ s ^SYS("SHUTDOWN","JRNCLEAN")=$ZTIMESTAMP_"^"_"JRNSTOP"
+ s ^SYS("SHUTDOWN","TPCLEAN")=$ztimestamp_"^"_"JRNSTOP"
+ d HISTORY^JRNUTIL("STOP",$zu(78,3))
+ s i=0 f  q:$ZU(51,1)!'$P($zu(78,21),",",1)  s i=i+1 q:i>50  h .1
+ i i>50 s err="Unable to quiesce write daemon or update image journaling within 5 seconds"
+ ; e  d $$$LOGMSG("quiesce write daemon or update image journaling within "_i,0,0)
+ Q stopped
+etINT ;
+ s $zt=""
+ s err=(-1_","_$ze)
+ q stopped
+INIT S curfile=$$curfile()
+ S jrnflag=$ZU(40,2,7),jrninfo=$V(jrnflag,-2)
+ Q
+curfile() S $zt="etcurfile" Q $p($zu(78,4)_","_$zu(78,3),",",2)
+etcurfile Q ""
+loginfo(msg) ;must be called from within INT (JRNSTART, JRNSWTCH)
+ i $d(glo) s @glo=$g(@glo)+1,@glo@(@glo)=msg
+ i $d(io) u io w !,msg
+ q
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R

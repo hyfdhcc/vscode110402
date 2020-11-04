@@ -1,0 +1,641 @@
+ROUTINE DATABASE1 [Type=INT]
+DATABASE1 ; Manage databases ; RJW2209 4/24/14
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ShowKeyInt() public {
+	Set DBEncKeyIDList=$System.Security.System.GetDBEncKeyIDList()
+	If DBEncKeyIDList="" Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3479673480"),"No database encryption keys are activated.") Quit
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2995007914"),"Activated database encryption key identifiers:")
+	For i=1:1:$L(DBEncKeyIDList,",") {
+		Set DBEncKeyID=$P(DBEncKeyIDList,",",i)
+		Write !,?5,DBEncKeyID
+		If (DBEncKeyID=$System.Security.System.GetDBEncKeyID()) Write $get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1001190621")," <-default DB key")
+		If (DBEncKeyID=$System.Security.System.GetJrnEncKeyID(2)) Write $get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2811346369")," <-new journal key")
+	}
+	Quit
+}
+DeleteKeyInt() public {
+ 	i '$SYSTEM.Security.Check("%Admin_Secure","USE") w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2529476099"),"Operation requires %Admin_Secure:Use privilege") q
+	Set DBEncKeyIDList=$System.Security.System.GetDBEncKeyIDList()
+	If DBEncKeyIDList="" Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3479673480"),"No database encryption keys are activated.") Quit
+	Else  Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3755803010"),"Activated database encryption key identifiers: ")
+	For i=1:1:$L(DBEncKeyIDList,",") Write !,?5,i,") ",$P(DBEncKeyIDList,",",i)
+	Write !,"Select key: "
+	Read i
+	If (i<1)||(i>$L(DBEncKeyIDList,",")) Quit
+	Set DBEncKeyID=$P(DBEncKeyIDList,",",i)
+	Set DirList=$$MountedEncDBs(DBEncKeyID)
+	If DirList]"" {
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1177930299"),"Can not deactivate database encryption key: "),DBEncKeyID
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1066024769"),"In use for mounted encrypted databases:")
+		For i=1:1:$l(DirList,",")-1 Write !?5,$p(DirList,",",i)
+		Quit
+	}
+	If ($L(DBEncKeyIDList,",")>1)&&(DBEncKeyID=$System.Security.System.GetDBEncKeyID()) {
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1177930299"),"Can not deactivate database encryption key: "),DBEncKeyID
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1358794511"),"Default for new encrypted databases.")
+		Quit
+	}
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	If sys.DBEncJournal&&((DBEncKeyID=$System.Security.System.GetJrnEncKeyID(1))||(DBEncKeyID=$System.Security.System.GetJrnEncKeyID(2))) {
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1177930299"),"Can not deactivate database encryption key: "),DBEncKeyID
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4086058618"),"In use for journal file encryption.")
+		Quit
+	}
+	If ($L(DBEncKeyIDList,",")>1)&&((DBEncKeyID=$System.Security.System.GetJrnEncKeyID(2))||(DBEncKeyID=$System.Security.System.GetJrnEncKeyID(2))) {
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1177930299"),"Can not deactivate database encryption key: "),DBEncKeyID
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1140471700"),"Designated for new journal file encryption.")
+		Quit
+	}
+	Set rc=$System.Security.System.DeleteDBEncKey(DBEncKeyID)
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"665232158"),"Database encryption key deactivated: "),DBEncKeyID
+	Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^CacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")))_DBEncKeyID
+	Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncKeyDeactivated"))
+	Quit
+}
+SetDefaultKeyInt() public {
+ 	i '$SYSTEM.Security.Check("%Admin_Secure","USE") w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2529476099"),"Operation requires %Admin_Secure:Use privilege") q
+	Set DBEncKeyIDList=$System.Security.System.GetDBEncKeyIDList()
+	If DBEncKeyIDList="" Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3479673480"),"No database encryption keys are activated.") Quit
+	Else  Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3755803010"),"Activated database encryption key identifiers: ")
+	For i=1:1:$L(DBEncKeyIDList,",") Write !,?5,i,") ",$P(DBEncKeyIDList,",",i)
+	Write !,"Select key: "
+	Read i
+	If (i<1)||(i>$L(DBEncKeyIDList,",")) Quit
+	Set DBEncKeyID=$P(DBEncKeyIDList,",",i)
+	Do $System.Security.System.SetDBEncKeyDefault(DBEncKeyID)
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1483961092"),"Default database encryption key set: "),DBEncKeyID
+	Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^CacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")))_DBEncKeyID
+	Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DefaultEncKeySet"))
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	Set sys.DBEncDefaultKeyID=DBEncKeyID
+	Set Status=sys.%Save()
+	If '(''Status) d $SYSTEM.Status.DisplayError(Status)
+	Quit
+}
+SetJournalKeyInt() public {
+ 	i '$SYSTEM.Security.Check("%Admin_Secure","USE") w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2529476099"),"Operation requires %Admin_Secure:Use privilege") q
+	Set DBEncKeyIDList=$System.Security.System.GetDBEncKeyIDList()
+	If DBEncKeyIDList="" Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3479673480"),"No database encryption keys are activated.") Quit
+	Else  Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3755803010"),"Activated database encryption key identifiers: ")
+	For i=1:1:$L(DBEncKeyIDList,",") Write !,?5,i,") ",$P(DBEncKeyIDList,",",i)
+	Write !,"Select key: "
+	Read i
+	If (i<1)||(i>$L(DBEncKeyIDList,",")) Quit
+	Set DBEncKeyID=$P(DBEncKeyIDList,",",i)
+	Do $System.Security.System.SetJrnEncKey(DBEncKeyID)
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2800125027"),"Default journal encryption key set: "),DBEncKeyID
+	Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^CacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")))_DBEncKeyID
+	Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DefaultEncKeySet"))
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	Set sys.DBEncJournalKeyID=DBEncKeyID
+	Set Status=sys.%Save()
+	If '(''Status) d $SYSTEM.Status.DisplayError(Status)
+	Quit
+}
+ConfigStartInt() public {
+	Set $zt="ERROR"
+ 	i '$SYSTEM.Security.Check("%Admin_Secure","USE") w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2529476099"),"Operation requires %Admin_Secure:Use privilege") q
+	For {
+	Set List(1)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4046459023"),"No database encryption key activation at startup")
+	Set List(2)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2940299374"),"Interactive database encryption key activation at startup")
+	Set List(3)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3763229152"),"Unattended database encryption key activation at startup")
+	Set List(4)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3256369782"),"Show current setting")
+	Set Value=""
+	Set prompt=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"277363247"),"Option:")
+	Set Status=##Class(%Library.Prompt).GetMenu(prompt,.Value,.List,,8+128+4)
+	If (+Status=0)||(+Status=2)||(Value="") Quit
+ 	i (Value'=4),('$SYSTEM.Security.Check("%Admin_Secure","USE")) w !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2529476099"),"Operation requires %Admin_Secure:Use privilege") q
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	Set mode=Value-1
+	If mode=0 {
+		if sys.DBEncStartMode {
+		    s rc=##class(%SYS.Journal.System).OKNoDBEncKeyAtStartup() 
+		    i ('rc) w ! d $System.Status.DisplayError(rc) q
+			Set DirList=$$RequiredEncDBs()
+			If DirList]"" {
+				Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1096737239"),"Can not disable database encryption key activation at startup.")
+				Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3870735882"),"Encrypted databases are required at startup:")
+				For i=1:1:$l(DirList,",")-1 Write !?5,$p(DirList,",",i)
+				Quit
+			}
+		}
+		Set sys.DBEncJournal=0
+		i $zu(69,68,0)
+		Set sys.DBEncStartMode=mode
+		Set sys.DBEncStartKeyFile=""
+		Set sys.DBEncStartUsername=""
+		Set sys.DBEncStartPassphrase=""
+		Set sys.DBEncStartRequired=0
+		Set sys.DBEncCacheTemp=0
+		s Status=sys.%Save()
+		i '(''Status) d $SYSTEM.Status.DisplayError(Status) q
+		Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"NoActivation"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","NoActivation"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"NoActivation")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"NoActivation"),$g(^CacheMsg("%SECURITY.DBEnc","en","NoActivation"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"NoActivation")))
+		Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncSettingsModified"))
+	} ElseIf mode=1 {
+		Set journal=+sys.DBEncJournal
+		Set prompt=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2776911352"),"Encrypt journal files?")
+		Set Status=##Class(%Library.Prompt).GetYesNo(prompt,.journal,,8)
+		If (+Status=0)||(+Status=2) Quit
+		Set cachetemp=+sys.DBEncCacheTemp
+		Set prompt=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1917802034"),"Encrypt CacheTemp?")
+		Set Status=##Class(%Library.Prompt).GetYesNo(prompt,.cachetemp,,8)
+		If (+Status=0)||(+Status=2) Quit
+		Set required=(cachetemp||journal)
+		s rc=##class(%SYS.Journal.System).OKNoDBEncKeyAtStartup() 
+		i ('rc) Set required=1
+		Set DirList=$$RequiredEncDBs()
+		If DirList]"" Set required=1
+		Set sys.DBEncStartMode=mode
+		Set sys.DBEncStartKeyFile=""
+		Set sys.DBEncStartUsername=""
+		Set sys.DBEncStartPassphrase=""
+		Set sys.DBEncStartRequired=required
+		Set sys.DBEncCacheTemp=cachetemp
+		Set sys.DBEncJournal=+journal
+		s Status=sys.%Save()
+		i '(''Status) d $SYSTEM.Status.DisplayError(Status) q
+		Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"InteractiveActivation"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","InteractiveActivation"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"InteractiveActivation")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"InteractiveActivation"),$g(^CacheMsg("%SECURITY.DBEnc","en","InteractiveActivation"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"InteractiveActivation")))
+		If +cachetemp Set Eventdata=Eventdata_$C(13,10)_$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"EncryptCACHETEMP"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","EncryptCACHETEMP"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"EncryptCACHETEMP")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"EncryptCACHETEMP"),$g(^CacheMsg("%SECURITY.DBEnc","en","EncryptCACHETEMP"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"EncryptCACHETEMP")))
+		If +journal Set Eventdata=Eventdata_$C(13,10)_$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"EncryptJournal"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","EncryptJournal"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"EncryptJournal")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"EncryptJournal"),$g(^CacheMsg("%SECURITY.DBEnc","en","EncryptJournal"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"EncryptJournal")))
+		Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncSettingsModified"))
+	} ElseIf mode=2 {
+		Set prompt=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2152221782"),"Unattended activation key file:")
+		Set Status=##Class(%Library.Prompt).GetString(prompt,.keyfile,0,128,,8)
+		If (+Status=0)||(+Status=2)||(keyfile="") Quit
+		If '##class(%Library.File).Exists(keyfile)||##class(%Library.File).DirectoryExists(keyfile) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4085484887"),"File '"),keyfile,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3114949802"),"' does not exist.") Continue
+		Set sc=$$ReadFile^EncryptionKey(keyfile,.data)
+		If ('sc) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2140544891"),"Error reading key file: "),keyfile Continue
+		Set journal=+sys.DBEncJournal
+		Set prompt=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2776911352"),"Encrypt journal files?")
+		Set Status=##Class(%Library.Prompt).GetYesNo(prompt,.journal,,8)
+		If (+Status=0)||(+Status=2) Quit
+		Set cachetemp=0
+		Set prompt=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1917802034"),"Encrypt CacheTemp?")
+		Set Status=##Class(%Library.Prompt).GetYesNo(prompt,.cachetemp,,8)
+		If (+Status=0)||(+Status=2) Quit
+		Set DBEncKeyID=$O(data("KEY",""))
+		Set reuse=0
+		If (sys.DBEncStartUsername'="") {
+			Set user=sys.DBEncStartUsername
+			If $d(data("ADM",user)) {
+				Set Password1=sys.DBEncStartPassphrase
+				Set Iterations=data("ADM",user,"Iterations")
+				Set Salt=data("ADM",user,"Salt")
+				Set KeyLength=data("ADM",user,"KEKLen")
+				Set KeyEncKey1=$System.Encryption.PBKDF2(Password1,Iterations,Salt,KeyLength)
+				Set EncDBEncKey=data("ADM",user,"EncKey")
+				Set KeyEncKey2=$System.Encryption.GenCryptRand(KeyLength)
+				If $System.Security.System.ReencryptMKEncKey(EncDBEncKey,KeyEncKey1,KeyEncKey2)'="" Set reuse=1
+			}
+		}
+		If 'reuse {
+			Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"773404228"),"Existing administrator:")
+un1			Set Username1=$$AskUsername(.Username) If Username1="" Quit
+			Set Username1=$ZCVT(Username1,"U")
+			If '$d(data("ADM",Username1)) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"955287614"),"User '"),Username1,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"169596929"),"' not found in key file.") Continue
+			Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1941114787"),"Password: ")
+			Use:$ZU(96,14)=1 0:(:"+S") Read Password1 Use:$ZU(96,14)=1 0:(:"-S")
+			If Password1="" Set Username1="" Goto un1
+			If $ZISWIDE(Username1)||$ZISWIDE(Password1) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3819075551"),"WideUnicodeNotSupported") Continue
+			Set Iterations=data("ADM",Username1,"Iterations")
+			Set Salt=data("ADM",Username1,"Salt")
+			Set SaltLength=$L(Salt)
+			Set KeyLength=data("ADM",Username1,"KEKLen")
+			Set KeyEncKey1=$System.Encryption.PBKDF2(Password1,Iterations,Salt,KeyLength)
+			Set EncDBEncKey=data("ADM",Username1,"EncKey")
+			For i=1:1 {
+				Set user=DBEncKeyID_"_"_i
+				Quit:'$d(data("ADM",user))
+			}
+			Set pw=$System.Encryption.GenCryptRand(KeyLength)
+			Set Salt=$System.Encryption.GenCryptRand(SaltLength)
+			Set KeyEncKey2=$System.Encryption.PBKDF2(pw,Iterations,Salt,KeyLength)
+			Set EncDBEncKey=$System.Security.System.ReencryptMKEncKey(EncDBEncKey,KeyEncKey1,KeyEncKey2)
+			If EncDBEncKey="" Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3128113833"),"Encryption key unwrap failed; possible incorrect password.") Continue
+			Set data("ADM",user,"Iterations")=Iterations
+			Set data("ADM",user,"Salt")=Salt
+			Set data("ADM",user,"KEKLen")=KeyLength
+			Set data("ADM",user,"EncKey")=EncDBEncKey
+			Set sc=$$WriteFile^EncryptionKey(keyfile,.data)
+			If ('sc) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3973023649"),"Error writing key file") Quit
+			Set sys.DBEncStartUsername=user
+			Set sys.DBEncStartPassphrase=pw
+			Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4216197267"),"Key file is now enabled for unattended database encryption key activation at startup.")
+		}
+		Set required=(cachetemp||journal)
+		s rc=##class(%SYS.Journal.System).OKNoDBEncKeyAtStartup() 
+		i ('rc) Set required=1
+		Set DirList=$$RequiredEncDBs()
+		If DirList]"" Set required=1
+		Set sys.DBEncStartMode=mode
+		If ($zversion(1)=1) { Set sys.DBEncStartKeyFile=$p(keyfile,";") }
+		Else { Set sys.DBEncStartKeyFile=keyfile }
+		Set sys.DBEncStartRequired=required
+		Set sys.DBEncCacheTemp=cachetemp
+		Set sys.DBEncJournal=+journal
+		s Status=sys.%Save()
+		i '(''Status) d $SYSTEM.Status.DisplayError(Status) q
+		Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"UnattendedActivation"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","UnattendedActivation"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"UnattendedActivation")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"UnattendedActivation"),$g(^CacheMsg("%SECURITY.DBEnc","en","UnattendedActivation"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"UnattendedActivation")))
+		Set Eventdata=Eventdata_$C(13,10)_$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^CacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")))_keyfile
+		If +cachetemp Set Eventdata=Eventdata_$C(13,10)_$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"EncryptCACHETEMP"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","EncryptCACHETEMP"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"EncryptCACHETEMP")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"EncryptCACHETEMP"),$g(^CacheMsg("%SECURITY.DBEnc","en","EncryptCACHETEMP"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"EncryptCACHETEMP")))
+		If +journal Set Eventdata=Eventdata_$C(13,10)_$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"EncryptJournal"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","EncryptJournal"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"EncryptJournal")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"EncryptJournal"),$g(^CacheMsg("%SECURITY.DBEnc","en","EncryptJournal"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"EncryptJournal")))
+		Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncSettingsModified"))
+	} ElseIf Value=4 {
+		If +sys.DBEncStartMode=1 { Write !,List(2)
+		} ElseIf +sys.DBEncStartMode=2 { Write !,List(3),":",!,sys.DBEncStartKeyFile
+		} Else { Write !,List(1) }
+		If +sys.DBEncCacheTemp=1 Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3167976870"),"CacheTemp encrypted")
+		If +sys.DBEncJournal=1 Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2173887294"),"Encrypt journal files")
+	}
+	}
+	Quit 1
+ERROR Set $zt=""
+	i $ze["<INTERRUPT>" Use:$ZU(96,14)=1 0:(:"-S") q 0
+	ztrap $ze
+}
+ConfigStart(mode,journal,cachetemp,keyfile,Username1,Password1) public {
+	Set $zt="ERROR"
+ 	i '$SYSTEM.Security.Check("%Admin_Secure","USE") q $$Error^%apiOBJ(921,"%Admin_Secure"_":"_"USE")
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	If mode=0 {
+		if sys.DBEncStartMode {
+		    s rc=##class(%SYS.Journal.System).OKNoDBEncKeyAtStartup() 
+		    i ('rc) q rc
+			Set DirList=$$RequiredEncDBs()
+			If DirList]"" Quit $$Error^%apiOBJ(1217,$e(DirList,1,$l(DirList)-1))
+		}
+		Set sys.DBEncJournal=0
+		i $zu(69,68,0)
+		Set sys.DBEncStartMode=mode
+		Set sys.DBEncStartKeyFile=""
+		Set sys.DBEncStartUsername=""
+		Set sys.DBEncStartPassphrase=""
+		Set sys.DBEncStartRequired=0
+		Set sys.DBEncCacheTemp=0
+		s Status=sys.%Save()
+		i '(''Status) q Status
+		Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"NoActivation"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","NoActivation"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"NoActivation")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"NoActivation"),$g(^CacheMsg("%SECURITY.DBEnc","en","NoActivation"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"NoActivation")))
+		Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncSettingsModified"))
+	} ElseIf mode=1 {
+		Set required=(cachetemp||journal)
+		s rc=##class(%SYS.Journal.System).OKNoDBEncKeyAtStartup() 
+		i ('rc) Set required=1
+		Set DirList=$$RequiredEncDBs()
+		If DirList]"" Set required=1
+		Set sys.DBEncStartMode=mode
+		Set sys.DBEncStartKeyFile=""
+		Set sys.DBEncStartUsername=""
+		Set sys.DBEncStartPassphrase=""
+		Set sys.DBEncStartRequired=+required
+		Set sys.DBEncCacheTemp=+cachetemp
+		Set sys.DBEncJournal=+journal
+		s Status=sys.%Save()
+		i '(''Status) q Status
+		Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"InteractiveActivation"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","InteractiveActivation"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"InteractiveActivation")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"InteractiveActivation"),$g(^CacheMsg("%SECURITY.DBEnc","en","InteractiveActivation"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"InteractiveActivation")))
+		If +cachetemp Set Eventdata=Eventdata_$C(13,10)_$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"EncryptCACHETEMP"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","EncryptCACHETEMP"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"EncryptCACHETEMP")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"EncryptCACHETEMP"),$g(^CacheMsg("%SECURITY.DBEnc","en","EncryptCACHETEMP"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"EncryptCACHETEMP")))
+		If +journal Set Eventdata=Eventdata_$C(13,10)_$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"EncryptJournal"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","EncryptJournal"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"EncryptJournal")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"EncryptJournal"),$g(^CacheMsg("%SECURITY.DBEnc","en","EncryptJournal"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"EncryptJournal")))
+		Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncSettingsModified"))
+	} ElseIf mode=2 {
+		If '##class(%Library.File).Exists(keyfile)||##class(%Library.File).DirectoryExists(keyfile) Quit $$Error^%apiOBJ(5012,keyfile)
+		Set sc=$$ReadFile^EncryptionKey(keyfile,.data)
+		If ('sc) Quit sc
+		Set DBEncKeyID=$O(data("KEY",""))
+		Set reuse=0
+		If (sys.DBEncStartUsername'="") {
+			Set user=sys.DBEncStartUsername
+			If $d(data("ADM",user)) {
+				Set Password1=sys.DBEncStartPassphrase
+				Set Iterations=data("ADM",user,"Iterations")
+				Set Salt=data("ADM",user,"Salt")
+				Set KeyLength=data("ADM",user,"KEKLen")
+				Set KeyEncKey1=$System.Encryption.PBKDF2(Password1,Iterations,Salt,KeyLength)
+				Set EncDBEncKey=data("ADM",user,"EncKey")
+				Set KeyEncKey2=$System.Encryption.GenCryptRand(KeyLength)
+				If $System.Security.System.ReencryptMKEncKey(EncDBEncKey,KeyEncKey1,KeyEncKey2)'="" Set reuse=1
+			}
+		}
+		If 'reuse {
+			If (Username1="")||(Password1="") Quit $$Error^%apiOBJ(5022)
+			Set Username1=$ZCVT(Username1,"U")
+			If $ZISWIDE(Username1)||$ZISWIDE(Password1) Quit $$Error^%apiOBJ(1211)
+			If '$d(data("ADM",Username1)) Quit $$Error^%apiOBJ(1204,Username1,keyfile)
+			Set Iterations=data("ADM",Username1,"Iterations")
+			Set Salt=data("ADM",Username1,"Salt")
+			Set SaltLength=$L(Salt)
+			Set KeyLength=data("ADM",Username1,"KEKLen")
+			Set KeyEncKey1=$System.Encryption.PBKDF2(Password1,Iterations,Salt,KeyLength)
+			Set EncDBEncKey=data("ADM",Username1,"EncKey")
+			For i=1:1 {
+				Set user=DBEncKeyID_"_"_i
+				Quit:'$d(data("ADM",user))
+			}
+			Set pw=$System.Encryption.GenCryptRand(KeyLength)
+			Set Salt=$System.Encryption.GenCryptRand(SaltLength)
+			Set KeyEncKey2=$System.Encryption.PBKDF2(pw,Iterations,Salt,KeyLength)
+			Set EncDBEncKey=$System.Security.System.ReencryptMKEncKey(EncDBEncKey,KeyEncKey1,KeyEncKey2)
+			If EncDBEncKey="" Quit $$Error^%apiOBJ(1219)
+			Set data("ADM",user,"Iterations")=Iterations
+			Set data("ADM",user,"Salt")=Salt
+			Set data("ADM",user,"KEKLen")=KeyLength
+			Set data("ADM",user,"EncKey")=EncDBEncKey
+			Set sc=$$WriteFile^EncryptionKey(keyfile,.data)
+			If ('sc) Quit sc
+			Set sys.DBEncStartUsername=user
+			Set sys.DBEncStartPassphrase=pw
+		}
+		Set required=(cachetemp||journal)
+		s rc=##class(%SYS.Journal.System).OKNoDBEncKeyAtStartup() 
+		i ('rc) Set required=1
+		Set DirList=$$RequiredEncDBs()
+		If DirList]"" Set required=1
+		Set sys.DBEncStartMode=mode
+		If ($zversion(1)=1) { Set sys.DBEncStartKeyFile=$p(keyfile,";") }
+		Else { Set sys.DBEncStartKeyFile=keyfile }
+		Set sys.DBEncStartRequired=+required
+		Set sys.DBEncCacheTemp=+cachetemp
+		Set sys.DBEncJournal=+journal
+		s Status=sys.%Save()
+		i '(''Status) q Status
+		Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"UnattendedActivation"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","UnattendedActivation"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"UnattendedActivation")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"UnattendedActivation"),$g(^CacheMsg("%SECURITY.DBEnc","en","UnattendedActivation"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"UnattendedActivation")))
+		Set Eventdata=Eventdata_$C(13,10)_$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"Keyfile"),$g(^CacheMsg("%SECURITY.DBEnc","en","Keyfile"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"Keyfile")))_keyfile
+		If +cachetemp Set Eventdata=Eventdata_$C(13,10)_$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"EncryptCACHETEMP"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","EncryptCACHETEMP"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"EncryptCACHETEMP")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"EncryptCACHETEMP"),$g(^CacheMsg("%SECURITY.DBEnc","en","EncryptCACHETEMP"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"EncryptCACHETEMP")))
+		If +journal Set Eventdata=Eventdata_$C(13,10)_$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"EncryptJournal"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","EncryptJournal"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"EncryptJournal")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"EncryptJournal"),$g(^CacheMsg("%SECURITY.DBEnc","en","EncryptJournal"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"EncryptJournal")))
+		Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncSettingsModified"))
+	}
+	Quit 1
+ERROR Set $zt=""
+	Quit $$Error^%apiOBJ(5001, "ConfigStart: "_$ze)
+}
+Start() public {
+	Set $zt="ERROR"
+ 	i '$SYSTEM.Security.Check("%Admin_Secure","USE") q 0
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	If '$IsObject(sys) q 1
+	Set mode=sys.DBEncStartMode
+	Set required = sys.DBEncStartRequired
+	Set recov=0
+	Set rollback=0
+	Set jrnenc=0
+	Set a=$zu(78,21)
+	Set jrnfile=$p(a,",",2)
+	If jrnfile'="" {
+		If '$D(^SYS("SHUTDOWN","JRNCLEAN")) Set recov=1
+		If '$D(^SYS("SHUTDOWN","TPCLEAN")) Set rollback=1
+		If $p($zu(78,22,jrnfile,5),",",2) Set jrnenc=1
+	}
+	If (mode<1)||(mode>2) {
+		Quit 1
+	} ElseIf mode=1 {
+		s keyfile=$System.Util.GetEnviron("DBEncStartKeyFile")
+		s user=$System.Util.GetEnviron("DBEncStartUsername")
+		s pw=$System.Util.GetEnviron("DBEncStartPassphrase")
+		i (keyfile'=""),(user'=""),(pw'="") {
+			Set rc=$$ActivateDB^EncryptionKey(keyfile,user,pw)
+			i (''rc) q 1
+		}
+		If ($zversion(1)=2),$SYSTEM.Util.GetSessionId(1)'=0 { ;If in user's session on Windows.
+retryWe		;remove after all developers have system code with RJW2036
+			Set bindir=$G(^%SYS("bindir"))
+			Set $zt="enodll"
+			Set dll=$zf(-4,1,bindir_$s($zu(40,0,2)=4:"cctrl.dll",1:"cctrl64.dll")) ;load cctrl.dll library into $zf table
+retryW
+			Set $zt="enofunc"
+			Set func=$zf(-4,3,dll,"CctrlGetDBEncryptionCred") ;get process address of dialog box function
+			Set $zt="ERROR"
+			Set rc=$zf(-5,dll,func,"","","") ;call dialog box function
+			Set keyfile=$p(rc,$c(13),1),user=$p(rc,$c(13),2),pw=$p(rc,$c(13),3) ;break up return values
+			Set rc=$$ActivateDB^EncryptionKey(keyfile,user,pw)
+			If ($System.Security.System.GetDBEncKeyID()="") {
+				Set $zt="enofunc"
+				Set func=$zf(-4,3,dll,"CctrlMessageBox")
+				Set $zt="ERROR"
+				Set msg=$System.Status.GetErrorText(rc)
+				If recov||rollback {
+					Set msg=msg_$c(13,10)_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2601821090"),"WARNING:")
+					If recov Set msg=msg_$c(13,10)_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1113314354"),"Journal recovery is pending.")
+					If rollback Set msg=msg_$c(13,10)_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2132209543"),"Transaction rollback is pending.")
+					If jrnenc { Set msg=msg_$c(13,10)_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3862168382"),"Journal file is encrypted.  No processing will be possible if key is not activated.") }
+					Else { Set msg=msg_$c(13,10)_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4269782116"),"Encrypted databases will not be processed if key is not activated.") }
+				}
+				Set type=2+48+256
+				Set opt=$zf(-5,dll,func,msg,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2986499638"),"Database encryption key activation failed."),type)
+				If (opt=4) {
+					Goto retryW
+				} Elseif(opt=3) {
+					Do $zf(-4,2,dll) ;unload cctrl.dll library
+					Do $zu(9,"",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2986499638"),"Database encryption key activation failed."),(0  /* Informational message */>0),0  /* Informational message */)
+					If $D(rc) Do $zu(9,"",$System.Status.GetErrorText(rc),(0  /* Informational message */>0),0  /* Informational message */)
+					s ^%SYS("STARTUPERROR")="Startup aborted by operator." try { d ##Class(Config.CPF).Reset() } catch {} s %Msg001="Error: "_"Startup aborted by operator."_" - Shutting down the system" w:('($zversion(1)=2)) !,%Msg001 d $zu(9,"",%Msg001,1 /* broadcast and log message*/,3  /* Fatal */),BACK^%ETN i '($zversion(1)=1) {d STARTUPSHUTDOWN^SHUTDOWN} d $zu(4,$j,7)
+				}
+			}
+			Do $zf(-4,2,dll) ;unload cctrl.dll library
+		} ElseIf ($zversion(1)=2) { ;Running in session 0 on Windows, generally can't display directly on user desktop.
+retryW2		s instance=$zconvert($p($zu(86),"*",2),"L"),command="STU",request="DBEncryptionKey",error=0
+			try {
+				s rc=$SYSTEM.Util.InteractWithUser(instance,command,request) ;call dialog box function on user desktop
+			} catch { ;
+				s error=1
+				d $zu(9,"",$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4087081193"),"Error: $SYSTEM.Util.InteractWithUser(%1,%2,%3), $ze=%4"),instance,command,request,$ZE),(0  /* Informational message */>0),0  /* Informational message */)
+			}
+			if error g retryWe ;remove after all developers have system code with RJW2036
+			if rc<0 d $zu(9,"",$$FormatText^%occMessages($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"309105480"),"Error: $SYSTEM.Util.InteractWithUser(%1,%2,%3) returned error code %4"),instance,command,request,rc),(0  /* Informational message */>0),0  /* Informational message */)
+			Set keyfile=$p(rc,$c(13),1),user=$p(rc,$c(13),2),pw=$p(rc,$c(13),3) ;break up return values
+			Set rc=$$ActivateDB^EncryptionKey(keyfile,user,pw)
+			If ($System.Security.System.GetDBEncKeyID()="") {
+				Set msg=$System.Status.GetErrorText(rc)
+				If recov||rollback {
+					Set msg=msg_$c(13,10)_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2601821090"),"WARNING:")
+					If recov Set msg=msg_$c(13,10)_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1113314354"),"Journal recovery is pending.")
+					If rollback Set msg=msg_$c(13,10)_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2132209543"),"Transaction rollback is pending.")
+					If jrnenc { Set msg=msg_$c(13,10)_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3862168382"),"Journal file is encrypted.  No processing will be possible if key is not activated.") }
+					Else { Set msg=msg_$c(13,10)_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4269782116"),"Encrypted databases will not be processed if key is not activated.") }
+				}
+				Set type=2+48+256
+				s request=$c(0)_"MessageBox"_$c(0)_msg_$c(0)_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2986499638"),"Database encryption key activation failed.")_$c(0)_type
+				s opt=$SYSTEM.Util.InteractWithUser(instance,command,request)
+				If (opt=4) {
+					Goto retryW2
+				} Elseif(opt=3) {
+					Do $zu(9,"",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2986499638"),"Database encryption key activation failed."),(0  /* Informational message */>0),0  /* Informational message */)
+					If $D(rc) Do $zu(9,"",$System.Status.GetErrorText(rc),(0  /* Informational message */>0),0  /* Informational message */)
+					s ^%SYS("STARTUPERROR")="Startup aborted by operator." try { d ##Class(Config.CPF).Reset() } catch {} s %Msg001="Error: "_"Startup aborted by operator."_" - Shutting down the system" w:('($zversion(1)=2)) !,%Msg001 d $zu(9,"",%Msg001,1 /* broadcast and log message*/,3  /* Fatal */),BACK^%ETN i '($zversion(1)=1) {d STARTUPSHUTDOWN^SHUTDOWN} d $zu(4,$j,7)
+				}
+			}
+		} Else {
+retryU
+			Do ActivateInt^EncryptionKey(1)
+			If ($System.Security.System.GetDBEncKeyID()="") {
+				Write !!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2986499638"),"Database encryption key activation failed.")
+				If recov||rollback {
+					Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2601821090"),"WARNING:")
+					If recov Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1113314354"),"Journal recovery is pending.")
+					If rollback Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2132209543"),"Transaction rollback is pending.")
+					If jrnenc { Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3862168382"),"Journal file is encrypted.  No processing will be possible if key is not activated.") }
+					Else {Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4269782116"),"Encrypted databases will not be processed if key is not activated.") }
+				}
+prompt
+				Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"941702379"),"1) Abort startup")
+				Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2405408002"),"2) Retry key activation")
+				Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2838108867"),"3) Ignore, continue startup without the key")
+				Write !!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1221568091"),"Enter option: ")
+				Read opt
+				If (opt <1)||(opt >3) Goto prompt
+				If (opt=2) {
+					Goto retryU
+				} Elseif (opt=1) {
+					Do $zu(9,"",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2986499638"),"Database encryption key activation failed."),(1  /* Warning */>0),1  /* Warning */)
+					If $D(rc) Do $zu(9,"",$System.Status.GetErrorText(rc),(1  /* Warning */>0),1  /* Warning */)
+					s ^%SYS("STARTUPERROR")="Startup aborted by operator." try { d ##Class(Config.CPF).Reset() } catch {} s %Msg001="Error: "_"Startup aborted by operator."_" - Shutting down the system" w:('($zversion(1)=2)) !,%Msg001 d $zu(9,"",%Msg001,1 /* broadcast and log message*/,3  /* Fatal */),BACK^%ETN i '($zversion(1)=1) {d STARTUPSHUTDOWN^SHUTDOWN} d $zu(4,$j,7)
+				}
+			}
+		}
+	} ElseIf mode=2 {
+		Set rc=$$ActivateDB^EncryptionKey(sys.DBEncStartKeyFile,sys.DBEncStartUsername,sys.DBEncStartPassphrase)
+	}
+ERROR Set $zt=""
+	If ($System.Security.System.GetDBEncKeyID()="") {
+		Do $zu(9,"",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2986499638"),"Database encryption key activation failed."),(1  /* Warning */>0),1  /* Warning */)
+		If $D(rc) Do $zu(9,"",$System.Status.GetErrorText(rc),(1  /* Warning */>0),1  /* Warning */)
+		If recov||rollback {
+			If recov Do $zu(9,"",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1113314354"),"Journal recovery is pending."),(1  /* Warning */>0),1  /* Warning */)
+			If rollback Do $zu(9,"",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2132209543"),"Transaction rollback is pending."),(1  /* Warning */>0),1  /* Warning */)
+			If jrnenc { Do $zu(9,"",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1872411243"),"Journal file is encrypted.  No processing will be possible."),(1  /* Warning */>0),1  /* Warning */) }
+			Else { Do $zu(9,"",$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1347147835"),"Encrypted databases will not be processed."),(1  /* Warning */>0),1  /* Warning */) }
+			If mode=2 Quit 0
+		}
+		If required Quit 0
+	}
+	Quit 1	
+enofunc
+	s $zt="enodll"
+	d $zf(-4,2,dll)
+	q "0|Could not find function"
+enodll
+	q "0|Could not find library"
+}
+AskNewPW(Username) {
+pw	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1941114787"),"Password: ")
+	Use:$ZU(96,14)=1 0:(:"+S") Read Password Use:$ZU(96,14)=1 0:(:"-S")
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3965113147"),"Confirm password: ")
+	Use:$ZU(96,14)=1 0:(:"+S") Read Conf Use:$ZU(96,14)=1 0:(:"-S")
+	if $ZISWIDE(Password) {
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4067274233"),"Wide Unicode characters are not supported in administrator usernames or passwords.")
+		Goto pw
+	}
+	If Password'=Conf {
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1294088103"),"Passwords don't match.")
+		Goto pw
+	}
+	s Status=$$ValidatePassword^%SYS.SECURITY(Username,Password)
+	i '(''Status) w !,$SYSTEM.Status.GetErrorText(Status) g pw
+	Quit Password
+}
+AskUsername(Username) {
+un	Use:$ZU(96,14)=1 0:(:"-S") Set Username=$g(Username)
+	If $ZISWIDE(Username) Set Username=""
+	Set Username=$ZCVT(Username,"U")
+	Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2573098436"),"Username: ")
+	If Username]"" Write "[",Username,"] "
+	Read x
+	If x="" Quit Username
+	if $ZISWIDE(x) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4067274233"),"Wide Unicode characters are not supported in administrator usernames or passwords.") Goto un
+	Quit $ZCVT(x,"U")
+}
+MountedEncDBs(DBEncKeyID) private {
+ 	i '$SYSTEM.Security.Check("%Admin_Operate","USE") q ""
+	Set rs=##class(%Library.ResultSet).%New()
+	Set rs.ClassName="SYS.Database"
+	Set rs.QueryName="Detail"
+	Do rs.Execute("*",0)
+	Set DirList=""
+	While (rs.Next()) {
+		Set Directory=rs.Data("Directory"),Mounted=rs.Data("Mounted"),EncryptedDB=rs.Data("EncryptedDB")
+		Set EncryptionKeyID=rs.Data("EncryptionKeyID")
+		If EncryptedDB&&Mounted&&(EncryptionKeyID=DBEncKeyID) Set DirList=DirList_Directory_","
+	}
+	Do rs.Close() Kill rs
+	Quit DirList
+}
+RequiredEncDBs() private {
+ 	i '$SYSTEM.Security.Check("%Admin_Operate","USE") q ""
+ 	Set cachetempdir=$s(($zversion(1)=1):$ZU(12,"[.CACHETEMP]"),($zversion(1)=3):$ZU(12,"./cachetemp"),1:$ZU(12,".\cachetemp"))
+ 	Set cachedir=$s(($zversion(1)=1):$ZU(12,"[.CACHE]"),($zversion(1)=3):$ZU(12,"./cache"),1:$ZU(12,".\cache"))
+	Set rs=##class(%Library.ResultSet).%New("Config.Databases:List")
+	Do rs.Execute(,,1)
+	Set DirList=""
+	While (rs.Next()) {
+		Set Name=rs.Data("Name")
+		Set sc=##class(Config.Databases).Get(Name,.Prop)
+		s Directory=Prop("Directory")
+		If Prop("MountRequired") {
+			If ($zversion(1)=1),$p($zu(12,Directory),"]",2)]"" Set Directory="[."_Directory_"]"
+			Set Directory=$zu(12,Directory)
+			If ($zu(12,Directory,2)]""),(Directory'=cachetempdir),(Directory'=cachedir) {
+				Set db=##class(SYS.Database).%OpenId(Directory)
+				If db.EncryptedDB Set DirList=DirList_Directory_","
+			}
+		}
+	}
+	Do rs.Close() Kill rs
+	Quit DirList
+}
+DeleteKey(DBEncKeyID) public {
+	i '$SYSTEM.Security.Check("%Admin_Secure","USE") q $$Error^%apiOBJ(921,"%Admin_Secure"_":"_"USE")
+	If '$D(DBEncKeyID) {
+		Set DBEncKeyID=$System.Security.System.GetDBEncKeyID()
+		If DBEncKeyID="" Quit $$Error^%apiOBJ(1201)
+	} Else {
+		Set Keyslot=$System.Security.System.GetDBEncKeyslot(DBEncKeyID)
+		If Keyslot=-1 Quit $$Error^%apiOBJ(1201)
+	}
+	Set DBEncKeyIDList=$System.Security.System.GetDBEncKeyIDList()
+	If ($L(DBEncKeyIDList,",")>1)&&(DBEncKeyID=$System.Security.System.GetDBEncKeyID()) Quit $$Error^%apiOBJ(1214,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"560347982"),"in use as default database encryption key."))
+	Set DirList=$$MountedEncDBs(DBEncKeyID)
+	If DirList]"" Quit $$Error^%apiOBJ(1208,$e(DirList,1,$l(DirList)-1))
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	If sys.DBEncJournal&&((DBEncKeyID=$System.Security.System.GetJrnEncKeyID(1))||(DBEncKeyID=$System.Security.System.GetJrnEncKeyID(2))) Quit $$Error^%apiOBJ(1214,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1899589980"),"in use for journal file encryption"))
+	Do $System.Security.System.DeleteDBEncKey(DBEncKeyID)
+	Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^CacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")))_DBEncKeyID
+	Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DBEncKeyDeactivated"))
+	Quit 1
+}
+SetDefaultKey(DBEncKeyID) public {
+	i '$SYSTEM.Security.Check("%Admin_Secure","USE") q $$Error^%apiOBJ(921,"%Admin_Secure"_":"_"USE")
+	Set Keyslot=$System.Security.System.GetDBEncKeyslot(DBEncKeyID)
+	If Keyslot=-1 Quit $$Error^%apiOBJ(1201)
+	Do $System.Security.System.SetDBEncKeyDefault(DBEncKeyID)
+	Set Eventdata=$s($e("%SECURITY.DBEnc")="%":$g(^%qCacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^%qCacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")),1:$g(^CacheMsg("%SECURITY.DBEnc",$s($mvv(58)="":"en",1:$mvv(58)),"KeyID"),$g(^CacheMsg("%SECURITY.DBEnc","en","KeyID"),"No message found. Domain: "_"%SECURITY.DBEnc"_" Id: "_"KeyID")))_DBEncKeyID
+	Do ##class(%SYS.Audit).WriteToAuditFile("%System","%Security","DBEncChange",Eventdata,$$FormatMsg^%occMessages("%SECURITY.Audit","DefaultEncKeySet"))
+	Set sys=##class(Security.System).%OpenId("SYSTEM")
+	Set sys.DBEncDefaultKeyID=DBEncKeyID
+	Set Status=sys.%Save()
+	If '(''Status) Quit Status
+	Quit 1
+}
+AskJrnEncOnNewDB(Obj) public {
+	i 'Obj.EncryptedDB q 0  ;the database is NOT encrypted
+	i Obj.GlobalJournalState'=3 q 0 ;the database is NOT journaled
+	s sys=##class(Security.System).%OpenId("SYSTEM")
+	i 'sys.DBEncStartMode q 0 ;the key will NOT be activated at startup
+	i sys.DBEncJournal q 1
+	s Value=0
+ 	s Status=##Class(%Library.Prompt).GetYesNo("Encrypt journal files?",.Value,,8)
+	i (Status=2)||(+Status=0) q 0
+	q Value
+}

@@ -1,0 +1,1877 @@
+ROUTINE JRNROLL [Type=INT]
+JRNROLL ;rollback incomplete transactions ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/jrnroll.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+	/* There are five entry points in this module:
+	       INT - invoked by d ^JRNROLL for interactive rollback
+	       THISONE - called from STU during system startup and
+	                 by INT for interactive rollback
+	       CLUSTER - called from STU during cluster startup recovery
+	                 and from RCVRYDMN during cluster failover
+	       MIRROR - called from ECPRecovery as part of becoming
+	                the primary mirror member
+	       MIRRORCatchup - called from SYS.Mirror.CatchupDB() as
+	       			 part of catching up a mirrored databases so it
+	       			 can be activated.
+	*/
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+	; 
+    ; Interactactive entry point to rollback partial transactions 
+    ; for a given journal file stream.
+    ; checkerr=1 -> use error trapping
+    ; reporterr=1 -> report errors to terminal 
+    do INT(1,1)  ;checkerr=1, use error trapping, 
+    quit
+INT(checkerr,reporterr) PUBLIC {
+	W !,"This utility is used to rollback any partially completed"
+	W !,"transactions for records in the journal.",!
+ 	I $$YN("Do you want to unwind partial transactions","Y")="N" {
+		W !,"Not unwound.",!
+ 	} else {
+	 	k errlist
+	 	do THISONE("",0,checkerr,reporterr,.errlist)  ;STU="",QUIETLY=0
+	 	if +$G(errlist) {
+		 	w !,errlist," errors reported during rollback"
+	 	}
+ 	}
+ 	q
+}
+THISONE(STU,QUIETLY,checkerr,reporterr,errlist) PUBLIC {
+	s STU=$G(STU)
+	s QUIETLY=+$G(QUIETLY,1)  ;quietly defaults to yes when omitted
+	s checkerr=+$G(checkerr,1)
+	s reporterr=+$G(reporterr,0)
+	;
+	s jrnstop=0 ; 1 => disabled journaling
+	i checkerr {
+		s $zt="err"
+	}
+	s %curfile=$$curfile ; current journal file, or "" if journaling isn't enabled
+	I %curfile'="" {
+		W !,"You cannot rollback all open transactions from the"
+		w !,"current journal file unless you disable journaling.",!
+		i ($$YN("Do you want to disable journaling","Y")="N") {
+			w " [Not rolled back]",!
+			quit  ;we're done
+		}
+		S jrnstop=1 ;we'll start journaling when we're done
+		D INT^JRNSTOP()
+		S %curfile=$ZU(78,3)
+		s shortnam=$case($ZBITGET($ZVERSION(0),46),0:$case($f(%curfile,";"),0:$e(%curfile,*-8-$l($p(%curfile,".",$l(%curfile,"."))),*),:$e(%curfile,*-8-$l($p(%curfile,".",$l(%curfile,"."))),$f(%curfile,";")-2)),:%curfile)
+		S expqty=0
+		s maxsize=$P($ZU(78,22,%curfile,3),",",2)
+		i ($zversion(1)=1) {
+			S altdir=$G(^%SYS("JOURNAL","ALTDIR"),$ZU(12,"[.journal]"))
+			S curdir=$G(^%SYS("JOURNAL","CURDIR"),$ZU(12,"[.journal]"))
+		} else {
+			S altdir=$G(^%SYS("JOURNAL","ALTDIR"),$ZU(12,"journal"))
+			S curdir=$G(^%SYS("JOURNAL","CURDIR"),$ZU(12,"journal"))
+		}
+		S prefix=$ZU(78,93)  ;journal prefix from memory
+	}
+    ; Locate journal end for our computer
+    ; else open our directory and rollback its transactions
+    S deffile=%curfile
+    ;  we determine the latest journal file this way:
+    ;  $zu(78,3) (as in %curfile), if $zu(78,3)="" then
+    ;  (journaling must be off) $$$JRNINDEX (as stored in WIJ file)
+    I (deffile="") {
+	    S a=$zu(78,21)
+	    s deffile=$p(a,",",2)
+    }
+GN ;Come back here if we need to get a new starting filename
+ 	i STU="S",QUIETLY {
+	 	s JN=deffile
+ 	} else {
+		i (STU'="S") {
+			w !,"Journal file name: ",$ZU(12,deffile)," =>" 
+			r JN:300 
+		} else {  /* STU = "S" */
+			w !,"Searching for open transactions to rollback"
+			i ($$YN("Search "_$zu(12,deffile)_" for open transactions","Y",60)'="Y") {
+				s JN=$$altjfile^JRNSTART(1)
+			} else {
+				s JN=""
+				;1: journal file, 0: nonexistent, -1: nonjournal file
+				if ($ZU(78,22,deffile)<=0) {
+					W !,"File "_$ZU(12,deffile)_" does not exist or is not a journal file.",!
+					i ($$YN("Would you like to specify a different file to search","Y",60)="Y") {
+						s JN=$$altjfile^JRNSTART(1)
+					}
+				}
+			}
+		}
+ 	}
+ 	I $E(JN)="?" {
+	 	W ! 
+		W !?4,"Specify the name of the directory and file where the"
+		W !?4,"existing journal is located.  <return> will select"
+		W !?4,"the current default file ("_deffile_")."
+		W !?4,"Enter '^' or 'STOP' to quit this utility."
+		W ! 
+		G GN
+ 	}
+ 	I ($E(JN)="^")!($$UC(JN)="STOP") {
+	 	W !," [Not rolled back]",! 
+	 	Q
+ 	}
+ 	S:JN="" JN=deffile 
+ 	S %jrnfile=$ZU(12,JN)
+ 	; jrfilecnt: the journal file index of the "current" journal file.
+	; xfcnt: the counter of the file where the earliest open trans is
+	; jrcnt: how many journal files to search back through to find the
+	;        earliest open transaction
+	;        jrcnt <0 means go all the way back to JRNSTARTed file
+	; jroff: the offset of the earliest open transaction
+	;        0 => earliest open transaction not known
+	; these two are mainly used in startup.
+ 	I JN'="" {
+		I STU'="S" {
+			S jrcnt=-1,jroff=0,jrfilecnt=0 
+		} else {
+			S wijinfo=$zu(78,21) ;wijinfo="jrnoff,jfnam,jfcnt,minxfcnt,minxoff"
+			S jroff=$P(wijinfo,",",5)
+			S xfcnt=$P(wijinfo,",",4)
+			i $D(^NET("TPLOG")) {
+				s remsysid=""
+				f  {
+					s remsysid=$O(^NET("TPLOG",remsysid)) 
+					q:remsysid=""
+					s dmn=""
+					f  {
+						s dmn=$O(^NET("TPLOG",remsysid,dmn),1,transid) 
+						q:dmn=""
+						;transid=^NET("TPLOG",remsysid,dmn)
+						S transfc=$P(transid,"^",2)
+						if (transfc<xfcnt) {
+							s xfcnt=transfc
+							S jroff=+transid
+						} elseif (transfc=xfcnt) && (+transid<jroff) {
+							s jroff=+transid 
+						}
+					}
+				}
+			}
+			I JN=$P(wijinfo,",",2) {
+				S jrfilecnt=$P(wijinfo,",",3)
+			} else {
+				S jrfilecnt=$ZU(78,26)  ;JN must be "current"
+			}
+			s jrcnt=jrfilecnt-xfcnt
+		}
+		do ROLL(STU,QUIETLY,JN,jrfilecnt,jrcnt,jroff,,,checkerr,reporterr,.errlist,"")
+		if STU="S" {
+			K ^NET("TPLOG")  ; HYY120
+		} 
+	}
+    ; restart journaling if we stopped it
+ 	;set shortnam to its next one, then start journaling on it
+	I jrnstop {
+ 		s shortnam=$$nextname^JRNSTART(shortnam)
+		k err
+ 		D INT^JRNSTART(curdir,altdir,shortnam,prefix,maxsize,expqty,$P($G(^%SYS("JOURNAL","CURRENT")),"^")\2#2,.err,0)
+ 		I $G(err)'="" {
+	 		D $zu(9,"","ERROR: "_err,(0>0),0)
+ 		}
+	}
+	quit
+err ;
+	s $ZT=""
+    d miscerrlog(checkerr,reporterr,.errlist)
+	i $D(mount) {
+		s n=""
+		for  {
+			s n=$O(mount(n))
+			quit:n=""
+			if $ZU(3,n)  ;dismount database
+		}
+		k mount
+	}
+	q
+ }
+   ;
+   ; MIRROR(latest jrnfilename, lastest jrnfile seq #, min jrnfile seq #,
+   ;					 min jrnfile index,errlist)
+   ; Invoked from ECPRecovery when a backup is taking over for the primary
+   ; to rollback any open "local" transactions on the primary and build the
+   ; list of ECP transactions to be handled by ECP recovery. The journal file
+   ; seq #'s are "mirror journal file seq #'s".
+   ;
+   ; errlist = passed by reference gets loaded with any errors detected.
+   ;      $G(errlist) is the count of all errors
+   ;      some errors are added to errlist(n), some are only added when
+   ;      checkerr=2
+   ;
+MIRROR(mirname,lastjrnfilecnt,minxjrnfilecnt,minxindex,errlist) PUBLIC {
+    if 'minxjrnfilecnt {
+	    ; zero is an invalid value so bump it up to one
+	    s minxjrnfilecnt=1
+	    s minxindex=65536*2
+	    if minxjrnfilecnt>lastjrnfilecnt {
+		    quit 1  ;nothing to do
+	    }
+    }
+    s QUIETLY=1
+    s CHATTY=0  ;This is for ^ROLLBACK to supress input
+	s $zt="mirrorerr"
+    s checkerr=2  ;check for errors. ROLLBACK reports errors in tranerror & errlist
+    s reporterr=0
+    s STU="M"  ; Indicate that this is mirror takeover
+   	; ROLL takes as input:
+   	;  When STU="M", mirfilelist(1..n) are the journal files we want
+   	;      ROLL to use for transaction rollback in newest->oldest order
+   	;      as otherwise we have to flip the list in ROLL. 
+   	;  jroff is where to start in the mirfilelist(1) file.
+   	s mirfilelist=0
+   	for i=lastjrnfilecnt:-1:minxjrnfilecnt {
+  	   s JN=$SYSTEM.Mirror.GetJournalFileByMjrncnt(i,mirname)
+	   if '+JN {
+		   do othererrlog(.errlist,"Failed to locate mirror journal file #"_i_" as part of mirror recovery")
+		   s JN=""
+		   quit 
+	   }
+	   s JN=$P(JN,",",2)
+	   s mirfilelist=mirfilelist+1
+	   s mirfilelist(mirfilelist)=JN
+    }
+    if JN="" quit 0  ;failed
+ 	s jroff=minxindex
+	s errcnt=$G(errlist,0)
+	do ROLL(STU,QUIETLY,JN,,,jroff,,.mirfilelist,checkerr,reporterr,.errlist,"") 
+	s errcnt=$G(errlist,0)-errcnt
+ 	if errcnt q 0  ;new errors
+    q 1  ; succeeded
+mirrorerr ;
+   s $zt=""
+   d miscerrlog(checkerr,reporterr,.errlist)
+   quit 0  ;failed
+}
+   ;
+   ; MIRRORCatchup(.dblist,latest jrnfilename, lastest jrnfile seq #, min jrnfile seq #,
+   ;					 min jrnfile index,errlist)
+   ; Invoked from CatchupDBTRollback^MIRRORMGR when we're the active primary and
+   ; we've finished "catching up" some databases which were out of sync with
+   ; the active mirror (presumably they were restored from backups) and we need
+   ; to rollback all open transactions (ECP and non-ECP) so we can make the
+   ; databases active again. The passed journal file seq #'s are "mirror journal file seq #'s".
+   ; We're careful not to roll back any open transactions which are still active
+   ; on the local system. If a database is dismounted for instance with SWITCH 10
+   ; set, we might be running catchup when it is re-mounted but there are local
+   ; processes with transactions still in progress that shouldn't be rolled back.
+   ;
+   ; errlist = passed by reference gets loaded with any errors detected.
+   ;      $G(errlist) is the count of all errors
+   ;      some errors are added to errlist(n), some are only added when
+   ;      checkerr=2
+MIRRORCatchup(mirname,dblist,lastjrnfilecnt,minxjrnfilecnt,minxindex,errlist) PUBLIC {
+    s QUIETLY=1
+    s CHATTY=0  ;This is for ROLLBACK to supress input
+	s $zt="mirrorcatchuperr"
+    s checkerr=2  ;check for errors. ROLLBACK reports errors in tranerror & errlist
+    s reporterr=0
+    s STU="MC"  ; Indicate that this is mirror takeover
+   	; ROLL takes as input:
+   	;  When STU="MC", mirfilelist(1..n) are the journal files we want
+   	;      ROLL to use for transaction rollback in oldest->newest order
+   	;      and dblist() contains the list of databases we want recovered.
+   	;      dblist() is passed as the redirection list to START^ROLLBACK().
+   	;  jroff is where to start in the mirfilelist(1) file.
+   	s mirfilelist=0
+   	for i=lastjrnfilecnt:-1:minxjrnfilecnt {
+  	   s JN=$SYSTEM.Mirror.GetJournalFileByMjrncnt(i,mirname)
+	   if 'JN {
+		   do othererrlog(.errlist,"Failed to locate mirror journal file #"_i_" as part of mirror recovery")
+		   s JN=""
+		   quit
+	   }
+	   s JN=$P(JN,",",2)
+	   s mirfilelist=mirfilelist+1
+	   s mirfilelist(mirfilelist)=JN
+    }
+    if JN="" quit 0  ;failed
+ 	s jroff=minxindex
+	; dblist() was passed by reference and its the redirection list
+	; which dorollback passes to start^ROLLBACK()
+	s errcnt=$G(errlist,0)
+	do ROLL(STU,QUIETLY,JN,,,jroff,,.mirfilelist,checkerr,reporterr,.errlist,"") 
+	s errcnt=$G(errlist,0)-errcnt
+ 	if errcnt q 0  ;new errors
+    q 1  ; succeeded
+mirrorcatchuperr ;
+   s $zt=""
+   d miscerrlog(checkerr,reporterr,.errlist)  ;miscerrlog will report the error with $$$LOGMSG()
+   quit 0  ;failed
+}
+   ;
+   ; CLUSTER(crashcsn,checkerr,reporterr)
+   ; External entry point to rollback all open transactions for one or
+   ;   all clustered databases.  Called from STU for cluster recovery at
+   ;   startup to recover open transactions across all cluster members and
+   ;   by RCVRYDMN during cluster recovery to recovery open transactions from
+   ;   a single failed cluster member.
+   ;
+   ; crashcsn = cluster system number of crashed system if we
+   ;      only want to rollback all transactions for that one system
+   ;      else = 0
+   ; checkerr = 1 if want to use error trapping (always 1 except
+   ;          when debugging)
+   ; reporterr = 1 if want errors reported on terminal (probably want 0)
+   ; errlist = passed by reference gets loaded with any errors detected.
+   ;      $G(errlist) is the count of all errors
+   ;      some errors are added to errlist(n), some are only added when
+   ;      checkerr=2
+CLUSTER(crashcsn,checkerr,reporterr,errlist) PUBLIC {
+ 	s checkerr=+$G(checkerr,1)
+ 	s reporterr=+$G(reporterr,0)
+ 	;
+	s QUIETLY=1
+	i checkerr s $zt="clustererr"
+ 	s clujrnstat=0
+ 	s STU=""
+	;clujrnstat tracks what we need to do when we're done. For startup
+	;when crashcsn is 0 we enable journaling if its stopped, enable journaling
+	;of all globals and make sure journaling is enabled for this process.
+	;For cluster failover we disable replication and disable journaling for this
+	;process. The flags are:
+	;   1 = we started journaling
+	;   2 = we enabled journaling of all globals
+	;   4 = we enabled journaling for this process
+ 	if '$zu(78,22) {
+    	;enable journaling all globals, otherwise quit. Before starting journaling
+		;set up ^%SYS("JOURNAL","WIJFILE") for this system's last journal so that
+		;we continue the journal file count sequence numbers.
+		S wijinfo=$zu(78,21)
+		s ^%SYS("JOURNAL","WIJFILE")=$P(wijinfo,",",2)_","_$P(wijinfo,",",3)
+		s clujrnstat='($zu(78,22)) 
+		i clujrnstat {
+			s jrnfile=$P(wijinfo,",",2)
+			s jrnfilecnt=$P(wijinfo,",",3)
+			f  {
+				s nextfile=$$NEXTJRN0^JRNUTIL(jrnfile) 
+				q:nextfile=""  
+				s jrnfile=nextfile 
+				i $i(jrnfilecnt)
+			}
+			s ^%SYS("JOURNAL","WIJFILE")=jrnfile_","_jrnfilecnt
+			d ^JRNSTART
+			i '($zu(78,22)) {
+				d $zu(9,"","Unable to roll back open transactions with journaling off",(1>0),1) 
+				q  ;abort
+			}
+		}
+		i '$$CURRENT^%SYS.NOJRN() {
+			s clujrnstat=clujrnstat+4 
+			d ENABLE^%SYS.NOJRN
+		}
+		s STU="C" ; prevents rollback^JRNROLL from playing with journaling
+	}
+ 	if (STU="C") {
+		Set Directory=$p($zu(59),",",13)
+		Set sc=##class(SYS.Database).MountDatabase(Directory,0,0) ;; dir,<readonly flag>,<cluster flag>
+		if (('sc)) {
+			Do $zu(9,"","Failed to mount Cluster common DB!! : "_$System.Status.GetErrorText(sc),(0>0),0)
+			Set nocludb=1
+		}
+	}
+	; Establish open of each cluster journal file
+	; CSNs are 0 based so if crashcsn is non-zero, set thiscsn to
+	; crashcsn-1. crashcsn=0 is a flag to tell us to rollback open
+	; transactions all the cluster members.
+	i crashcsn {
+		s thiscsn=crashcsn-1 
+		d nextclu
+	} else {
+		f thiscsn=0:1:14-1 {
+			d nextclu
+		}
+	}
+clucleanup ; clustererr comes here to restore journaling state
+	s $zt="err"
+	i clujrnstat\4 {
+		d DISABLE^%SYS.NOJRN 
+		s clujrnstat=clujrnstat#4
+	}
+	i clujrnstat {
+		d INT^JRNSTOP()
+	}
+	if (STU="C") {
+		d:('$d(nocludb)) $ZU(3,Directory)
+	}
+	q
+clustererr ;
+	d miscerrlog(checkerr,reporterr,.errlist)
+	s $ZT="err"
+	i $D(mount) {
+		s n=""
+		f  {
+			s n=$O(mount(n)) 
+			q:n=""  
+			do $ZU(3,n)
+		}
+		k mount
+	}
+	g clucleanup
+   ; If there is a journal for this cluster, open it and
+   ; restore its open transactions
+nextclu ;subroutine of CLUSTER, thiscsn is the csn to process
+	i checkerr s $zt="err"
+   	; see if there is a csn with this number
+	; minoff = offset of the earliest open transaction. 0 = not known
+	; minfile = journal file # of file corresponding to minoff
+	; jrcnt = how many journal files to search back through to find
+	;         open transactions. -1 = search back to the prior JRNSTART
+	;
+	; $$$JRNLOOKUP(csn) returns: 
+	;     imjrnoff,jrnfilespec,jrnfcnt,transfcnt,transindex,mgr dirspec
+	s wijinfo=$zu(78,20,thiscsn)
+	s %jrnfile=$p(wijinfo,",",2) q:%jrnfile=""
+	s minoff=+$P(wijinfo,",",5)  ; jrnoffset of earliest open transaction
+	s minfile=+$P(wijinfo,",",4) ; corresponding jrnfilecnt value
+	; NB: $P(a,",",$$$JLMGRDIR) is the manager's directory spec for this 
+	;     system as the journal file name must not contain any commas
+	s mgrdir=$P(wijinfo,",",9)  ; dir spec of the manager's database
+	s mgrns="^^"_mgrdir
+	;
+	; Look in this computer's manager directory for a transaction
+	; log from remote TP servers. If we find one then scan it to find
+	; the earliest journaling index we must scan back to in order to
+	; rollback open transactions on this system
+	;
+	k firstindex
+	try {
+		; quick mount of directory if it isn't mounted (usually isn't)
+		s n=$ZU(49,mgrdir)
+		i (n<0)!(n'<$zu(40,0,41)) {
+			s mount(mgrdir)=""
+			s n=$ZU(17,mgrdir)
+		}
+		i $D(^[mgrns]NET("TPLOG")) {
+			s remsysid=""
+			f  {
+				s remsysid=$O(^[mgrns]NET("TPLOG",remsysid)) 
+				q:remsysid=""
+			 	s dmn=""
+				f  {
+					s dmn=$O(^[mgrns]NET("TPLOG",remsysid,dmn),1,transid) 
+					q:dmn=""
+					;transid=^[mgrns]NET("TPLOG",remsysid,dmn)
+					s transfile=+$P(transid,"^",2)
+					s transid=+transid
+					i transfile<minfile {
+						s minfile=transfile,minoff=transid
+					} elseif (transfile=minfile),(transid<minoff) {
+						s minoff=transid
+					}
+				}
+			}
+		}
+	} catch {
+		d miscerrlog(checkerr,reporterr,.errlist)
+		; ignore the error and attempt to restore transactions anyway
+	}
+	; 3rd piece of wijinfo is the value of jrnfilecnt that corresponds
+	; to the journal file in the 2nd piece. The difference between 
+	; this value and the value of minfile is the # of journal files we
+	; need to scan as part of transaction rollback
+	s jrfilecnt=$p(wijinfo,",",3)
+	s jrcnt=jrfilecnt-minfile
+ 	; ROLL takes as input:
+	;  jrfilecnt = the journal file index of the "current" journal file. (HYY655)
+	;         JN = "current" journal file name
+	;      jrcnt = # of journal files we need to search back through to
+	;              find the earliest open transaction or negative
+	;              means go back to the last JRNSTART
+	;      jroff = offset in earliest journal file we need to start at
+	;      mgrdir = dirspec of manager's dataset
+	;	   crashcsn = csn of crashed system used when STU is not "C"
+	s JN=%jrnfile
+	s jroff=minoff
+	s errcnt=$G(errlist,0)
+	do ROLL(STU,QUIETLY,JN,jrfilecnt,jrcnt,jroff,mgrdir,,checkerr,reporterr,.errlist,crashcsn)
+	if errcnt=$G(errlist,0) {
+		; Only clean up the TPLOG and ECP registry if there were
+		; no errors restoring this system. errlist is a running count
+		; of all errors.
+		k ^[mgrns]NET("TPLOG")
+		/* Leave a mark in the mgr directory indicating transaction rollback
+		   occured so when that system starts it doesn't complain if there
+		   isn't a journal directory listed in the WIJ */
+		s ^[mgrns]SYS("SHUTDOWN","TPCLEAN")=$ztimestamp_"^"_"CLURECOV"
+	}
+	; dismount amy manager directories we mounted
+	i $D(mount) {
+		s n="" 
+		f  {
+			s n=$O(mount(n)) 
+			q:n=""  
+			i $ZU(3,n)
+		}
+		k mount
+	}
+	q
+err ;
+	d miscerrlog(checkerr,reporterr,.errlist)
+	s $ZT=""
+	i $D(mount) {
+		s n=""
+		f  {
+			s n=$O(mount(n)) 
+			q:n=""  
+			i $ZU(3,n)
+		}
+		k mount
+	}
+	q
+}  ; end of CLUSTER()
+ ; ROLL() inputs:
+ ;   JN = "current" journal file name
+ ;   jrfilecnt = Journal file index of that journal file name
+ ;   jrcnt = # of journal files we need to process. When negative
+ ;           we need to go back to the "JRNSTART" journal file.
+ ;   jroff = offset in earliest journal file we need to start at
+ ;           if jroff is 0 we have to start at the beginning of that
+ ;           file.
+ ;   mgrdir = only specified by CLUSTER^JRNROLL, this is the manager's
+ ;			 directory spec of the system we're rolling back. If undefined 
+ ;           it defaults to  our system. If it is defined then it must
+ ;           already be mounted.
+ ;   checkerr = 2 if we want to track errors in errlist
+ ;   repoterr = 1 if we want to display errors on the terminal
+ ;   errlist is passed by reference. This accumulates the count of the
+ ;          # of errors and, when checkerr=2, contains the detail for
+ ;          the individual errors
+ ;	 mirfilelist is passed by reference when STU="M" or "MC" and is
+ ;          the list of journal files we need processed. All other
+ ;          STU values build the file list below from the set of local
+ ;          journal files
+ ;	 crashcsn is passed from CLUSTER^JRNROLL when STU is not "C". STU is
+ ;          "C" for cluster startup recovery. STU is "" and crashcsn is
+ ;          not "" when CLUSTER^JRNROLL is called from RCVRYDMN
+ ; output:
+ ;	 errlist is passed by reference and contains a list of errors
+ ;       encountered during rollback. The node value is the count
+ ;       of the # of errors and the errors are listed in the array.
+ ; callers:
+ ;	   ROLL() is only called by entry points inside JRNROLL. It is
+ ;       declared public so that errors are reported as offsets from
+ ;       ROLL rather than the nearest public tag.
+ ;
+ ;the main part of JRNROLL is done in this order:
+ ;  1. find all journal files after "JN"
+ ;  2. trace journal files from JN back to the JRNSTARTed one
+ ;  3. gather open transactions by walking down file/record list
+ ;  4. walking up file list, call start^%ROLLBACK for each file
+ ;we assume no open transactions cross JRNSTART
+ROLL(STU,QUIETLY,JN,jrfilecnt,jrcnt,jroff,mgrdir,mirfilelist,checkerr,reporterr,errlist,crashcsn) [tranerror] PUBLIC {
+	n tranerror ; Public variable set by start^ROLLBACK
+	;"ROLLBACK" global is used only for startup rollback to avoid conflict with 
+	;other failover rollbacks (e.g., during cluster failover, etc.)
+	Set saveecptrans=1
+	s runguid=""
+	s logprogress=0
+	s jrnstat=0
+	s abortquit=0
+	s $ze=""
+	s $zt="exitroll"
+	Set trackcompletedrequests=0
+	If (($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0)) & (STU'="M") & (STU'="MC") & ($E(STU)'="R")) {
+		Set clustat=$zu(59)
+		Set cludbdir=$zu(12,$p(clustat,",",13))
+		Set sc=$zu(49,cludbdir) 
+		Set:(sc<=-2) cludbdir="" ; If DB doesnt exist
+		if (STU="S") {
+			s ECPStateNS="" ; %SYS/mgr DB
+		} elseif (STU="C") {
+			s ECPStateNS="^^"_cludbdir ; Clu Comm DB
+			s trackcompletedrequests=1  ;JO2141
+		} elseif ($g(crashcsn)'="") {
+			s ECPStateNS="^^"_cludbdir  ; Clu Comm DB
+			s trackcompletedrequests=1  ;JO2141
+		} else {
+			d $zu(9,"","ECP Open trasactions will be rolled back .. system is not in recovery mode",(0>0),0)
+			s saveecptrans= 0
+		}
+	} elseif STU="M" {
+		merge filelist=mirfilelist
+		s jrfilecnt=$P($ZU(78,22,filelist(1),12),",",2)
+		; set jrcnt to 0 because filelist contains the exact list of
+		; files we have to search. jrcnt is the # of prior files which 
+		; need to be located & added to filelist before rollback.
+		s jrcnt=0
+		s ECPStateNS="" ; %SYS/mgr DB
+		s trackcompletedrequests=1  ;JO2141
+	} elseif STU="MC" {
+		merge filelist=mirfilelist
+		s jrfilecnt=$P($ZU(78,22,filelist(1),12),",",2)
+		; set jrcnt to 0 because filelist contains the exact list of
+		; files we have to search. jrcnt is the # of prior files which 
+		; need to be located & added to filelist before rollback.
+		s jrcnt=0
+		s ECPStateNS="" ; %SYS/mgr DB
+		s saveecptrans= 0
+	} elseif $E(STU)="R" {
+		s tindex=$P(STU,"^",2)
+		if '$D(^SYS("ROLLBACK","PENDING",tindex)) {
+			do othererrlog(.errlist,"No pending transaction listed for index #"_tindex)
+			quit
+		}
+	 	l +^SYS("ROLLBACK","PENDING",tindex):5
+	 	if '$T {
+		 	s owner=^$LOCK($name(^SYS("ROLLBACK","PENDING",tindex)),"OWNER")
+			do othererrlog(.errlist,"Pending transaction #"_tindex_" current locked by process: "_owner)
+			quit
+		}
+		;
+		s origSTU=$g(^SYS("ROLLBACK","PENDING",tindex,"STU"))
+		if $E(origSTU)="R" {
+			s origSTU=$E(origSTU,2,*)  ;should be M or S
+		}
+		s phase=$G(^SYS("ROLLBACK","PENDING",tindex,"Phase"))
+		s fileindex=$G(^SYS("ROLLBACK","PENDING",tindex,"LastIndexProcessed"))  ;last file processed
+		m filelist=^SYS("ROLLBACK","PENDING",tindex,"FileList")
+		m filesize=^SYS("ROLLBACK","PENDING",tindex,"FileSize")
+		m tranopen=^SYS("ROLLBACK","PENDING",tindex,"OpenTransaction")
+		m jrfilecnt=^SYS("ROLLBACK","PENDING",tindex,"Jrfilecnt")
+		m transsys=^SYS("ROLLBACK","PENDING",tindex,"TransSys")
+		m transbufnum=^SYS("ROLLBACK","PENDING",tindex,"TransBufnum")
+		m savenn=^SYS("ROLLBACK","PENDING",tindex,"SaveNN")
+		; STU will be either M or S
+		IF (origSTU'="M") && (origSTU'="S") {
+			do othererrlog(.errlist,"Unknown STU value ("_origSTU_") for pending transaction #"_tindex)
+	 		l -^SYS("ROLLBACK","PENDING",tindex)
+	 		quit
+		}
+		if (phase'="scan") && (phase '= "rollback") {
+			do othererrlog(.errlist,"Unknown phase ("_phase_") for pending transaction #"_tindex)
+	 		l -^SYS("ROLLBACK","PENDING",tindex)
+	 		quit
+		}
+	 	k ^SYS("ROLLBACK","PENDING",tindex)
+	 	l -^SYS("ROLLBACK","PENDING",tindex)
+	 	d $zu(9,"","Restarting processing of pending transaction rollback #"_tindex,0,0  /* Informational message */)
+	 	; start with the file preceeding the one we left off with (we're
+	 	; running backwards)
+		s STU="R"_origSTU  ;STU is now RM or RS (retry+mirrored or retry+startup)
+		s jroff=0
+		s ECPStateNS="" ; always "" for STU="M" or "S"
+	 	do setupProgressReporting
+	 	if (phase="scan") {
+		 	goto bldxopen
+	 	}
+	 	; must be phase="rollback"
+	 	goto dorollback
+	} else {
+		s ECPStateNS="" ; %SYS/mgr DB
+	}
+	i $g(^%SYS("JOURNAL","ROLLBACK")) { 
+		If STU="S" g rollback  ;Start up again where we left off.
+		; If not during STU, must start again from scratch.
+		Kill ^%SYS("JOURNAL","ROLLBACK")
+	}
+	Kill ^%SYS("JOURNAL","WIJFILE") ;PWC640 (WIJFILE is only valid once we create it)
+	; Before locating earlier journal files, locate any subsequent 
+	; journal files
+	;
+	i $G(mgrdir)="" {
+		s mgrdir=$ZU(12)
+	}
+	if (STU'="M") && (STU'="MC") {
+		; Note: chronically filelist(filelist) is the oldest and 
+		; filelist(1) is the newest. Keep this in mind.
+		; (for mirrors, M and MC, filelist is already new->old)
+		;
+		; 1. build filelist
+		s filelist=1
+		s p=JN
+		s filelist(filelist)=p
+		f  {
+			s JN=$$NEXTJRN0^JRNUTIL(JN,mgrdir,,.rc) 
+			q:JN=""  
+			s filelist($i(filelist))=JN
+		}
+		i (rc<0) && (STU="S") {
+			if '$D(^SYS("SHUTDOWN","TPCLEAN"),x) {
+				do othererrlog(.errlist,"Failed to find all journal files and there appear to have been open transactions when the system shut down")
+			} else {
+				s x=$P(x,"^",2)  ;$ztimestamp_"^"_facility
+				if x="SHUTDOWN" {
+					d $zu(9,"","Graceful system shutdown, transaction rollback not required",(0>0),0) 
+				} else {
+					d $zu(9,"",x_" override, transaction rollback not required at startup",(0>0),0) 
+				}
+			}
+			quit  ;rollback not possible or not required
+		}
+		i filelist>1 {
+			; Now filelist() contains the list of journal files from the
+			; original JN to the most current one. However, they are in
+			; reverse order so invert the list
+			f i=1:1:filelist s temp(i)=filelist(i)
+			; now copy temp back to filelist, inverting the order
+			f i=1:1:filelist s filelist(filelist-i+1)=temp(i)
+			k temp  ;erase temp list
+		}
+		; Now we know the latest journal file from before the crash.
+		s jrfilecnt=(jrfilecnt+filelist-1) ; Now jrfilecnt corresponds to filelist(1)
+		If STU="S" {
+			s jrnend=$p($zu(78,22,filelist(1),99),",",10+1)
+			i jrnend="" {
+				s dev=$zu(78,5,filelist(1),0) 
+				i dev'<0 {
+					d $zu(78,6,dev) 
+					s jrnend=$zu(78,18,0) 
+					i $zu(78,7,dev)
+				}
+			}
+			s ^%SYS("JOURNAL","WIJFILE")=filelist(1)_","_jrfilecnt_","_jrnend
+		}
+	}  /* STU'="M" && STU '= "MC" */	
+	;
+	; jrcnt is the # of journal files we need to trace back to find the
+	; earliest open transaction. If this is < 0 then we go back until
+	; we find a journal file created by JRNSTART
+	i jrcnt {
+		s jroff=0  ; if we open prior files then we start at the 
+		;          ; beginning of them when we search for open transactions
+		;explaining p=$zu(78,22,p,1):
+		;  p as parameter has the form /directory/yyyymmdd.nnn
+		;  p as return value has the form 1,nextjrnfilename if parameter p
+		;    is a journal file; otherwise p would be -1. 
+		;  nextjrnfilename has the same form as parameter p or "" 
+		;    if parameter p is JRNSTARTed file.
+		F  {
+			S p=$ZU(78,22,p,1) 
+			Q:+p'=1  
+			S p=$P(p,",",2) 
+			Q:p=""  
+			S jrcnt=jrcnt-1
+			S filelist=filelist+1
+			s filelist(filelist)=p
+			q:'jrcnt  ;done, found the last file we need
+		}
+		; handle two exits of above loop: normal (p="") or error (p'=1)
+		I jrcnt,p'="",+p'=1 {
+			W !,filelist(filelist)," does not exist or is not a valid journal file!"
+			W !,"Due to that, we cannot trace back to the file containing the start of the open transactions.",!
+			I STU'="S",'QUIETLY,$$YN("Abort rollback","Y")="N" {
+				S filelist=filelist-1
+			} else {
+				W !,"Rollback is aborted.",! 
+				i STU="S",'$D(^SYS("SHUTDOWN","TPCLEAN")) {
+					d othererrlog(.errlist,"Failed to open journal file "_filelist(filelist)_" and there appear to have been open transactions when the system shut down") i 1
+				}
+				quit  ;abort rollback
+			}
+		}
+	}
+	// Convert filelist(1/newest) -> filelist(filelist/oldest) to journal file #
+	// filelist(jrnfiecnt-filelist/oldest) -> filelist(jrfilecnt/newest)
+	// Note: filelist order is changing here - filelist(smallest #) is the oldest, 
+	//       and the filelist(jrfilecnt) is the newest jrn file!!
+	set temp=filelist
+	F i=1:1:filelist {
+		set temp((jrfilecnt-i)+1)=filelist(i)
+	}
+	kill filelist
+	merge filelist=temp
+	kill temp
+	do setupProgressReporting ;sets logprogress and other variables
+bldxopen ; 2. build tranopen list
+ 	; filelist() should be the journal files from the JRNSTART to last
+	;   (eg. ($o(filelist(""))) is the oldest file we need to search for an open transaction)
+	; jroff is the offset in filelist($o(filelist("")))) that we should start
+	;   searching from. This is 0 if we should start at the beginning
+	;   of that file
+	; filelist(jrfilecnt) is the newest journal file
+	s lastjrnseqnum=0
+	s cluconfig=$S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0)  ; GK335-
+	s abortquit=0  ;JO2241
+	if $E(STU)="R" {
+		; fileindex is the value of i after the last call to scanfile
+		; so we start with the file after this one, if there is one.
+		s i=fileindex
+	} else {
+		s i=""
+	}
+	// Scan for open transactions, from the oldest->newest jrn file
+	k origfilelist
+	merge origfilelist=filelist
+	F  {
+		set i=$o(filelist(i))
+		quit:(i="")
+		S chan=$zu(78,5,filelist(i),0) 
+ 		 ; PWCDEBUG
+		I chan=-1 {
+			W !,filelist(i)," is either nonexistent or not a journal file!"
+			W !,"Due to that, we cannot use this file for rollback.",! 
+			if STU="S" {
+				if '$D(^SYS("SHUTDOWN","TPCLEAN"),x) {
+					do othererrlog(.errlist,"Failed to open journal file "_filelist(i)_" and there appear to have been open transactions when the system shut down") i 1
+				} else {
+					; If there were no transactions open during shutdown, we're all set
+					; x=^SYS("SHUTDOWN","TPCLEAN")
+					s x=$P(x,"^",2)  ;$ztimestamp_"^"_facility
+					if x="SHUTDOWN" {
+						d $zu(9,"","Graceful system shutdown, transaction rollback not required",(0>0),0) 
+					} else {
+						d $zu(9,"",x_" override, transaction rollback not required at startup",(0>0),0)
+					}
+				}
+			}
+			/* Mirroring aborts, other rollbacks continue, going on to the next file */ 
+			if (STU="M") || (STU="MC") {
+				;othererrlog bumps errcnt which causes MIRROR^JRNROLL to report failure
+				do othererrlog(.errlist,"Mirror Transaction rollback aborted - Missing jrnfile: "_filelist(i))
+				s abortquit=1
+				quit  ;exit for loop and then we'll return because abortquit is set 
+			} else {
+				K filelist(i)
+				s jroff=0
+			}
+		} else {
+			do scanfile  ;build the transopen/transsys/etc arrays for the open journal file
+			             ;returns with lastaddr=last record checked in this jrnfile
+			S x=$zu(78,7,chan)
+			I addr<0 {  
+				W !,"Record error in ",filelist(i)
+				W !,"Due to that, we cannot use this file for rollback.",! 
+				K filelist(i)
+			}   
+		}
+		if STU="M" {
+			do $SYSTEM.Mirror.UpdateTransitionTime()
+		}
+		if logprogress {
+			s sizeProcessed=sizeProcessed+filesize(i)
+			if (sizeProcessed >= nextMsg) {
+				s trancnt=0
+				s tranid=""
+				for  {
+					s tranid=$O(tranopen(tranid))
+					q:tranid=""
+					s trancnt=trancnt+1
+				}
+				d $zu(9,"","Scanning for transactions processed "_$FN(sizeProcessed/1000,"",2)_"GB ("_$FN(sizeProcessed/filesize*100,"",0)_"%) of journal data, "_trancnt_" open transaction(s) exist.",0,0  /* Informational message */)
+				do { 
+					s nextMsg=nextMsg + msgInterval
+				} while (sizeProcessed >= nextMsg)
+			}
+			s abortquit=$$recordProgress("scan",runguid,STU,i,.filesize,.origfilelist,
+							.tranopen,.jrfilecnt,.transsys,.transbufnum,.savenn)
+			quit:abortquit
+		}
+	}
+ 	quit:abortquit  ;If there was an error during mirror rollback, stop here (JO2141)
+ 	If ((cluconfig) && (lastjrnseqnum > ($zu(78,41,0)))) {
+	 	d $zu(78,41,0,lastjrnseqnum+1)
+ 	}
+ 	if STU="MC",$D(tranopen) {
+		s pid=""
+		For  {
+			S pid=$O(tranopen(pid)) 
+			Quit:pid=""
+			s remsysid=""
+			For  {
+				s remsysid=$O(tranopen(pid,remsysid),1,info) ;info= addr,jrnfilename,jrnfilecnt
+				q:remsysid=""
+			 	s ecpsysid=+$zu(34,22,remsysid)
+			 	s tindex=+$P(info,",",1)
+			 	s tfilecnt=+$P(info,",",3)
+			 	if ecpsysid=0 {
+			 	   s opentindex=+$ZU(67,19,pid)
+			 	   if opentindex {
+				 	   s opentfile=+$ZU(67,18,pid)
+				 	   if (tindex=opentindex) && (tfilecnt=opentfile) {
+					 	   k tranopen(pid,remsysid)
+				 	   }
+			 	   }
+			 	} else {
+				 	; pass remsysid here so we include the pid v. jobtype flag
+ 					if $ZU(34,26,remsysid,pid,tindex,tfilecnt) {
+	 					k tranopen(pid,remsysid)
+ 					}
+			 	}
+		 	}
+	 	}
+	 	; Now that we've filtered out the currently open transactions, check the
+	 	; journal file from wher we ended last time (lastaddr) through the current
+	 	; end to see if any of the open transactions have been closed.
+		if $D(tranopen) {
+			s chan=$zu(78,5,filelist(jrfilecnt),0)
+			I chan=-1 {
+				W !,"Failed to reopen ",filelist(jrfilecnt)," to check for subsequent commits!"
+				do othererrlog(.errlist,"Mirror Transaction rollback aborted - Failed to reopen jrnfile: "_filelist(jrfilecnt))
+				quit  ;return
+			}
+			; lastaddr is where we left off at the last scan
+			s jroff=lastaddr
+			do scanfile
+			S x=$zu(78,7,chan)
+		}
+		; At this point, anything left in tranopen() should be rolled back
+ 	}
+ 	if (STU="M") || (STU="MC") {
+		s servicetype="ECPMIRs"
+ 	} else {
+		s servicetype="ECP"
+ 	}
+ 	s x=""
+	f  {
+		s x=$O(^[ECPStateNS]%SYS("SERVICE",servicetype,x))  ;JO2141
+		q:(x="") 
+		if ($d(transbufnum(x))) {
+			s $list(^[ECPStateNS]%SYS("SERVICE",servicetype,x),3)=transbufnum(x)  ;JO2141
+		}
+	}
+	if ('$D(tranopen) && ($o(nnidx(""))="")) {	;HYY1440,JO2141,GK243+
+		d $zu(9,"","No open transactions to roll back",(0>0),0)
+		If ('+$g(^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","ECPRecover"),0)) {
+			m ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","transsys")=transsys
+			m ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","transbufnum")=transbufnum
+			if (+$O(^[ECPStateNS]%SYS("SERVICE",servicetype,""))&&$d(transsys)&&$d(transbufnum)) {  ;JO2141
+				set ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","ECPRecover")=1
+				merge ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","filelist")=filelist
+				set ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","jrfilecnt")=jrfilecnt
+				Merge ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","savenn")=savenn		   /* JO2344 */
+			}
+		} else {
+			  ;JO2141
+		}
+		goto exitroll  ;perform any necessary cleanup
+	}
+ 	I STU'="S",'QUIETLY {
+	 	if $$YN("We are to roll back open transactions. Continue","Y")="N" {
+			goto exitroll  ;perform any necessary cleanup
+	 	}
+ 	} 
+rollback ; 3. Start rolling back open transactions, with everything journaled
+	if $G(servicetype)="" {
+		;STU="S" can come here skipping bldxopen and service type is
+		; undefined so set it to ECP (because we know it isn't mirror
+		; recovery)
+		s servicetype="ECP"
+	}
+ 	;jrnstat: bit 0 (start journaling), 1 (journal all), 2 (enable in process)
+	if STU="C" {
+		;STU="C" is cluster recovery at startup. Journaling is started by
+		;CLUSTER^JRNROLL instead of here because ROLL will be called for each
+		;cluster member that requires rollback. We don't want to start and
+		;stop journaling each time through.
+		s jrnstat=0  ;the exit code enables journaling if jrnstat=0
+	} elseif $ZBITGET($ZVERSION(0),46) {
+		s jrnstat=0
+	} else {
+		;enable journaling all globals, otherwise abort
+		s jrnstat='($zu(78,22))
+		i jrnstat {
+			d ^JRNSTART 
+			i '($zu(78,22)) {
+				s $ze="[Failed to start journaling]" 
+				d miscerrlog(checkerr,reporterr,.errlist)
+				quit  ;abort
+			}
+		}
+		i '$$CURRENT^%SYS.NOJRN() {
+			s jrnstat=jrnstat+4 
+			d ENABLE^%SYS.NOJRN
+		}
+	}
+ 	set remsysid=""
+ 	for  {
+    	s remsysid=$o(nnidx(remsysid))
+     	q:('remsysid)
+     	s savenn(remsysid)=$$getecpjrnpos(remsysid)
+ 	}
+	i $G(^%SYS("JOURNAL","ROLLBACK")) { ;continue from last aborted rollback
+ 		m filelist=^%SYS("JOURNAL","ROLLBACK","filelist")
+ 		m tranopen=^%SYS("JOURNAL","ROLLBACK","tranopen")
+		m transsys=^%SYS("JOURNAL","ROLLBACK","transsys")
+		m transbufnum=^%SYS("JOURNAL","ROLLBACK","transbufnum")
+		m savenn=^%SYS("JOURNAL","ROLLBACK","savenn")
+	} elseif STU="S" { ;skip logging in globals in cluster failover, etc.
+		m ^%SYS("JOURNAL","ROLLBACK","filelist")=filelist
+		m ^%SYS("JOURNAL","ROLLBACK","tranopen")=tranopen
+		m ^%SYS("JOURNAL","ROLLBACK","transsys")=transsys
+		m ^%SYS("JOURNAL","ROLLBACK","transbufnum")=transbufnum
+		m ^%SYS("JOURNAL","ROLLBACK","savenn")=savenn
+		Set ^%SYS("JOURNAL","ROLLBACK")=1
+	}
+netdelay  ; Step 3.1 -- Build a list of delayed transactions and find the oldest one.
+ 	s delayfcnt=jrfilecnt+1,delayindex=0,delayed=0
+ 	// Update jrnfilecnt and delayindex with the first NN record we need to
+ 	// save for possible rescan for $inc
+ 	d getecpNNjrnpos()
+	; Only delay during startup, not during cluster failover
+	if (saveecptrans) {
+		if ($d(tranopen) && +$o(transsys(0))) {
+			do $zu(9,"","Delaying resolution of ECP transactions until ECP Recovery",(0>0),0)
+		}
+		s pid=""
+		For  {
+			S pid=$O(tranopen(pid)) 
+			Quit:pid=""
+			s remsysid=""
+			For  {
+				s remsysid=$O(tranopen(pid,remsysid)),ecpsysid=$zu(34,22,remsysid)
+				Quit:remsysid=""
+				If (ecpsysid) {
+				    if ('$$netdelayIncludeECPTrans(STU,ecpsysid,pid)) {
+				    } else {
+					 ;PWCDEBUG
+					Set ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","ECPTransactionsTmp",remsysid,pid)=tranopen(pid,remsysid)
+					s delayed=1
+					s i=+$p(tranopen(pid,remsysid),",",3)
+					If (i<delayfcnt) {
+						s delayfcnt=i
+						s delayindex=+$p(tranopen(pid,remsysid),",")
+					} elseif (i=delayfcnt) {
+						If (+$p(tranopen(pid,remsysid),",")<delayindex) {
+							s delayindex=+$p(tranopen(pid,remsysid),",")
+						}
+					}
+					I $D(translevel(remsysid,pid)) {
+						Merge ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","ECPTransactionsTmp",remsysid,pid)=translevel(remsysid,pid)
+						Kill translevel(remsysid,pid)
+					}
+					Kill tranopen(pid,remsysid) ; This transaction no longer needs rollback
+				    }
+				}	/* End If (remsysid&&....) */
+			}	/* End For  { s remsysid=... } */
+		}	/* End For  { s pid=...} */
+	}	/* End If (saveecptrans) */
+ 	If ('+$g(^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","ECPRecover"),0)) {
+		If (delayed) {
+			Kill ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","ECPTransactions")
+			Set ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","ECPJrnIndex")=delayindex_","_delayfcnt_","_##Class(%SYS.System).InstanceGUID()
+			Merge ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","filelist")=filelist
+			Merge ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","jrfilecnt")=jrfilecnt
+			Merge ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","transsys")=transsys
+			Merge ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","transbufnum")=transbufnum
+			Merge ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","ECPTransactions")=^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","ECPTransactionsTmp")
+			Merge ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","savenn")=savenn		   /* JO2344 */
+			Kill ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","ECPTransactionsTmp")
+			Set:($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0)) ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","JrnSeqNum")=$zu(78,41,0)
+			Set ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","ECPRecover")=1
+		} else {
+			Merge ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","transsys")=transsys
+			Merge ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","transbufnum")=transbufnum
+			if (+$O(^[ECPStateNS]%SYS("SERVICE",servicetype,""))&&$d(transsys)&&$d(transbufnum)) {
+				Merge ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","filelist")=filelist
+				Merge ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","savenn")=savenn		   /* JO2344 */
+				set ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","jrfilecnt")=jrfilecnt
+				set ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","ECPRecover")=1   
+			}
+		}
+	} else {
+		Kill ^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","ECPTransactionsTmp")
+	}
+	if $L($O(^[ECPStateNS]%SYS("JOURNAL","ROLLBACK","ECPTransactions",""))) {
+		if (STU'="M") && (STU'="MC") {
+			;The following will prevent STU from letting users in if we fail
+			;to establish the context required to support delaying transaction
+			;rollback.
+			S ^STU("required","ECPTRANS")=""
+		}
+	}
+	 ;; GK332
+dorollback ; Step 3.3 -- rollback the non-delayed transactions
+	m transave=tranopen
+ 	d $zu(9,"","Rolling back transactions ...",(0>0),0)
+ 	; NB: we assume the job is not doing TP on behalf of other jobs at the moment,
+ 	; thus when we are done, we simply reset ($zu(34,9,0,0)) rather than save/`.
+	s rolltype=$CASE(STU,"M":"MIRRORRESTORE",
+							"MC":"MIRRORRESTORE",
+							"RM":"MIRRORRESTORE",
+							"C":"CLUSTERRECOVERY",
+							:"RESTORE")
+	if STU="",$g(crashcsn)'="" {
+	    s rolltype="CLUSTERRECOVERY"
+	}
+	k ^||ISC.ROLLBACK.bitset
+	if logprogress {
+		s nextMsg=msgInterval
+		s sizeProcessed=0
+		if runguid'="" {
+			k ^SYS("ROLLBACK","TMP",runguid,"OpenTransaction")
+			merge ^SYS("ROLLBACK","TMP",runguid,"OpenTransaction")=tranopen
+		}
+	}
+	if $E(STU)="R",$G(phase)="rollback" {
+		; for retry, fileindex is the last file we processed so start
+		; with the next one (it was the value of i after we returned from
+		; start^ROLLBACK).
+		s i=fileindex
+	} elseif STU="S" {
+		s chkpntlmt=1000
+		i $g(^SYS("ROLLBACK","CHKPNT"))="" { ;no prior checkpoint 
+			s i="" // start from the newest jrn file
+			s ^SYS("ROLLBACK","CHKPNT")=","
+			s ^SYS("ROLLBACK","CHKPNT","FILE")=""
+		} else {
+			s chkpntoff=^SYS("ROLLBACK","CHKPNT")
+			i chkpntoff { ;chkpntoff is just an offset
+				s i=$g(^SYS("ROLLBACK","CHKPNT","FILE"))
+				s jrnoffmsg="offset "_(+chkpntoff)_" of "
+			} else { ;chkpntoff has the form of ","_i
+				s i=$p(chkpntoff,",",2)
+				s jrnoffmsg=""
+			}
+			i $o(filelist(i),-1,jrnf) 
+ 			d $zu(9,"","Continuing from "_jrnoffmsg_jrnf,(0>0),0)
+			s logskiprb=0 ;suppress initial "skip rollback" msgs
+		}
+	} else {
+		S i="" 
+	}
+	do {
+		S i=$O(filelist(i),-1,%jrnfile)
+		Q:i=""
+		s chan=$zu(78,5,%jrnfile,0)
+		if chan=-1 {
+			do othererrlog(.errlist,"Failed to open "_%jrnfile_" during rollback")
+			quit  ;abort rollback
+		}
+		do $zu(78,6,chan)
+		i $g(chkpntoff) {
+			s addr=+$g(chkpntoff)_","_$case($ZBITGET($ZVERSION(0),46),0:$case($f(%jrnfile,";"),0:$e(%jrnfile,*-8-$l($p(%jrnfile,".",$l(%jrnfile,"."))),*),:$e(%jrnfile,*-8-$l($p(%jrnfile,".",$l(%jrnfile,"."))),$f(%jrnfile,";")-2)),:%jrnfile)
+			k chkpntoff ;use chkpntoff only the 1st time around
+		} else {
+			s addr=$zu(78,18,0)_","_$case($ZBITGET($ZVERSION(0),46),0:$case($f(%jrnfile,";"),0:$e(%jrnfile,*-8-$l($p(%jrnfile,".",$l(%jrnfile,"."))),*),:$e(%jrnfile,*-8-$l($p(%jrnfile,".",$l(%jrnfile,"."))),$f(%jrnfile,";")-2)),:%jrnfile)
+		}
+		Q:+addr'>0  ;abort rollback
+		if STU="MC" {
+			do start^ROLLBACK(.tranopen,addr,-1,checkerr,1,.dblist,rolltype,,.chkpntlmt,.logskiprb)
+		} else {
+			do start^ROLLBACK(.tranopen,addr,-1,checkerr,1,,rolltype,,.chkpntlmt,.logskiprb)
+		}
+		i chkpntlmt {
+			s ^SYS("ROLLBACK","CHKPNT")=","_i
+			s ^SYS("ROLLBACK","CHKPNT","FILE")=i
+		}
+		do $zu(78,7,chan)
+		; close transactions that have been completely rolled back. Don't remove
+		; the ^%SYS() data or commit any transaction which is listed in the 
+		; tranerror() array
+		s pid="" 
+		f  {
+			s pid=$o(transave(pid)) 
+			q:pid=""
+			s sys="" 
+			f  {
+				s sys=$o(transave(pid,sys)) 
+				q:sys=""  
+				if '$d(tranopen(pid,sys)) {
+					k transave(pid,sys) 
+					; don't commit the transaction if there was a rollback error
+					if '$D(tranerror(pid,sys)) {
+						if ($zu(34,9,pid,sys)!$zu(34,4)!$zu(34,9,0,0))  ;commit the transaction in the journal
+						k:STU="S" ^%SYS("JOURNAL","ROLLBACK","tranopen",pid,sys)
+					}
+				}
+			}
+		}
+		if STU="M" {
+			do $SYSTEM.Mirror.UpdateTransitionTime()
+		}
+		if $D(tranopen), logprogress {
+			s sizeProcessed=sizeProcessed+filesize(i)
+			if (sizeProcessed >= nextMsg) {
+				s trancnt=0
+				s tranid=""
+				for  {
+					s tranid=$O(tranopen(tranid))
+					q:tranid=""
+					s trancnt=trancnt+1
+				}
+				d $zu(9,"","Rollback in progress, processed "_$FN(sizeProcessed/1000,"",2)_"GB ("_$FN(sizeProcessed/filesize*100,"",0)_"%) of journal data, "_trancnt_" transaction(s) remain open",0,0  /* Informational message */)
+				do { 
+					s nextMsg=nextMsg + msgInterval
+				} while (sizeProcessed >= nextMsg)
+			}
+			if runguid'="" {
+				; recordProgress reads the variables i, filelist, filesize, tranopen
+				s abortquit=$$recordProgress("rollback",runguid,STU,i,.filesize,
+												.filelist,.tranopen,.jrfilecnt,.transsys,
+												.transbufnum,.savenn)
+				quit:abortquit
+			}
+		}
+	} while ($D(tranopen)'=0)
+	; If we're tracking errors in errlist (checkerr=2) and there were
+	; some errors then stop here and leave ^%SYS("....") set up so we can
+	; restart transaction rollback if the user chooses to do so.
+	if STU="S"&((checkerr'=2) ! '$G(errlist)) {
+		;Keep ^%SYS("JOURNAL","ROLLBACK","transsys") around for ECP Recovery time.
+		k ^SYS("ROLLBACK","CHKPNT","FILE")
+		k ^SYS("ROLLBACK","CHKPNT")
+		k ^%SYS("JOURNAL","ROLLBACK","tranopen") 
+		k ^%SYS("JOURNAL","ROLLBACK","filelist") 
+		s ^%SYS("JOURNAL","WIJFILE")=$zu(78,3)_","_($ZU(78,26))
+		s ^%SYS("JOURNAL","ROLLBACK")=0
+	}
+exitroll ;
+ s $zt="" 
+ if '$G(abortquit,0),runguid'="" {
+	 k ^SYS("ROLLBACK","TMP",runguid)
+ }
+ i $ze]"" ztrap $ze  ;the error trap of the caller should handle jrnstat
+ i jrnstat\4 {
+	 d DISABLE^%SYS.NOJRN 
+	 s jrnstat=jrnstat#4
+ }
+ i jrnstat,STU'="S" {
+	 d INT^JRNSTOP()
+ }
+ k ^||ISC.ROLLBACK.bitset
+ Q  ;done with ROLL()
+scanfile ;subroutine of bldxopen
+ 	d $zu(9,"","  Scanning "_filelist(i),(0>0),0)
+ 	 ;JO2141
+	S x=$zu(78,6,chan)
+	s addr=0
+	i jroff {
+		s addr=$zu(78,18,jroff)
+		s jroff=0
+	}
+	i addr<0 {
+		s addr=0 ;reset addr in case jroff wasn't valid
+	}
+	; transsys(ecpsysid) is an array of remote systems that have started a
+	; transaction since the last JRNBIGNET journal entry for that system.  
+	; This information goes into netsyspnt_s->netbig_s_recovery during 
+	; recovery.  We also reconcile this list of servers with the list of 
+	; servers that request recovery during the recovery interval, so we d
+	; transbufnum(ecpsysid) is an array of remote systems for which we have an
+	; up-to-date request buffer number.
+	if runguid'="" {
+		s oneGB=1024*1024*1024
+		s chkpnt=oneGB
+	}
+	F  {
+		s lastaddr=addr  ;for returning to bldxopen (JO2604)
+		S addr=$zu(78,17,addr) 
+		Q:addr'>0
+		if runguid'="",addr>=chkpnt {
+			if $G(^SYS("ROLLBACK","TMP",runguid,"STOP"))'="" {
+				s addr=-1  ;so bldxopen doesn't report an error
+				quit
+			}
+			s chkpnt=chkpnt+oneGB
+		}
+		S type=$zu(78,80,addr) 
+		goto $case(type,(128+6):incrType,5:commitType,4:begTransType,
+						15:bigNetType,21:trolevelType,16:beginLevelType,
+						18:tcommitLevelType,17:tcommitPendLevelType,
+						:skipRecord)
+incrType ;
+		S remsysid=$ZU(78,25,addr),ecpsysid=$zu(34,22,remsysid)
+		Set:ecpsysid transsys(ecpsysid)=$G(transsys(ecpsysid),0)+1
+		if (cluconfig) {
+			s tmpjrnseq=$zu(78,11,addr) 
+			s:(tmpjrnseq>lastjrnseqnum) lastjrnseqnum=tmpjrnseq
+		}
+		continue
+commitType ;				
+		S pid=$zu(78,10,addr),remsysid=$ZU(78,25,addr),ecpsysid=$zu(34,22,remsysid)
+		 ;PWCDEBUG
+		K tranopen(pid,remsysid) 
+		K translevel(remsysid,pid)
+		Set:(ecpsysid && '$d(rollbackstart(remsysid,pid))) transsys(ecpsysid)=$G(transsys(ecpsysid),0)+1
+		kill rollbackstart(remsysid,pid)
+		continue
+begTransType ;
+		S pid=$zu(78,10,addr),remsysid=$ZU(78,25,addr),ecpsysid=$zu(34,22,remsysid)
+		 ;PWCDEBUG
+		;The journal file count of transactions in the most recent journal file
+		; is jrfilecnt, which is when i is 1, so set up for each transaction to
+		; get the proper jrnfilecnt (PWC640)
+		S tranopen(pid,remsysid)=addr_","_$case($ZBITGET($ZVERSION(0),46),0:$case($f(filelist(i),";"),0:$e(filelist(i),*-8-$l($p(filelist(i),".",$l(filelist(i),"."))),*),:$e(filelist(i),*-8-$l($p(filelist(i),".",$l(filelist(i),"."))),$f(filelist(i),";")-2)),:filelist(i))_","_i
+		K translevel(remsysid,pid) 
+		Set:ecpsysid transsys(ecpsysid)=$G(transsys(ecpsysid),0)+1
+		continue
+bigNetType ;				
+		S remsysid=$ZU(78,25,addr),ecpsysid=$zu(34,22,remsysid)
+		Set transsys(ecpsysid)=0 ; Reset count to zero
+		Set reqnum=($zu(78,45,addr))
+		Set transbufnum(ecpsysid)=reqnum
+		// If the reqnum == 0, then it's a new ECP session, cleanup any old info
+		if ('reqnum) {
+		   Kill nnidx(ecpsysid)
+		} // 'reqnum
+		if (trackcompletedrequests) {
+			Set tmpnnidx=$g(nnidx(ecpsysid),0)+1 
+			if (tmpnnidx>64) { 
+				set tmpnnidx=1 
+			} 
+			Set nnidx(ecpsysid)=tmpnnidx
+			s nnRec(ecpsysid,tmpnnidx)=addr_","_$case($ZBITGET($ZVERSION(0),46),0:$case($f(filelist(i),";"),0:$e(filelist(i),*-8-$l($p(filelist(i),".",$l(filelist(i),"."))),*),:$e(filelist(i),*-8-$l($p(filelist(i),".",$l(filelist(i),"."))),$f(filelist(i),";")-2)),:filelist(i))_","_i
+		}
+		continue
+trolevelType ;				
+		S pid=$zu(78,10,addr),remsysid=$ZU(78,25,addr),ecpsysid=$zu(34,22,remsysid)
+		set trlvl=$zu(78,60,addr)
+		set:remsysid rollbackstart(remsysid,pid,trlvl)=1
+		continue
+beginLevelType ;				
+		S pid=$zu(78,10,addr),remsysid=$ZU(78,25,addr),ecpsysid=$zu(34,22,remsysid)
+		if saveecptrans&&ecpsysid&&$d(tranopen(pid,remsysid)) {
+			set trlvl=$zu(78,60,addr)
+			 ;PWCDEBUG
+			;The journal file count of transactions in the most recent journal file
+			; is jrfilecnt, which is when i is 1, so set up for each transaction to
+			; get the proper jrnfilecnt (PWC640)
+			S translevel(remsysid,pid,trlvl)=addr_","_i
+			Set transsys(ecpsysid)=$G(transsys(ecpsysid),0)+1
+		}
+		continue
+tcommitLevelType ;
+tcommitPendLevelType ;				
+		S pid=$zu(78,10,addr),remsysid=$ZU(78,25,addr),ecpsysid=$zu(34,22,remsysid)
+		if saveecptrans && ecpsysid && $d(tranopen(pid,remsysid)) {
+			set trlvl=$zu(78,60,addr)
+			 ;PWCDEBUG
+			;The journal file count of transactions in the most recent journal file
+			; is jrfilecnt, which is when i is 1, so set up for each transaction to
+			; get the proper jrnfilecnt (PWC640)
+			Kill translevel(remsysid,pid,trlvl)
+			Set:('$d(rollbackstart(remsysid,pid))) transsys(ecpsysid)=$G(transsys(ecpsysid),0)+1
+			kill rollbackstart(remsysid,pid)
+		}
+		continue
+skipRecord ;	
+		if (cluconfig) {
+			s tmpjrnseq=$zu(78,11,addr) 
+			s:(tmpjrnseq>lastjrnseqnum) lastjrnseqnum=tmpjrnseq
+		}
+	}  /* for loop */
+	q  ;return from scanfile to bldxopen
+getecpjrnpos(remsysid) 
+ 	s idx=nnidx(remsysid)+1
+ 	set:(idx>64||'$d(nnRec(remsysid,idx))) idx=1
+ 	q nnRec(remsysid,idx)
+getecpNNjrnpos()
+	set remsysid=""
+	for  {
+		s remsysid=$o(nnidx(remsysid))
+		q:('remsysid)
+		set delayed=1
+		s tmp=$$getecpjrnpos(remsysid)
+		s fcnt=+$p(tmp,",",3)
+		If (fcnt<delayfcnt) {
+			s delayfcnt=fcnt
+			s delayindex=+tmp
+		} elseif (fcnt=delayfcnt) {
+			If (+tmp<delayindex) {
+				s delayindex=+tmp
+			}
+		}
+	}
+	q
+setupProgressReporting ;
+	if (STU="S") || (STU="M") || ($E(STU)="R") {  ;R = restart
+		s runguid=$SYSTEM.Util.CreateGUID()
+		while $D(^SYS("ROLLBACK","TMP",runguid)) {
+			; this really should never exist but if we somehow get an
+			; existing guid, pick another one.
+			s runguid=$SYSTEM.Util.CreateGUID()
+		}
+		s filesize=0  ;in MB
+		set i=""
+		F  {
+			s i=$o(filelist(i),1,FN)
+			q:(i="")
+			s filesize(i)=+$ZU(140,1,FN)/(1024*1024)
+			s filesize=filesize+filesize(i)
+		}
+		if STU="S" {
+			s type="system startup"
+		} else {
+			; STU="M"
+			s type="mirror primary startup"
+		}
+		s ^SYS("ROLLBACK","TMP",runguid)="Rollback at "_type_" at "_$ZDATETIME($H)_" ("_filesize_"MB)"
+		s jobnum=$ZU(61)
+		s ^SYS("ROLLBACK","TMP",runguid,"jobnum")=jobnum
+		s ^SYS("ROLLBACK","TMP",runguid,"jobid")=$ZU(61,30,jobnum)
+		s ^SYS("ROLLBACK","TMP",runguid,"pid")=$J
+		if filesize>5000 {  ;5GB
+			d $zu(9,"","There is "_$FN(filesize/1000,"",2)_"GB of journal data to process for transaction rollback.",0,0  /* Informational message */)
+			s logprogress=1
+		}
+		s msgInterval=filesize\10
+		if msgInterval<1 s msgInterval=1  ;(can happen during debugging)
+		if msgInterval>15000 {
+			s msgInterval=10000
+		}
+		s nextMsg=msgInterval
+		s sizeProcessed=0
+	}
+	quit  ;return to caller
+}  ; end of ROLL() 
+recordProgress(caller,runguid,STU,index,filesize,filelist,tranopen,
+									jrfilecnt,transsys,transbufnum,savenn) public {
+	; subroutine of bldxopen and dorollback which to post our
+	; progress and check for operator requested abort. Called
+	; after we've finished scanning or processing a file (just completed
+	; file #i) before we move on to the next file.
+	;
+	; Returns 0 to continue or 1 to abort.
+	;
+	; We don't log when we abort so that this looks like a succesful rollback to
+	; the caller (System Startup (STU=S) or Mirror Primary Startup (STU=M).
+	; The operator has told us to bring the system up for 'normal use' 
+	; without completing rollback, presumably because there is some long
+	; running transaction they don't care about/will deal with themselves.
+	if '$D(^SYS("ROLLBACK","TMP",runguid,"FileList")) {
+		; these don't change so they only need to be set once
+		s ^SYS("ROLLBACK","TMP",runguid,"STU")=STU
+		m ^SYS("ROLLBACK","TMP",runguid,"FileList")=filelist
+		m ^SYS("ROLLBACK","TMP",runguid,"FileSize")=filesize
+	}
+	;
+	s ^SYS("ROLLBACK","TMP",runguid,"Phase")=caller ;scan or rollback
+	s ^SYS("ROLLBACK","TMP",runguid,"LastIndexProcessed")=index ;last file processed
+	s ^SYS("ROLLBACK","TMP",runguid,"LastFileProcessed")=filelist(index)
+	;
+	k ^SYS("ROLLBACK","TMP",runguid,"OpenTransaction")
+	m ^SYS("ROLLBACK","TMP",runguid,"OpenTransaction")=tranopen
+	if $G(^SYS("ROLLBACK","TMP",runguid,"STOP"))'="" {
+		; Record some more variables we'll need to resume later
+		; but that we don't use for status reporting (eg. we don't
+		; publish these on every call, just when we're stopping).
+		;
+		m ^SYS("ROLLBACK","TMP",runguid,"Jrfilecnt")=jrfilecnt
+		m ^SYS("ROLLBACK","TMP",runguid,"TransSys")=transsys
+		m ^SYS("ROLLBACK","TMP",runguid,"TransBufnum")=transbufnum
+		m ^SYS("ROLLBACK","TMP",runguid,"SaveNN")=savenn
+		;
+		s pendingIndex=$I(^SYS("ROLLBACK","PENDING"))
+	 	while $D(^SYS("ROLLBACK","PENDING",pendingIndex)) {
+		 	; This shouldn't be defined but if it is, pick a new one. I suppose
+		 	; we could kill it off instead....
+			s pendingIndex=$I(^SYS("ROLLBACK","PENDING"))
+	 	}
+		s msg="Rollback ("_STU_") termininating during transaction "_caller
+		s msg=msg_" due to operator request. Last file processed: "_filelist(index)
+		s msg=msg_$C(13,10)_"Added to pending transaction rollback list as item #"_pendingIndex
+		d $zu(9,"",msg,1 /* broadcast and log message*/,1  /* Warning */)
+	 	l +^SYS("ROLLBACK","PENDING",pendingIndex)
+	 	merge ^SYS("ROLLBACK","PENDING",pendingIndex)=^SYS("ROLLBACK","TMP",runguid)
+		k ^SYS("ROLLBACK","TMP",runguid)
+	 	l -^SYS("ROLLBACK","PENDING",pendingIndex)
+		quit 1  ;bldxopen/dorollback will abort
+	}
+	quit 0
+}
+netdelayIncludeECPTrans(STU,ecpsysid,pid) {
+	s service=$CASE(STU,"M":"ECPMIRs","S":"ECP",:"")
+	;include all transactions if not Mirror Primary Startup or System startup
+	quit:service="" 1
+	if $G(^%SYS("SERVICE",service,ecpsysid))'="" {
+		quit 1
+	}
+	quit 0
+}
+   ;
+   ; $$curfile()
+   ; returns current journal file name, if any, else ""
+curfile() {
+	try {
+		s rc=$p($zu(78,4)_","_$zu(78,3),",",2)
+	} catch {
+		s rc=""
+	}
+	quit rc
+}
+miscerrlog(checkerr,reporterr,errlist) { ;
+	s $ZT="miscerrlog2"
+	; for checkerr=2 we record errors in the errlist array. Here we
+	; have a unexpected problem (eg. not during a database set/kill).
+	; These are recorded in the "misc" (as opposed to "db") subnode.
+	s errlist=$G(errlist)+1
+	if checkerr=2 {
+		s index=$I(errlist("misc"))
+		s errlist("all",errlist)=$LISTBUILD($G(%jrnfile),$g(adr),$ZE)
+		s errlist("misc",index)=$LISTBUILD($G(%jrnfile),$G(adr),$ZE)
+	}
+miscerrlog2 ;
+	d $zu(9,"","Unexpected error in JRNROLL: "_$ze,(1>0),1)
+	q
+}
+othererrlog(errlist,errmsg) { ;
+ 	s errlist=$i(errlist)
+	s errlist("all",errlist)=errmsg
+	s z=$i(errlist("other"))
+	s errlist("other",z)=errmsg
+	do $zu(9,"",errmsg,(1>0),1)
+}
+Manage() PUBLIC {
+	w !
+	; Normally there is at most one active (if any) and maybe
+  	; one or more pending which were interrupted.
+	do getTransactionStatus(.active,.pending)
+	if 'active && 'pending {
+	    w "There are no rollbacks in progress nor any interrupted rollbacks",!
+	    w "defered to be processed later.",!
+	    quit
+	}
+	W !,"This utility allows you to interrupt transaction rollback so that the system"
+	W !,"can continue. It is designed for use when transaction rollback is taking a long"
+	W !,"time and you wish to make the system available without finishing the rollback."
+	w !
+	W !,"If you interrupt transaction rollback using this utility, the system will"
+	W !,"automatically continue without finishing the rollback. The incomplete"
+	W !,"rollback operation will be recorded and you can resume it later, after the"
+	W !,"system has returned to normal operation. The following cautions apply when"
+	W !,"resuming an interrupted rollback: some data affected by the rollback may have"
+	W !,"changed and will be skipped, the rollback will occur without application"
+	W !,"locking, and any partial transactions rolled back may have already been visible"
+	W !,"to the application."
+	w !
+	w !,"Rollback begins with a ""scan"" phase which scans the journal files forwards to"
+	w !,"build a list of open transactions. Then, in the ""rollback"" phase, it traverses"
+	w !,"the journal files backwards, rolling back any open transactions from that list."
+	w !,"You can display the phase and the transaction list, but in scan phase, the list"
+	w !,"is not finalized. During the rollback phase, transactions will be removed from "
+	w !,"the list as each rollback completes."
+	w !
+	w !,"It is usually best to wait for any recent open transactions to be rolled back"
+	w !,"in the rollback phase before interrupting the rollback of any old transactions."
+	w !!
+  	do DisplayRollbackDetails
+MenuTop ;
+  	k MENU
+	s MENU(1)="Restart pending rollback"
+  	s MENU(2)="Interrupt transaction rollback"
+  	s MENU(3)="Redisplay rollback information"
+	;
+	s Value=""
+	s Status=##class(%Library.Prompt).GetMenu("Option?",.Value,.MENU,,8+128+4)
+	w !  ;not sure where %Library.Prompt leaves the cursor
+ 	i (+Status=0)||(Status=2)||(Value="") q
+	do getTransactionStatus(.active,.pending)
+	if 'active && 'pending {
+	    w "There are no rollbacks in progress nor any interrupted rollbacks",!
+	    w "defered to be processed later.",!
+	    quit
+	}
+ 	do $case(Value,	1:RestartPending,
+ 					2:InterruptRollback,
+ 					3:DisplayRollbackDetails,
+ 					:IllegalValue)
+	goto MenuTop
+InterruptRollback ;
+	if 'active {
+		w "Transaction rollback is not currently in progress",!
+		h 1
+		quit
+	}
+	s id="",cnt=0
+	k MENU  ;erase old menu
+	for i=1:1 {
+		s id=$O(active(id),1,val)
+		q:id=""
+		s list(i)=id
+		s MENU(i)=val
+		s cnt=cnt+1
+	}
+	if cnt>1 {
+		s Value=""
+		s Status=##class(%Library.Prompt).GetMenu("Select operation to interrupt?",.Value,.MENU,,8+128+4)
+ 		i (+Status=0)||(Status=2)||(Value="") q
+	} else {
+		s Value=1
+	}
+	w "Operation: ",!
+	w ?5,MENU(Value),!
+	w !,"The system will continue without finishing rollback."
+	r !,"Really interrupt this rollback operation? <No> ",resp
+	w !
+	if "Yy"'[$E(resp_"X") quit
+	s id=list(Value)
+	d $zu(9,"","Interrupting transaction rollback id: "_id,0,0  /* Informational message */)
+	s ^SYS("ROLLBACK","TMP",id,"STOP")="Interrupted by user at "_$ZDATETIME($H)
+	w "Posted request to interrupt rollback id: ",id
+	h 1
+	quit
+IllegalValue ;
+	W "Unsupported option #",Value,!
+	goto MenuTop
+DisplayRollbackDetails ;
+	s header=1
+	s index=1
+	do getTransactionStatus(.active,.pending)
+	if active {
+		w "Rollback operations currently in progress",!
+		s id=""
+		f  {
+			s id=$O(active(id))
+			q:id=""
+			k ref
+			merge ref=^SYS("ROLLBACK","TMP",id)
+			do displayDetails(header,index,.ref)
+			s index=index+1
+			s header=0
+		}
+	}
+	if pending {
+		w "Pending operations queued for restart",!
+		s id=""
+		f  {
+			s id=$O(pending(id))
+			q:id=""
+			k ref
+			merge ref=^SYS("ROLLBACK","PENDING",id)
+			do displayDetails(header,index,.ref)
+			s index=index+1
+			s header=0
+		}
+	}
+	quit	
+RestartPending ;
+	if 'pending {
+		w "There are no pending rollback operations to restart",!
+		h 1
+		quit
+	}
+	s id="",cnt=0
+	k MENU  ;erase old menu
+	for i=1:1 {
+		s id=$O(pending(id),1,val)
+		q:id=""
+		s list(i)=id
+		s MENU(i)=val
+		s cnt=cnt+1
+	}
+	if cnt>1 {
+		s Value=""
+		s Status=##class(%Library.Prompt).GetMenu("Select operation to resume?",.Value,.MENU,,8+128+4)
+ 		i (+Status=0)||(Status=2)||(Value="") q
+	} else {
+		s Value=1
+	}
+	w "Operation: ",!
+	w ?5,MENU(Value),!
+	r "Confirm restart of this rollback operation? <No> ",resp
+	w !
+	if "Yy"'[$E(resp_"X") quit
+	s id=list(Value)
+	d $zu(9,"","Restarting suspended transaction rollback id: "_id,0,0  /* Informational message */)
+	j restartROLL(id)::5
+	if '$T w "Failed to job transaction rollback handler",!
+	h 1
+	quit
+}
+restartROLL(id) PUBLIC {
+	s STU="R^"_id
+	merge save=^SYS("ROLLBACK","PENDING",id)
+	s checkerr=2
+	s reporterr=1
+	try {
+		do ROLL(STU,1,,,,,,,checkerr,reporterr,.errlist)
+		if +$G(errlist) {
+			d $zu(9,"","Transaction rollback id #"_id_" encountered "_errlist_" errors - requeued",1 /* broadcast and log message*/,1  /* Warning */)
+			if '$D(^SYS("ROLLBACK","PENDING",id)) {
+				; If ROLL didn't restore the pending request, restore it here
+				merge ^SYS("ROLLBACK","PENDING",id)=save
+			}
+		}
+	} catch {
+		merge ^SYS("ROLLBACK","PENDING",id)=save
+	    d $zu(9,"","Requeued pending transaction rollback id #"_id_" -  Caught error: "_$ZE,1 /* broadcast and log message*/,1  /* Warning */)
+	}
+}
+displayDetails(header,id,array) {
+	new %transinfo,%tref
+	if $G(array)="" {
+		; Might not exist if the entry was killed after we
+		; saw it in the $O() loop but before we made a copy of it.
+		quit
+	}
+	s phase=$G(array("Phase"))
+	s lastIndex=$G(array("LastIndexProcessed"))
+	m %transinfo=array("OpenTransaction")
+	;m filelist=array("FileList")
+	;m filesize=array("FileSize")
+	if phase="scan" {
+		; processes files from start->end so the files remaining
+		; are from lastindex+1 to end.
+		s start=lastIndex+1
+		s end=$O(array("FileSize",""),-1)
+	} else {
+		; rollback processes files from end->start so the files remaining
+		; are start->last-1
+		s start=$O(array("FileSize","")) ;1st file# in list
+		s end=lastIndex-1
+	}
+	s sizeleft=0
+	s filesleft=end-start+1
+	for i=start:1:end {
+		s sizeleft=sizeleft+array("FileSize",i)
+	}
+	s tcount=0
+	k translist,tfilelist
+	s tfilecnt=0
+	if $d(%transinfo) {
+		s %tref=$Q(%transinfo(""),1,val)  ;val = addr,jrnshortname,jrnfilecnt
+		for  {
+			quit:%tref=""
+			s tcount=tcount+1
+			s addr=$P(val,",",1)
+			s jrnfilename=$P(val,",",2)
+			s jrnfilecnt=$p(val,",",3)
+			s tfilelist(jrnfilecnt)=jrnfilename
+			s x=$I(tfile(jrnfilecnt))
+			if x=1 s tfilecnt=tfilecnt+1  ; # of different files
+			s translist(jrnfilecnt,addr)=""
+			s %tref=$Q(@%tref,1,val)
+		}
+	}
+	if (header) {
+		w ?5,"ID",?10,"Phase",?20,"MB Remaining",?35,"Current Open Transaction Count",!
+	}
+	w ?5,id,?10,phase,?20,sizeleft,?35,tcount,!
+	w ?10,array,!
+	if tfilecnt>5 {
+		 w ?10,"Open transactions involve more than 5 files",!
+	} else {
+		s filecnt=""
+		for  {
+			s filecnt=$O(tfile(filecnt),1,val)  ;val = # of open transaction in this file
+			q:filecnt=""
+			s addr=$O(translist(filecnt,"")) ;earliest open transaction
+			w ?10
+			w tfilelist(filecnt)," has ",val," open transaction(s) starting at offset ",addr
+			w !
+		}
+	}
+	w ?10,filesleft," file(s) remaining to process",!
+}
+getTransactionStatus(active,pending) public {
+	k active
+	s active=0
+	s id=""
+	for  {
+		s id=$O(^SYS("ROLLBACK","TMP",id),1,val)
+		q:id=""
+		s jobnum=$G(^SYS("ROLLBACK","TMP",id,"jobnum"))
+		s jobid=$G(^SYS("ROLLBACK","TMP",id,"jobid"))
+		s pid=$G(^SYS("ROLLBACK","TMP",id,"pid"))
+		s curpid=$ZU(61,jobnum) ;"" or 0 if the jobnum isn't a valid process
+		if +curpid'=0 {
+			s curjobid=$ZU(61,30,jobnum)
+			if curpid=pid,curjobid=jobid {
+				s active=active+1
+				s active(id)=val
+			}
+		}
+	}
+	k pending
+	s pending=0
+	s id=""
+	for  {
+		s id=$O(^SYS("ROLLBACK","PENDING",id),1,val)
+		q:id=""
+		if $G(val)'="" {
+			s pending=pending+1
+			s pending(id)=val
+		}
+	}
+	quit
+}
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R
+UC(x) q $zcvt(x,"u")
+ ; BITWISE.INC, DPB139 07/09/93
+FIXDIR(dir) ;procedure, dir is passed by reference
+ Q:dir=""
+ i ($zversion(1)=1) d
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ i '($zversion(1)=1) Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))
+ i '($zversion(1)=1) s dir=dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+ Q
+fixdir(dir) ;function
+ Q:dir="" ""
+ i ($zversion(1)=1) d  q dir
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")) dir
+ Q dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+basename(f) ;similar to basename on UNIX
+ Q $P(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),1,$L(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))-1)_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+appdir(d1,d2) ;use $zu(12,d2) to append d2 to canonic dir
+ i ($zversion(1)=1) S $E(d1,$L(d1))="."_d2_"]"
+ i '($zversion(1)=1) S d1=d1_d2
+ Q d1
+VALIDIR(dir) ;validate directory dir and create it if dir doesn't exist
+ new flag
+ s flag=1
+ g vdir2
+validir(dir,flag) ;validate directory dir and optionally create it if it
+vdir2 ; VALIDIR(dir) comes here with flag set to 1
+ quit:$$ChkDirOrSpecEXISTS(dir)'="" 1   ; dir is valid and exists
+ quit:$$ChkDirVALID(dir)="" 0    ; dir is not valid
+ i flag'=1 q 0  ; flag says don't create, return failure
+ new x
+ set x=$$mkdir(dir)  ; returns 0 for success, 1 for failure
+ q:x=1 0  ; failed to create
+ quit:$$ChkDirOrSpecEXISTS(dir)="" 0   ; it doesn't we failed
+ q 1  ; success
+mkdir(dir) ;create a new directory
+ i ($zversion(1)=1) q:$$ChkDirVALID(dir)="" 1  ; dir is invalid, return failure
+ q '##class(%Library.File).CreateDirectoryChain(dir)
+jrnshort(jf,short) ;get/set short form of a journal file name FIXME HYY1999
+         N (jf,short)
+         S len=$L($P(jf,";"))
+         Q:$G(short)="" $E(jf,len-11,len) ;"GET" form
+         S $E(jf,len-11,len)=short ;"SET" form
+         Q jf
+GJrnPrefix(jf) ;extract prefix from the journal file name jf
+         N (jf)
+         S fname=$P(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),$L(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")))       
+         Q $e(fname,1,$l($p(fname,"."))-8)
+GetJrnFileName(path) { 
+	i $f(path,"/") q $p(path,"/",$l(path,"/")) ;presumably a Unix path
+	if $f(path,"\") q $p(path,"\",$l(path,"\")) ;presumably a Windows path
+	s vmsfile=$p(path,"]",2) i vmsfile="" q path ;a name only, not a path
+	q $p(vmsfile,";") ;return name from a VMS path without trailing ";"
+}
+dirinvalidmsg(dir1,dir2) 
+ n valid1,valid2,cnt,msg
+ s valid1=$$VALIDIR(dir1),valid2=$$VALIDIR(dir2)
+ s cnt=valid1+valid2 ; cnt = 0 if both invalid, 1 if one is valid
+ s msg="The following journaling "
+ s:cnt msg=msg_"directory is" 
+ s:'cnt msg=msg_"directories are"
+ s msg=msg_" not valid"_$C(13,10)
+ s:'valid1 msg=msg_"     "_dir1_$C(13,10)
+ s:'valid2 msg=msg_"     "_dir2_$C(13,10)
+ q msg
+ChkDirVALID(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,1)
+ChkDirEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkDirOrSpecEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,3)
+ChkDir(R) N N S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkBad S $ZT="" W !,"<"_$P($P($ZE,"<",2),">")_"> error -- invalid directory"
+ Q ""

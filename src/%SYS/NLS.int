@@ -1,0 +1,304 @@
+ROUTINE %SYS.NLS [Type=INT]
+%SYSNLS ;national language applications interface functions ; JLC1914 9/23/15
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;%ShmObj.INC ; JLC1084 11/07/07
+Set(type,tabnam) PUBLIC {
+ Quit:type="I" $$SetIO(tabnam)    ;Select I/O xlate tbl for cur device
+ Quit:type="J" $$SetPIO(tabnam)   ;Select I/O xlate tbl for process
+ Quit:type="X" $$SetXY(tabnam)    ;Select $X/$Y action tbl for cur device
+ Quit:type="P" $$SetPM(tabnam)    ;Select Pattern Match tbl for process
+ Quit:type="E" $$SetIdent(tabnam) ;Select Identifier tbl for process
+ Quit:type="U" $$SetUpper(tabnam) ;Select Upper Case tbl for process
+ Quit:type="L" $$SetLower(tabnam) ;Select Lower Case tbl for process
+ Quit:type="T" $$SetTitle(tabnam) ;Select Title Case tbl for process
+ Quit:type="C" $$SetCOL(tabnam)   ;Select Collation tbl for process
+ Quit $ZUTIL(96,0,78) ;unknown table type
+}
+SetIO(tabnam) PUBLIC { Quit $zu(96,18,2,tabnam) }
+SetPIO(tabnam) PUBLIC {
+ Set handle=$zu(125,3,tabnam) ;Create a modifiable handle
+ Quit:'handle $ZUTIL(96,0,78) If $zu(125,4,0) ;Delete old handle, if present
+ Quit $zu(125,0,handle)
+}
+SetXY(tabnam) PUBLIC { Quit $zu(96,19,2,tabnam) }
+SetPM(tabnam) PUBLIC { Quit $$SetTabName(0,"Pattern",tabnam) }
+SetIdent(tabnam) PUBLIC { Quit $$SetTabName(1,"Ident",tabnam) }
+SetUpper(tabnam) PUBLIC { Quit $$SetTabName(2,"UpperCase",tabnam) }
+SetLower(tabnam) PUBLIC { Quit $$SetTabName(3,"LowerCase",tabnam) }
+SetTitle(tabnam) PUBLIC { Quit $$SetTabName(4,"TitleCase",tabnam) }
+SetTabName(param,ttyp,tabnam) PUBLIC {
+ Quit:tabnam="" $zu(96,20,param,$V((param)*$ZU(40,0,25)+($ZU(40,2,104)),-2,$ZU(40,0,25)))
+ Set charset=$$GetCharset()
+ Set oid=$O(^|"%SYS"|SYS("shm","Src",1,"%nls",ttyp,charset,tabnam,""),-1) ;Object ID
+ If oid Set off=$G(^|"%SYS"|SYS("shm","Off",0,oid)) Quit:off $zu(96,20,param,off)
+ If ttyp["Case",((tabnam="Built-in")||(tabnam="Unicode")||(tabnam="Latin1")) Quit $zu(96,20,param,$V((param)*$ZU(40,0,25)+($ZU(40,2,166)),-2,$ZU(40,0,25)))
+ Quit $ZUTIL(96,0,78) ;unknown table name
+}
+SetCOL(tabnam) PUBLIC {
+ Quit:tabnam="" $zu(23,1,$zu(23,0))
+ If tabnam?1.n {
+ 	If tabnam<256,'($p($zu(23,2,tabnam),"^",1,2)="255^255") Set ret=$zu(23,1,tabnam)
+ 	Else  Set ret=$ZUTIL(96,0,78) ;invalid collation type
+ 	Quit ret
+ }
+ Set col=$$GetColNum($$GetCharset(),tabnam)
+ Quit:col<0 $ZUTIL(96,0,78) Quit $zu(23,1,col)
+}
+GetColNum(chs,nam) PUBLIC {
+	Set ref=$Name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","TablesD")),num=-1
+	If $D(@ref@("COL",chs,nam),rec) Set col=$LG(rec,14),num=$List(col,1)
+	Quit num
+}
+StatIO() PUBLIC { Quit $$getstate("",0)!$$getstate("",1) }
+OnIO() PUBLIC { Quit $$setstate("",0,1)!$$setstate("",1,1) }
+OffIO() PUBLIC { Quit $$setstate("",0,0)!$$setstate("",1,0) }
+StatPIO() PUBLIC { Quit $$getstate(0,0)!$$getstate(0,1) }
+OnPIO() PUBLIC { Quit $$setstate(0,0,1)!$$setstate(0,1,1) }
+OffPIO() PUBLIC { Quit $$setstate(0,0,0)!$$setstate(0,1,0) }
+getstate(han,dir) {
+	Set $ZT="errstate" Quit $zu(125,6,han,dir,3)
+errstate Quit 0
+}
+setstate(han,dir,val) {
+	Set $ZT="errstate" Quit $zu(125,6,han,dir,3,val)
+errstate Quit 0
+}
+SetCursorFlag(val) PUBLIC { Quit $zu(96,22,val) }
+GetCursorFlag() PUBLIC { Quit $zu(96,22) }
+SetInpMode(nbr) PUBLIC { Quit:($zu(96,18,0)]"") $zu(125,6,"",0,2,nbr) Quit 0 }
+SetOutMode(nbr) PUBLIC { Quit:($zu(96,18,1)]"") $zu(125,6,"",1,2,nbr) Quit 0 }
+GetInpMode() PUBLIC { Quit:($zu(96,18,0)]"") $zu(125,6,"",0,2) Quit 0 }
+GetOutMode() PUBLIC { Quit:($zu(96,18,1)]"") $zu(125,6,"",1,2) Quit 0 }
+SetPInpMode(nbr) PUBLIC { Quit $zu(125,6,0,0,2,nbr) }
+SetPOutMode(nbr) PUBLIC { Quit $zu(125,6,0,1,2,nbr) }
+GetPInpMode() PUBLIC { Quit $zu(125,6,0,0,2) }
+GetPOutMode() PUBLIC{ Quit $zu(125,6,0,1,2) }
+SetInpModeStr(nbr,val) PUBLIC { Quit:($zu(96,18,0)]"") $zu(125,7,"",0,nbr,val) Quit "" }
+SetOutModeStr(nbr,val) PUBLIC { Quit:($zu(96,18,1)]"") $zu(125,7,"",1,nbr,val) Quit "" }
+GetInpModeStr(nbr) PUBLIC { Quit:($zu(96,18,0)]"") $zu(125,7,"",0,nbr) Quit "" }
+GetOutModeStr(nbr) PUBLIC { Quit:($zu(96,18,1)]"") $zu(125,7,"",1,nbr) Quit "" }
+SetPInpModeStr(nbr,val) PUBLIC { Quit $zu(125,7,0,0,nbr,val) }
+SetPOutModeStr(nbr,val) PUBLIC { Quit $zu(125,7,0,1,nbr,val) }
+GetPInpModeStr(nbr) PUBLIC { Quit $zu(125,7,0,0,nbr) }
+GetPOutModeStr(nbr) PUBLIC { Quit $zu(125,7,0,1,nbr) }
+SetInpReplType(typ) PUBLIC { Quit:($zu(96,18,0)]"") $zu(125,6,"",0,0,typ) Quit 0 }
+SetOutReplType(typ) PUBLIC { Quit:($zu(96,18,1)]"") $zu(125,6,"",1,0,typ) Quit 0 }
+GetInpReplType() PUBLIC { Quit:($zu(96,18,0)]"") $zu(125,6,"",0,0) Quit 0 }
+GetOutReplType() PUBLIC { Quit:($zu(96,18,1)]"") $zu(125,6,"",1,0) Quit 0 }
+SetInpReplVal(val) PUBLIC { Quit:($zu(96,18,0)]"") $zu(125,6,"",0,1,val) Quit "" }
+SetOutReplVal(val) PUBLIC { Quit:($zu(96,18,1)]"") $zu(125,6,"",1,1,val) Quit "" }
+GetInpReplVal() PUBLIC { Quit:($zu(96,18,0)]"") $zu(125,6,"",0,1) Quit "" }
+GetOutReplVal() PUBLIC { Quit:($zu(96,18,1)]"") $zu(125,6,"",1,1) Quit "" }
+SetInpReplStat(flg) PUBLIC { Quit:($zu(96,18,0)]"") $zu(125,6,"",0,6,flg) Quit 0 }
+SetOutReplStat(flg) PUBLIC { Quit:($zu(96,18,1)]"") $zu(125,6,"",1,6,flg) Quit 0 }
+GetInpReplStat() PUBLIC { Quit:($zu(96,18,0)]"") $zu(125,6,"",0,6) Quit 0 }
+GetOutReplStat() PUBLIC { Quit:($zu(96,18,1)]"") $zu(125,6,"",1,6) Quit 0 }
+SetPInpReplType(typ) PUBLIC { Quit $zu(125,6,0,0,0,typ) }
+SetPOutReplType(typ) PUBLIC { Quit $zu(125,6,0,1,0,typ) }
+GetPInpReplType() PUBLIC { Quit $zu(125,6,0,0,0) }
+GetPOutReplType() PUBLIC { Quit $zu(125,6,0,1,0) }
+SetPInpReplVal(val) PUBLIC { Quit $zu(125,6,0,0,1,val) }
+SetPOutReplVal(val) PUBLIC { Quit $zu(125,6,0,1,1,val) }
+GetPInpReplVal() PUBLIC { Quit $zu(125,6,0,0,1) }
+GetPOutReplVal() PUBLIC { Quit $zu(125,6,0,1,1) }
+SetPInpReplStat(flg) PUBLIC { Quit $zu(125,6,0,0,6,flg) }
+SetPOutReplStat(flg) PUBLIC { Quit $zu(125,6,0,1,6,flg) }
+GetPInpReplStat() PUBLIC { Quit $zu(125,6,0,0,6) }
+GetPOutReplStat() PUBLIC { Quit $zu(125,6,0,1,6) }
+Get(type) PUBLIC {
+ Quit:type="I" $$GetIO    ;Return I/O xlate tbl name for cur device
+ Quit:type="J" $$GetPIO   ;Return I/O xlate tbl name for process
+ Quit:type="X" $$GetXY    ;Return $X/$Y action tbl name for cur device
+ Quit:type="P" $$GetPM    ;Return Pattern Match tbl name for process
+ Quit:type="E" $$GetIdent ;Return Identifier tbl name for process
+ Quit:type="U" $$GetUpper ;Return Upper Case tbl name for process
+ Quit:type="L" $$GetLower ;Return Lower Case tbl name for process
+ Quit:type="T" $$GetTitle ;Return Title Case tbl name for process
+ Quit:type="C" $$GetCOL   ;Return Collation tbl name for process
+ Quit $ZUTIL(96,0,78) ;unknown table type
+}
+GetIO() PUBLIC { Quit $zu(96,18,0) }
+GetPIO() PUBLIC { Set handle=$zu(125,0) Quit:handle $zu(125,5,handle) Quit "" }
+GetXY() PUBLIC { Quit $zu(96,19,0) }
+GetPM() PUBLIC { Quit $$GetTabName($zu(96,20,0)) }
+GetIdent() PUBLIC { Quit $$GetTabName($zu(96,20,1)) }
+GetUpper() PUBLIC { Quit $$GetCase(2) }
+GetLower() PUBLIC { Quit $$GetCase(3) }
+GetTitle() PUBLIC { Quit $$GetCase(4) }
+GetCase(tab) {
+	Set name=$$GetTabName($zu(96,20,tab))
+	If name="",$zu(96,20,tab)=$V((tab)*$ZU(40,0,25)+($ZU(40,2,166)),-2,$ZU(40,0,25)) Set name="Built-in"
+	Quit name
+}
+GetCOL() PUBLIC { Quit $$getcolname($zu(23,1)) }
+getcolname(byte) {
+ Set nbr=$p($zu(23,2,byte),"^",3) Quit:nbr $$GetTabName($p($zu(83,nbr),",")) Quit byte
+}
+GetTabName(off) PUBLIC {
+ Set oid=+$O(^|"%SYS"|SYS("shm","Off",1,off,"")) Quit:'oid ""
+ Set nam=$q(^|"%SYS"|SYS("shm","Src",0,oid)) Quit:$QS(nam,3)'=0 "" Quit:$QS(nam,4)'=oid ""
+ Quit $QS(nam,$QL(nam)) ;Return last subscript
+}
+Def(type,class) PUBLIC {
+ Quit:type="I" $$DefIO(.class)       ;Return sys def I/O xlate tbl name
+ Quit:type="X"&'$d(class) $$DefXY    ;Return sys def $X/$Y action tbl name
+ Quit:type="P"&'$d(class) $$DefPM    ;Return sys def Pattern Match tbl name
+ Quit:type="E"&'$d(class) $$DefIdent ;Return sys def Identifier tbl name
+ Quit:type="U"&'$d(class) $$DefUpper ;Return sys def Upper Case tbl name
+ Quit:type="L"&'$d(class) $$DefLower ;Return sys def Lower Case tbl name
+ Quit:type="T"&'$d(class) $$DefTitle ;Return sys def Title Case tbl name
+ Quit:type="C"&'$d(class) $$DefCOL   ;Return sys def Collation tbl name
+ Quit $ZUTIL(96,0,78) ;unknown table type
+}
+DefIO(class) PUBLIC {
+ Set:'$D(class) class=1 q:class<0!(class>9) $ZUTIL(96,0,78)
+ Set namoff=$V((class)*$ZU(40,0,25)+($ZU(40,2,105)),-2,$ZU(40,0,25))
+ Quit:namoff $ZU(126,5,namoff)
+ Quit ""
+}
+DefXY() PUBLIC {
+ Set namoff=$V((0)*$ZU(40,0,25)+($ZU(40,2,106)),-2,$ZU(40,0,25))
+ Quit:namoff $ZU(126,5,namoff)
+ Quit ""
+}
+DefPM() PUBLIC { Quit $$GetTabName($V((0)*$ZU(40,0,25)+($ZU(40,2,104)),-2,$ZU(40,0,25))) }
+DefIdent() PUBLIC { Quit $$GetTabName($V((1)*$ZU(40,0,25)+($ZU(40,2,104)),-2,$ZU(40,0,25))) }
+DefUpper() PUBLIC { Quit $$GetTabName($V((2)*$ZU(40,0,25)+($ZU(40,2,104)),-2,$ZU(40,0,25))) }
+DefLower() PUBLIC { Quit $$GetTabName($V((3)*$ZU(40,0,25)+($ZU(40,2,104)),-2,$ZU(40,0,25))) }
+DefTitle() PUBLIC { Quit $$GetTabName($V((4)*$ZU(40,0,25)+($ZU(40,2,104)),-2,$ZU(40,0,25))) }
+DefCOL() PUBLIC { Quit $$getcolname($zu(23,0)) }
+SetPDef(type,tabnam,class) PUBLIC {
+ Quit:type="I" $$SetPDefIO(tabnam,.class)     ;Select proc def I/O xlate tbl
+ Quit:type="X"&'$D(class) $$SetPDefXY(tabnam) ;Select proc def $X/$Y action tbl
+ Quit $ZUTIL(96,0,78) ;unknown table type
+}
+SetPDefIO(tabnam,class) PUBLIC {
+ Set:'$D(class) class=1 Quit:class<0!(class>9) $ZUTIL(96,0,78)
+ Set namoff=$ZU(127,1,$V((0)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25)),tabnam,0) Quit:'namoff $ZUTIL(96,0,78)
+ V (class)*$ZU(40,0,25)+($ZU(40,1,27)):-1:$ZU(40,0,25):namoff Quit tabnam
+}
+SetPDefXY(tabnam) PUBLIC {
+ Set namoff=$ZU(127,1,$V((1)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25)),tabnam,0) Quit:'namoff $ZUTIL(96,0,78)
+ V (0)*$ZU(40,0,25)+($ZU(40,1,28)):-1:$ZU(40,0,25):namoff Quit tabnam
+}
+GetPDef(type,class) PUBLIC {
+ Quit:type="I" $$GetPDefIO(.class)    ;Return proc def I/O xlate tbl name
+ Quit:type="X"&'$D(class) $$GetPDefXY ;Return proc def $X/$Y action tbl name
+ Quit $ZUTIL(96,0,78) ;unknown table type
+}
+GetPDefIO(class) PUBLIC {
+ Set:'$D(class) class=1 Quit:class<0!(class>9) $ZUTIL(96,0,78)
+ Set namoff=$V((class)*$ZU(40,0,25)+($ZU(40,1,27)),-1,$ZU(40,0,25))
+ Quit:namoff $ZU(126,5,namoff)
+ Quit ""
+}
+GetPDefXY() PUBLIC {
+ Set namoff=$V((0)*$ZU(40,0,25)+($ZU(40,1,28)),-1,$ZU(40,0,25))
+ Quit:namoff $ZU(126,5,namoff)
+ Quit ""
+}
+SetPitch(pitch) PUBLIC { Quit $zu(96,17,2,pitch*4\1)/4 }
+GetPitch() PUBLIC { Quit $zu(96,17,0)/4 }
+DefDCLocale() PUBLIC { Quit "DEFAULT" }
+SetDCLocale(tabnam) PUBLIC {
+ Set $ZT="DCFtrap"
+ Quit:($ZCVT(tabnam,"U")="DEFAULT") $S($ZU(122,0,0)<0:"PRIVATE",1:"DEFAULT")
+DCFtrap Quit -101
+}
+GetDCLocale(tabnam) PUBLIC {
+ Set $ZT="DCFtrap"
+ Quit $S($ZU(122,0)<0:"PRIVATE",1:"DEFAULT")
+DCFtrap Quit -101
+}
+GetDCFormat(item) PUBLIC {
+ Set $ZT="DCFtrap"
+ Set ndx=$$GetDCIndex(item) 
+ If ndx<0 Quit -100
+ Quit $ZU(122,ndx)
+DCFtrap Quit -101
+}
+SetDCFormat(item,val) PUBLIC {
+ Set $ZT="DCFtrap"
+ Set ndx=$$GetDCIndex(item) 
+ If ndx<0 Quit -100
+ Quit $ZU(122,ndx,val)
+DCFtrap Quit -101
+}
+GetDCIndex(item) PUBLIC {
+ Set i=$ZCVT(item,"U")
+ Quit $S(i="DATEFORMAT":1,i="YEAROPTION":2,i="TIMEFORMAT":3,i="TIMEPRECISION":4,i="NUMERICGROUPSIZE":5,i="DECIMALSEPARATOR":6,i="NUMERICGROUPSEPARATOR":7,i="DATESEPARATOR":8,i="TIMESEPARATOR":9,i="PLUSSIGN":10,i="MINUSSIGN":11,i="AM":12,i="PM":13,i="NOON":14,i="MIDNIGHT":15,i="MONTHABBR":16,i="MONTHNAME":17,i="WEEKDAYABBR":18,i="WEEKDAYNAME":19,i="DATEMINIMUM":20,i="DATEMAXIMUM":21,1:-1)
+}
+MapCharset(ext,set) PUBLIC {
+ Set rchs=$Name(^%SYS("NLS","Chs")),low=$ZCVT(ext,"L")
+ Set int=$G(@rchs@("Int-Int",low),$G(@rchs@("Ext-Int",low)))
+ If int'="",int'="Unicode" {
+    Set loc=$G(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,5))@("LOCALE","CURRENT"))
+    If loc'="" {
+       Set rloc=$Name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","LocalesD")),rloc=$Name(@rloc@(loc)),lrec=$G(@rloc)
+       If lrec'="" Set lchs=$LG(lrec,2)
+       Else  Set lchs=$G(^%nls("Loc",loc,0))
+       If lchs=int Set int="RAW"
+    }
+ }
+ If int'="",$G(set) Set $ZT="MapChsError" Do SetIO(int)
+ Quit int
+MapChsError Quit ""
+}
+MapExtCharset(int) PUBLIC {
+ Quit $G(^%SYS("NLS","Chs","Int-Ext",$ZCVT(int,"L")))
+}
+GetLocale() PUBLIC {
+ If $D(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,5))@("LOCALE","CURRENT"),loc) Quit loc
+ Quit $S($ZBitget($ZVersion(0),1):"enuw",1:"enu8")
+}
+GetCharset() PUBLIC {
+ If $ZBitget($ZVersion(0),1) Quit "Unicode"
+ If '$D(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,5))@("LOCALE","CURRENT"),loc) Quit "Latin1"
+ Set rloc=$Name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","LocalesD")),rloc=$Name(@rloc@(loc)),lrec=$G(@rloc)
+ If lrec'="" Quit $LG(lrec,2)
+ If $D(^%nls("Loc",loc,0),lchs) Quit lchs
+ Quit "Latin1"
+}
+GetLanguageAbbr() PUBLIC {
+ If '$D(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,5))@("LOCALE","CURRENT"),loc) Quit "en-US"
+ Set rloc=$Name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","LocalesD")),rloc=$Name(@rloc@(loc)),lrec=$G(@rloc)
+ If lrec'="" Quit $LG(lrec,56)
+ Quit "en-US"
+}
+GetIONames(defaults,excludeinternals) public {
+ Set tab=$V((0)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25)),(nam,list)="",chs=$$GetCharset()
+ For {
+	 Set nam=$ZU(127,2,tab,nam) Quit:nam=""
+	 Set list=list_","_nam
+ }
+ If $g(excludeinternals) {
+	 Set all=list,list=""
+	 For i=2:1:$l(all,",") {
+		 Set x=$p(all,",",i)
+		 If ",RAW,BIN,SAME,UTF8,UnicodeLittle,UnicodeBig,URL,JS,JSML,JSON,JSONML,HTML,XML,XMLA,XMLC,"[(","_x_",")||(x=chs) Continue
+		 Set list=list_","_x
+	 }
+ }
+ Set list=$e(list,2,$l(list))
+ Set defaults=""
+ For i=0:1:9 {
+	Set defaults=defaults_","_$$DefIO^%SYS.NLS(i)
+ }
+ Set defaults=$e(defaults,2,$l(defaults))
+ Quit list
+}

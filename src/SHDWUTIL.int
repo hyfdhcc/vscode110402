@@ -1,0 +1,424 @@
+ROUTINE SHDWUTIL [Type=INT]
+SHDWUTIL ;Supplementary functions for shadow and source ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/shdwutil.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+OKVersion(remver) ;return the version OK by us
+	Quit:remver="NT.1" "SHADOW.4"  ;cannot handle
+	Quit:$p(remver,".")'="SHADOW" "" ;bad version
+	New remvernum
+	Set remvernum=+$p(remver,".",2)
+	Quit:remvernum<$p("SHADOW.4",".",2) "SHADOW.4" ;the lowest version we can handle
+	Quit:remvernum<5 remver  ;remver is a (lower) version we can handle
+	Quit "SHADOW.5" ;we have equal or lower version
+VER() ;
+	Quit "SHADOW.5"
+Features() ;
+	Quit 1+2+4+8+16+32
+ERRLOG(err,node) ;log errors (write to cconsole and/or store in global)
+	If err["<DATABASE>" {
+		Do MSGOUT(err,$g(node))
+		Do CONLOG()
+		Quit
+	}  
+	If $g(node)="" {
+		Do MSGOUT^SHDWUTIL(err,"")
+		Set node=$name(^SYS("shdwsrv",0)) 
+	} else {
+		Do MSGOUT^SHDWUTIL(err,node)
+		Set node=$name(^SYS("shdwcli",node))
+	} 
+	New max 
+	Set max=+$g(@node@("errmax"),10)
+	Set node=$name(@node@("err"))
+	If err'["<ZSTOP>" {
+		Do:max ERRLOGGLO(err,node,max)
+	} 
+	If err'["<Z",err'["<READ>",err'["<WRITE>" {
+		Do BACK^%ETN  ;save state info for non-Z errors only
+	}
+	Quit
+ERRLOGGLO(err,node,max) ;log errors (up to 'max') in global 'node'
+	New i,j,found,jerr
+	Set found=0
+	Set jerr=$j_" "_err
+	Set j=""
+	For i=1:1:3 {
+		Set j=$o(@node@(j),-1)
+		Quit:j=""
+		If jerr=$p(@node@(j)," ",3,$l(@node@(j))) {
+			Set found=1
+			Quit
+		}
+	}
+ 	If found {
+	 	Set:'$d(@node@(j,"begin")) @node@(j,"begin")=$p(@node@(j)," ",1,2)
+		Set @node@(j,"count")=$g(@node@(j,"count"),1)+1
+ 	} else {
+		Set j=$i(@node)
+		Set i=""
+		For {
+			Set i=$o(@node@(i))
+			Quit:i=""
+			Quit:(j-i'>max)
+			Kill @node@(i)
+		}
+ 	}
+	Set @node@(j)=$zdt($h,8)_" "_jerr ;YYYYMMDD HH:MM:SS pid err
+	Quit
+ERRFILT(err) ;fiter out what we would like the user to see in GUI
+	New x 
+	Set x=$p(err," ",4,$l(err)) 
+	Quit $p(err," ",1,2)_" "_$s($l(x,",")>1:$p(x,",",2,$l(x)),1:x)
+traperr(err) ;return a 4-letter word for ZTRAP due to ZTRAP limitation
+	New errcode
+	Set errcode=+err
+	Quit $s(err["file":"FILE",err["open":"OPEN",err["read":"READ",err["stop":"STOP",1:"MISC")
+CONLOG(var) ;in case the database is not usable ...
+	New confile,createmode
+	Set confile=$zu(12)_"cconsole.log"
+	Do $zu(9,"","Logging "_$s($g(var)="":"all local variables",1:var),(0>0),0)
+	Set createmode=$zu(68,3,1)
+	Open confile:"wa":0 
+	Quit:'$T
+	Set $zt="etCONFLOG"
+	If $g(var)="" {
+		Use confile
+		Write
+	} else {
+		Use confile
+		Zwrite @var
+	}
+etCONFLOG ;
+	Set $zt=""
+	Close confile
+	Do $zu(68,3,createmode)
+	Quit
+narrow(str) ;narrow a string in the form A_$c(0)_B_$c(0)_... to AB...
+	New nstr,len,i
+	Set nstr=""
+	Set len=$l(str)
+	Quit:len#2 -1 ;len must be an even number
+	For i=1:2:len {
+		Quit:$e(str,i+1)'=$c(0)
+		Set nstr=nstr_$e(str,i)
+	} 
+	Quit:(i+1)<len -1  ;early exit
+	Set str=nstr
+	Quit len
+rdfl(tcp,msg,len,tmo,chk) 
+	New x
+	Set msg=""
+	Use tcp
+	For {
+		Read x#len:tmo
+		Set msg=msg_x
+		Set len=len-$l(x)
+		Quit:$t!'len
+	} 
+	Quit
+GetSeverity(msg) ;
+	New errcode,errtext
+	Quit:$e(msg,1,$l("0;INFO: "))="0;INFO: " 0  ;informative messages, not %Status
+	Set errcode=$System.Status.GetErrorCodes(msg)
+	Quit:errcode=1075 1 ;WARNING
+	Quit:errcode=1106 1 ;WARNING
+	Quit:errcode<1000 2 ;unknown error
+	Quit:errcode<1070 3 ;FATAL err
+	Quit:errcode<1090 2 ;SEVERE err
+	Quit:errcode<=1099 1 ;WARNING
+	Quit:errcode=1100 2
+	Quit:errcode=1109 3
+	Quit:errcode=1106 2
+ 	Quit 2
+MSGOUT(msg,cli,severity) ;
+	Set $zt="MSGOUTerr"
+	New ze,status,header 
+	Set header="[SHADOWING]"
+	If $g(cli)'="" {
+		Set header=header_" SHADOW SERVER ("_cli_")"
+	} ElseIf $d(cli) {
+		Set header=header_" DATABASE SERVER"
+	}
+	If ($e(msg)="<")||($e(msg)=";") {
+		Set ze=$p(msg,";")
+		Set status=$p(msg,";",2,$l(msg))
+	} Else {
+		Set ze="",status=msg
+	}
+	If status="" {
+		Do $zu(9,"",header_": "_msg,(2>0),2)
+		Quit  ;msg contains only $ze
+	}
+	Set header=header_": "_$s(ze="":"",1:ze_";")
+	Set severity=$g(severity,$$GetSeverity(status))
+	If severity>1 {
+		Do $zu(9,"",header_$SYSTEM.Status.GetErrorText(status,"en"),(2>0),2)
+	} ElseIf 'severity {
+		Do $zu(9,"",header_$p(status,";",2,$l(status)),(0>0),0) ;INFO
+	} Else {
+		Do $zu(9,"",header_$SYSTEM.Status.GetOneStatusText(status,,"en"),(1>0),1) ;WARNING
+	}
+	Quit
+MSGOUTerr
+	Set $zt=""
+	Do BACK^%ETN
+	Do $zu(9,"",$ze,(2>0),2)
+	Quit
+nextjrn(jrnf,cli) ;return next journal file if it is valid
+	New i,node
+	Set node=$name(^SYS("shdwcli",cli,"jrnfil"))
+	Set i=""
+	For {
+		Set i=$o(@node@(i),-1)
+		Quit:i=""
+		Quit:$g(@node@(i,"shdw"))=jrnf
+	}
+chknxtjrn ;
+	Set i=$o(@node@(i))
+	Quit:i="" ""
+	Set jrnf=$g(@node@(i,"shdw"))
+	If jrnf'="",$ZU(78,22,jrnf)>0 {
+		Quit jrnf
+	}
+	Quit ""  ;jrnf="" (unlikely) or jrnf is not a valid journal yet (possible)
+NEXTJRN1(fd,cli) 
+	Set $ZT="etNEXTJRN"
+	New shortnam,date,seq,curdate
+	If ^SYS("shdwcli",cli,"type")>10 {
+		Quit $$nextjrn(fd,cli)
+	}
+	New i,node,jrnf
+	Set node=$name(^SYS("shdwcli",cli,"jrnfil")),jrnf=fd
+	Set i=""
+	For {
+		Set i=$Order(@node@(i),-1)
+		Quit:$g(@node@(i,"shdw"))=jrnf
+		Quit:i=""
+	}
+	If i]"" g chknxtjrn
+	Set i=""
+	Set node=$name(^SYS("shdwcli",cli,"jrnfil"))
+	Goto chknxtjrn
+etNEXTJRN 
+	Set $zt=""
+	d ERRLOG^SHDWUTIL($ze,cli)
+	Quit ""
+TR(clisrv,t,r) ;translate numeric status to meaningful words
+ ;inputs: 
+ ;  clisrv: "cli"/"srv", t: client/server type, r: meanings of t
+ ;return:
+ ;  1: success, 0_$$del1_error: failure
+	New d
+	Set $ZT="etTR"
+	Set t=+$G(t)
+	Set r=""
+	Set d=$$del1^%Wprim
+	If t=-1 {
+		Set r="master"
+		Quit 1
+	}
+	If t=0 {
+		Set r="inactive"
+		Quit 1
+	}
+	Quit:t>4!(t<-1) 0_$$del1^%Wprim_"UNKNOWN TYPE"
+	Set:$G(clisrv)="srv" r="slave:"
+	Set r=r_$S(t=1:"AllFeatures",t=2:"FilesOnly",t=3:"TransOnly",1:"ScanTrans")
+	Quit 1
+etTR ;
+	Quit 0_$$del1^%Wprim_$ZE        
+ ; input:
+ ;       shdwjrnf: shadow journal file path
+ ;       srcjrnf: source journal file path
+ ;       shdwid: name of the shadow
+ ; return:
+ ;       -1 if srcjrnf precedes shdwjrnf
+ ;        0 if shdwjrnf is a copy of srcjrnf
+ ;        1 if srcjrnf immediately follows shdwjrnf
+ ;       >1 if shdwjrnf precedes srcjrnf (but not immediately)
+jfdiff(shdwjrnf,srcjrnf,shdwid) [] public {
+	s srcidx=$$srcjfidx(srcjrnf,shdwid) i 'srcidx g oldway
+	s shdwidx=$$shdwjfidx(shdwjrnf,shdwid) i 'shdwidx g oldway
+	q (srcidx-shdwidx)
+oldway  d $zu(9,"","jfdiff: srcjrnf="_srcjrnf_"#"_srcidx_", shdwjrnf="_shdwjrnf_"#"_$g(shdwidx))
+	Set sf1=$case($ZBITGET($ZVERSION(0),46),0:$case($f(shdwjrnf,";"),0:$e(shdwjrnf,*-8-$l($p(shdwjrnf,".",$l(shdwjrnf,"."))),*),:$e(shdwjrnf,*-8-$l($p(shdwjrnf,".",$l(shdwjrnf,"."))),$f(shdwjrnf,";")-2)),:shdwjrnf)
+	Set sf2=$case($ZBITGET($ZVERSION(0),46),0:$case($f(srcjrnf,";"),0:$e(srcjrnf,*-8-$l($p(srcjrnf,".",$l(srcjrnf,"."))),*),:$e(srcjrnf,*-8-$l($p(srcjrnf,".",$l(srcjrnf,"."))),$f(srcjrnf,";")-2)),:srcjrnf)
+	Quit:$P(sf1,".")>$P(sf2,".") -1
+	Quit:$P(sf1,".")=$P(sf2,".") $P(sf2,".",2)-$P(sf1,".",2)
+	Quit +$P(sf2,".",2)
+}
+srcjfidx(srcjrnf,shdwid) [] private { ;find index of a given source journal file
+	s idx=$g(^SYS("shdwcli",shdwid,"jrnfil")) 
+prevsrc ;
+	i idx<1 q 0 ;srcjrnf not found
+	i srcjrnf=$g(^SYS("shdwcli",shdwid,"jrnfil",idx)) q idx
+	s idx=idx-1
+	g prevsrc
+}
+shdwjfidx(shdwjrnf,shdwid) [] private { ;find index of a given shadow journal file
+	s idx=$g(^SYS("shdwcli",shdwid,"jrnfil")) 
+prevone ;
+	i idx<1 q 0 ;shdwjrnf not found
+	i shdwjrnf=$g(^SYS("shdwcli",shdwid,"jrnfil",idx,"shdw")) q idx
+	s idx=idx-1
+	g prevone
+}
+ChkJrnEnd(cli,fd) [] public {
+	Set jrnend=$p($zu(78,22,fd,16),",",2)
+	If 'jrnend {
+		Set fdidx=$$shdwjfidx(fd,cli)
+		Set jrnend=$g(^SYS("shdwcli",cli,"jrnfil",fdidx,"jrnend"))
+	}
+	s dev=$zu(78,5,fd,0) i dev<0 s shdwzerr=$$Error^%apiOBJ(1100,fd) ztrap "FILE"
+	Do $zu(78,6,dev)
+	Set eof=$zu(78,18,0)
+	Do $zu(78,7,dev)
+	If eof<jrnend {
+		Set shdwzerr=$$Error^%apiOBJ(1035,fd)
+		ztrap "ABOR"
+	}
+}
+ ;returns the ratio of the dejournaled address and end address of journal file
+ ;or <0 on error
+dejrnstat(cli) ;
+	Set $zt="dejrnstatex"
+	Set $ze=""
+	Quit:cli="" -1
+	Quit:+$g(^SYS("shdwcli",cli,"type"))'=1 -2 ;block mode ("apply changes") only
+	New locshd,remjrn,locshdpath
+	Set locshdpath=$g(^SYS("shdwcli",cli,"locshd"))
+	Set locshd=$$GFILE^SHDWCLI(locshdpath)
+	Set remjrn=$$GFILE^SHDWCLI($g(^SYS("shdwcli",cli,"remjrn")))
+	Quit:locshd="" -3
+	New at,end
+	Set at=+$g(^SYS("shdwcli",cli,"at")) 
+	If locshd=remjrn {
+		Set end=+$g(^SYS("shdwcli",cli,"remend"))
+	} Else {
+		New fd
+		Set fd=$zu(78,5,locshdpath,0)
+		Do $zu(78,6,fd)
+		Set end=$zu(78,18,$zu(78,18,0))
+		Do $zu(78,7,fd)
+	}
+dejrnstatex ;
+	Quit:$ze="" $s(at'<end:1,end:at/end,1:-4)
+	Set $zt=""
+	Quit -99_","_$ze
+IsIPAlias(dev)
+	Set $zt="IsIPAliasE"
+	Set $ze=""
+	New i,numip,ipaddrs,ipbound 
+	Use dev 
+	Set ipbound=$s($zbitget($zversion(0)_$c(0,0,0,0),42):$SYSTEM.TCPDevice.LocalAddr(0),1:$zu(54,26))
+	Set ipaddrs=##class(%Library.Function).IPAddresses(),numip=$l(ipaddrs,",")
+	Set i=1 
+	For {
+		Quit:ipbound=$p(ipaddrs,",",i)
+		Quit:$i(i)>numip
+	}
+	Quit (i>numip) ;is alias if ipbound not found in ipaddrs (i>numip)
+IsIPAliasE 
+	Set $zt=""
+	If $ze]"" {
+		Do $zu(9,"","ERROR: "_$ze,(1>0),1)
+		Do BACK^%ETN
+	}
+	Quit 0
+ReadNone(dev,var,len) ;what to do when nothing is read from TCP 
+	If +$g(isIPalias) {
+		Set shdwzerr=$$Error^%apiOBJ(1071)
+		ztrap "READ"
+	}
+	Quit
+ ; BITWISE.INC, DPB139 07/09/93
+FIXDIR(dir) ;procedure, dir is passed by reference
+ Q:dir=""
+ i ($zversion(1)=1) d
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ i '($zversion(1)=1) Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))
+ i '($zversion(1)=1) s dir=dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+ Q
+fixdir(dir) ;function
+ Q:dir="" ""
+ i ($zversion(1)=1) d  q dir
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")) dir
+ Q dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+basename(f) ;similar to basename on UNIX
+ Q $P(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),1,$L(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))-1)_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+appdir(d1,d2) ;use $zu(12,d2) to append d2 to canonic dir
+ i ($zversion(1)=1) S $E(d1,$L(d1))="."_d2_"]"
+ i '($zversion(1)=1) S d1=d1_d2
+ Q d1
+VALIDIR(dir) ;validate directory dir and create it if dir doesn't exist
+ new flag
+ s flag=1
+ g vdir2
+validir(dir,flag) ;validate directory dir and optionally create it if it
+vdir2 ; VALIDIR(dir) comes here with flag set to 1
+ quit:$$ChkDirOrSpecEXISTS(dir)'="" 1   ; dir is valid and exists
+ quit:$$ChkDirVALID(dir)="" 0    ; dir is not valid
+ i flag'=1 q 0  ; flag says don't create, return failure
+ new x
+ set x=$$mkdir(dir)  ; returns 0 for success, 1 for failure
+ q:x=1 0  ; failed to create
+ quit:$$ChkDirOrSpecEXISTS(dir)="" 0   ; it doesn't we failed
+ q 1  ; success
+mkdir(dir) ;create a new directory
+ i ($zversion(1)=1) q:$$ChkDirVALID(dir)="" 1  ; dir is invalid, return failure
+ q '##class(%Library.File).CreateDirectoryChain(dir)
+jrnshort(jf,short) ;get/set short form of a journal file name FIXME HYY1999
+         N (jf,short)
+         S len=$L($P(jf,";"))
+         Q:$G(short)="" $E(jf,len-11,len) ;"GET" form
+         S $E(jf,len-11,len)=short ;"SET" form
+         Q jf
+GJrnPrefix(jf) ;extract prefix from the journal file name jf
+         N (jf)
+         S fname=$P(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),$L(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")))       
+         Q $e(fname,1,$l($p(fname,"."))-8)
+GetJrnFileName(path) { 
+	i $f(path,"/") q $p(path,"/",$l(path,"/")) ;presumably a Unix path
+	if $f(path,"\") q $p(path,"\",$l(path,"\")) ;presumably a Windows path
+	s vmsfile=$p(path,"]",2) i vmsfile="" q path ;a name only, not a path
+	q $p(vmsfile,";") ;return name from a VMS path without trailing ";"
+}
+dirinvalidmsg(dir1,dir2) 
+ n valid1,valid2,cnt,msg
+ s valid1=$$VALIDIR(dir1),valid2=$$VALIDIR(dir2)
+ s cnt=valid1+valid2 ; cnt = 0 if both invalid, 1 if one is valid
+ s msg="The following journaling "
+ s:cnt msg=msg_"directory is" 
+ s:'cnt msg=msg_"directories are"
+ s msg=msg_" not valid"_$C(13,10)
+ s:'valid1 msg=msg_"     "_dir1_$C(13,10)
+ s:'valid2 msg=msg_"     "_dir2_$C(13,10)
+ q msg
+ChkDirVALID(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,1)
+ChkDirEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkDirOrSpecEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,3)
+ChkDir(R) N N S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkBad S $ZT="" W !,"<"_$P($P($ZE,"<",2),">")_"> error -- invalid directory"
+ Q ""

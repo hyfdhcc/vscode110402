@@ -1,0 +1,388 @@
+ROUTINE SNMPENS [Type=INT]
+SNMPENS    ; SNMP AgentX code for Ensemble ; RFD804  2/01/13
+ ;  
+ ;
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* MONEXT.INC */
+init	; initialize local variables and arrays for Ensemble
+ s $zt="initerr^SNMPENS"
+ s EnsembleInstalled=$o(^%SYS("Ensemble","InstalledNamespace",""))]""
+ q:'EnsembleInstalled
+ ;
+ s ensembleOID="1.3.6.1.4.1"_".16563.2.1"
+ ; Create a reference array of all the tables in the Ensemble MIB
+ ; The "COL" nodes indicate how many columns in the table (and the first 
+ ; accessible column). NOTE: Some tables have numeric indexes which must be 
+ ; marked 'not-accessible' (RFC 2578) and should not be returned for Get or 
+ ; GetNext. For now, all these are just the first column in the table, so all
+ ; we need to know is which ones to skip.
+ ; The "INDEX" nodes indicate a table with secondary index
+ s ENSMIB(1,"COL")="4,2"
+ s ENSMIB(1,"INDEX")=0
+ s ENSMIB(2,"COL")="6,2"
+ s ENSMIB(2,"INDEX")=1
+ s ENSMIB(3,"COL")="11,3"
+ s ENSMIB(3,"INDEX")=1
+ ;
+ ; create integer indexes for Productions and Namespaces
+ s nspace="",INDEX("EnsProd")=0,nsi=0
+ f {
+	 s nspace=$o(^%SYS("Ensemble","InstalledNamespace",nspace))
+	 q:nspace=""
+	 try {
+		 zn nspace
+	 } 
+	 catch {
+		 d $zu(9,"","Unable to intialize Ensemble SNMP for namespace "_nspace,(1>0),1)
+		 continue
+	 }
+	 s nsi=nsi+1,INDEX("EnsNspace", nsi)=nspace
+	 s rs=##class(%Library.ResultSet).%New("Ens.Config.Production:Extent")
+	 d rs.Execute() s cont=1
+	 while (rs.Next()) {
+		 s pi=INDEX("EnsProd")+1
+		 s INDEX("EnsProd",pi)=rs.Data("ID")_";"_nspace,INDEX("EnsProd")=pi
+	 }
+	 zn "%SYS"
+ }
+ s INDEX("EnsNspace")=nsi
+ ;
+ q
+initerr	; trap any errors in Ensemble initialization so it doesn't
+ 		; interfere with ^SNMP startup.
+ s $zt=""
+ zn "%SYS"
+ d $zu(9,"","Unexpected error initalizing Ensemble SNMP - "_$ze,(1>0),1)
+ q
+ ; 
+register()	; register Ensemble for SNMP (non-Windows)
+ ;
+ ; Check if Ensemble installed
+ i $o(^%SYS("Ensemble","InstalledNamespace",""))="" q 1
+ ;
+ ; register Ensemble MIB
+ s ok=1
+ i $o(^%SYS("Ensemble","InstalledNamespace",""))]"" {
+     f tbl=1:1:3 {
+	     s oid=ensembleOID_"."_tbl_".1."_$p(ENSMIB(tbl,"COL"),",",2)_"."_cacheCfg
+	     s ok=$$register^SNMP(oid,12,+ENSMIB(tbl,"COL"),'ENSMIB(tbl,"INDEX"))
+	     q:'ok
+     }
+ }
+ q ok
+ ;
+next(oid) ; get next OID in Ensemble MIB tree
+ ;
+ ; oid = Object ID for start of search
+ ; return = next Ensemble OID (or "" if end of MIB)
+ ;
+ i 'EnsembleInstalled q "" 
+ s tab=$p(oid,".",10),row=$p(oid,".",11),col=$p(oid,".",12)
+ i dbg>1 d log^SNMP("Search Ensemble next - tab="_tab_", row="_row_", col="_col)
+ s index=1 s:tab=0 tab=1 ; RFD170
+ s:tab=3 index=$$nxtevt(0,0)
+ ; Handle secondary indexes. If OID is specified up to (and possibly including)
+ ; the 2nd index, then next node is same item with next index.
+ i tab]"",ENSMIB(tab,"INDEX"),$l(oid,".")'<(12+$l(cacheCfg,".")) { ; RFD093
+	 s index=$p(oid,".",MIBindex2,$l(oid,".")) s:index="" index=0
+	 i dbg>1 d log^SNMP("Search next for Ensemble - index = "_index_".")
+	 i tab=2 s index=$s(index<INDEX("EnsProd"):index+1,1:0)
+	 ; Event Log has 2 secondary indexes (namespace and eventID)
+	 i tab=3 s index=$$nxtevt(+$p(index,"."),+$p(index,".",2))
+	 ; check for a 'not-accessible' item, signal a move to next item
+	 i col<$p(ENSMIB(1,"COL"),",",2) s index=0
+	 if index = 0 {
+		 ; index of '0' here means we've reached the end of
+		 ; the 2nd index, fall through and try to get next item
+		 s index=1 s:tab=3 index=$$nxtevt(0,0)
+	 } else {
+		 ; otherwise, return this item with next 2nd index
+		 s next=$p(oid,".",1,12) g nextex
+	 }
+ }
+ ; Check system instance index. If none specified, then the next
+ ; node is just this one with an index added
+ i $l(oid,".")=12 {
+	 i ENSMIB(tab,"INDEX") s index=1 s:tab=3 index=$$nxtevt(0,0)
+	 s next=oid
+	 g nextex
+ }
+ ; set slen to indicate presence of tab/row/col
+ s slen=$s(col]"":3,row]"":2,tab]"":1,1:0) 
+ i dbg>1 d log^SNMP("Find next entry in Ensemble MIB, slen = "_slen)
+ ; Top of MIB
+ if slen=0 {
+	 s next="1.1."_$p(ENSMIB(1,"COL"),",",2)
+ ; table level
+ } elseif slen=1 {
+	 if tab'>3 {
+		 s next=tab_".1."_$p(ENSMIB(tab,"COL"),",",2)
+	 } else {
+		 s next=""
+	 }
+ ; row level
+ } elseif slen=2 {
+	 ; validate tab and row
+	 if (tab>3)!(row>1) {
+		 s next=""
+	 ; step to first column
+	 } else {
+		 s next=tab_".1."_$p(ENSMIB(tab,"COL"),",",2)
+	 }
+ ; column level
+ } elseif slen=3 {
+	 ; validate tab and row
+	 if (tab>3)!(row>1) {
+		 s next=""
+	 ; step to next column
+	 } elseif (col < +ENSMIB(tab,"COL")) {
+		 s next=tab_".1."_(col+1)
+	 ; step into next table
+	 } else {
+		 ;last table
+		 if tab=3 {
+			 s next=""
+		 ; next table
+		 } else {
+			 s next=(tab+1)_".1."_$p(ENSMIB(tab+1,"COL"),",",2)
+		 }
+	 }
+ }
+ i next]"" s next=ensembleOID_"."_next ; add Cache prefix
+nextex ; Add system instance index (and maybe index for DB or ResSz) at end
+ i next]"" {
+	 s next=next_"."_cacheCfg
+	 i ENSMIB($p(next,".",10),"INDEX") s next=next_"."_index
+ }
+ ;	 
+ q next
+ ;
+ ;
+fetch(oid) ; get the data and type for an OID
+ ;
+ ; oid = Object ID to fetch data for 
+ ; return = $LIST of (data_type, data)
+ ;
+ i 'EnsembleInstalled q $lb(128, 0) 
+ s tab=$p(oid,".",10),row=$p(oid,".",11),col=$p(oid,".",12)
+ i dbg>1 d log^SNMP("Fetch Ensemble table="_tab_", row="_row_", column="_col)
+ ; Fully qualified OID, including system instance index, is required here
+ i $l(oid,".")<(12+$l(cacheCfg,".")) q $lb(128, 0) ; RFD093
+ ; 
+ i tab=1 {
+	 ; 1. ensSysIndex - Index for this Ensemble Cache instance | STRING |
+	 ; 2. ensSysName - Name of this Ensemble Cache instance | STRING |
+	 ; 3. ensSysDir - Installation directory for this Ensemble Cache instance | STRING
+	 ; 4. ensSysVersion - Version string for this Ensemble Cache instance | STRING |
+	 ; 
+     i col=1 q $lb(128, 0)
+	 i col=2 q $lb(4, $p($zu(86),"*",2))
+     i col=3 q $lb(4, $zu(12))
+     i col=4 q $lb(4, $zv)
+	 q $lb(128, 0)
+ }
+ i tab=2 {
+	 ; 1. ensProdIndex - An index to the table of Productions for this system | INTEGER
+	 ; 2. ensProdName - The name of the Ensemble Production | STRING
+	 ; 3. ensProdNamespace - The Cache Namespace for this Production | STRING
+	 ; 4. ensProdStatus - The current status of the Production | STRING
+	 ; 5. ensProdStart - The date-time this Production was last started | STRING
+	 ; 6. ensProdStop - The date-time this Production was last stopped | STRING
+	 n pindex,prod,nspace,data,state,currProd
+     i col=1 q $lb(128, 0)
+     ; if no Productions, fill in a dummy
+     if INDEX("EnsProd")=0 {
+	     i col=2 q $lb(4,"NONE")
+	     i col<7 q $lb(4, "")
+	     q $lb(128, 0)
+     }
+     s pindex=+$p(oid,".",MIBindex2)
+     i pindex="" q $lb(128, 0)
+     i '$d(INDEX("EnsProd",pindex)) q $lb(128, 0)
+     s prod=$p(INDEX("EnsProd",pindex),";",1),nspace=$p(INDEX("EnsProd",pindex),";",2)
+     i col=2 q $lb(4,prod)
+     i col=3 q $lb(4,nspace)
+     i '$lf($lb(4,5,6),col) q $lb(128, 0)
+     zn nspace
+     i col = 4 {
+	     s data = "Unknown"
+         Try {
+             i ''##class(Ens.Director).GetProductionStatus(.currProd,.state) {
+                 s state = $s(prod = currProd: state, 1: $s(state < 0: -2, 1: 2))
+             }
+             else { s state = 0 }
+             s data = ##class(Ens.Config.Production).ProductionStateToText(state)
+         }
+         Catch { s data = "Unknown" }
+     }
+     i col = 5 s data = ##class(Ens.DataType.UTC).LogicalToOdbc($get(^Ens.Configuration("csp","Activity",prod,"started")))
+     i col = 6 s data = ##class(Ens.DataType.UTC).LogicalToOdbc($get(^Ens.Configuration("csp","Activity",prod,"stopped")))
+	 zn "%SYS"
+	 i $lf($lb(4,5,6),col) q $lb(4, data)
+	 q $lb(128, 0)
+ }
+ i tab=3 {
+	 ; 1. ensEvtLogNSIndex - An integer index to the Namespace | INTEGER
+	 ; 2. ensEvtLogIndex - An integer index to the entry in this Event Log | INTEGER
+	 ; 3. ensEvtLogNamespace - The Cache Namespace for this Event Log | STRING
+	 ; 4. ensEvtLogID - The unique identifier for this event log entry | INTEGER
+	 ; 5. ensEvtLogTime - The date and time when this entry was logged | STRING
+	 ; 6. ensEvtLogType - Type of entry: Alert, Assert, Error, Info, Status, Trace, or Warning | STRING
+	 ; 7. ensEvtLogJob - The system job that hosted the event | STRING
+	 ; 8. ensEvtLogSession - The unique identifier for the session associated with this message | STRING
+	 ; 9. ensEvtLogSource - The configuration item (service, process, or operation) that sent the message | STRING
+	 ; 10. ensEvtLogMethod - The host class method that was in progress when the event was logged | STRING
+	 ; 11. ensEvtLogText - The text string associated with the event log entry | STRING
+	 n nsid,evtid,nspace,data,le,fnd
+     i col=1 q $lb(128, 0)
+	 i col=2 q $lb(128, 0)
+	 s nsid=$p(oid,".",MIBindex2),evtid=$p(oid,".",MIBindex2+1)
+	 i nsid=""!(evtid="") q $lb(128, 0)
+	 s nspace=INDEX("EnsNspace", nsid)
+     i col=3 q $lb(4, nspace)
+     i col=4 q $lb(2, evtid)
+     zn nspace s fnd=1
+     s le=##class(Ens.Util.Log).%OpenId(evtid)
+     i le]"" s data=$s(col=5:le.TimeLogged,col=6:le.Type,col=7:le.Job,col=8:le.SessionId,col=9:le.ConfigName,col=10:le.SourceClass_"."_le.SourceMethod,col=11:le.Text,1:"")
+     e  s data=""
+     k le zn "%SYS"
+     i col=5 q $lb(4, $p(data,".",1))
+     i col=6 {
+	     i data="" q $lb(4,"None")
+	     e  q $lb(4, $p("Assert,Error,Warning,Info,Trace,Alert",",",data))
+     }
+     i col=7 q $lb(4, data)
+     i col=8 q $lb(4, data)
+     i col=9 q $lb(4, data)
+     i col=10 q $lb(4, data)
+     i col=11 q $lb(4, $s(data="":"No Event Log entry.",1:data))
+	 q $lb(128, 0)
+ }
+ q $lb(128, 0)
+ ;
+nxtevt(nsid, evtid) ; get next Event Log entry for system
+ ; 
+ ; Params: 	nsid - Namespace index to begin search (0=start)
+ ;			evtid  - Event Log ID to begin search (0=start)
+ ; Return:  string as OID index 'nspace.evtid' or 0 if last one
+ ;
+ n index,nxtevt,rs,cont,first
+ s first=0 s:(nsid=0)&(evtid=0) first=1
+ i dbg>1 d log^SNMP("Find next Ensemble Event ID, NSID="_nsid_", EVID="_evtid)
+ ; maybe first namespace?
+ if nsid=0 s nsid=$o(INDEX("EnsNspace","")),evtid=0
+ ; validate namespace index and quit if there's a problem
+ if (nsid>INDEX("EnsNspace")) q 0
+ s cont=1,index=0
+ ; find next event ID for this namespace, or move to next namespace if none
+ while (cont) {
+	 s nspace=INDEX("EnsNspace",nsid)
+	 zn nspace
+	 s rs=##class(%Library.ResultSet).%New("Ens.Util.Log:Extent")
+	 do rs.Execute() s nxtevt=0
+	 while (rs.Next()) {
+		 i rs.Data("ID")>evtid s nxtevt=rs.Data("ID") q
+	 }
+	 s evtid=nxtevt
+	 k rs
+	 zn "%SYS"
+	 ; check for end and go to next namespace
+	 if evtid=0 {
+		 s nsid=+$o(INDEX("EnsNspace",nsid))
+		 s:nsid=0 cont=0
+	 }
+	 else {
+		 s index=nsid_"."_evtid
+		 s cont=0
+	 }
+ }
+ ; return a dummy entry if there aren't any at all
+ i first,index=0 s index="1.1"
+ i dbg>1 d log^SNMP("Next Ensemble Event index = "_index)
+ q index
+ ;
+systrap(trap, nspace, aux, oid) [dbg,INDEX] PUBLIC {
+ ; 
+ ; Build OIDs necessary for Ensemble traps
+ ; This routine contains most of the "knowledge" about
+ ; the traps defined in ISC-ENSEMBLE.MIB
+ ; 
+ ; trap = the ID number of the trap (last digit of OID)
+ ; nspace = the namespace of the Ensemble production which generated the trap
+ ; aux = optional comma-delimited list of auxiliary info for traps
+ ; oid = (by reference) array of auxiliary OIDs returned (as a list)
+ ; 
+ ; return = main trap OID (success) or 0 (failure)
+ ; 
+ i (trap<1)!(trap>1) q 0
+ ;
+ ; create OID
+ s toid="1.3.6.1.4.1"_".16563.2.2."_trap
+ ;
+ ; set up top oid and cfg name index
+ s ensOID="1.3.6.1.4.1"_".16563.2.1."
+ s cfg=$p($zu(86),"*",2),len=$l(cfg)
+ s cindex=len f i=1:1:len s cindex=cindex_"."_$a(cfg,i)
+ ;
+ ; all traps send cache system instance name
+ s oid=ensOID_"1.1.2."_cindex
+ s oid(1)=$lb(oid, 4, $p($zu(86),"*",2))
+ ;
+ ; build Event trap
+ i trap=1 {
+	 i $g(aux)="" q 0
+	 s evid=+$p(aux,",",1),nsid=""
+	 f  s nsid=$o(INDEX("EnsNspace",nsid)) q:nsid=""  q:INDEX("EnsNspace",nsid)=nspace
+	 ; switch to namespace to get event info
+	 i dbg d log^SNMP("Namspace ID = "_nsid)
+     zn nspace
+     s le=##class(Ens.Util.Log).%OpenId(evid)
+     i le="" zn "%SYS" q 0
+	 ; build auxiliary OIDs
+	 ; ensEvtLogNamespace, ensEvtLogID, ensEvtLogTime, ensEvtLogType, ensEvtLogText
+ 	 s oid=ensOID_"3.1.3."_cindex_"."_nsid_"."_evid
+ 	 s oid(2)=$lb(oid, 4, nspace)
+ 	 s oid=ensOID_"3.1.4."_cindex_"."_nsid_"."_evid
+ 	 s oid(3)=$lb(oid, 4, evid)
+ 	 s oid=ensOID_"3.1.5."_cindex_"."_nsid_"."_evid
+ 	 s oid(4)=$lb(oid, 4, le.TimeLogged)
+ 	 s oid=ensOID_"3.1.6."_cindex_"."_nsid_"."_evid
+ 	 s oid(5)=$lb(oid, 4, le.Type)
+ 	 s oid=ensOID_"3.1.11."_cindex_"."_nsid_"."_evid
+ 	 s oid(6)=$lb(oid, 4, le.Text)
+     k le zn "%SYS"
+ }
+ q toid
+}
+index	; test indexes
+ ; create integer indexes for Productions and Namespaces
+ s nspace="",INDEX("EnsProd")=0
+ f nsi=0:1 {
+	 s nspace=$o(^%SYS("Ensemble","InstalledNamespace",nspace))
+	 q:nspace=""
+	 s INDEX("EnsNspace", nsi+1)=nspace
+	 zn nspace
+	 s rs=##class(%Library.ResultSet).%New("Ens.Config.Production:ProductionStatus")
+	 d rs.Execute() s cont=1
+	 while (rs.Next()) {
+		 s pi=INDEX("EnsProd")+1
+		 s INDEX("EnsProd",pi)=rs.Data("Production")_";"_nspace,INDEX("EnsProd")=pi
+	 }
+	 zn "%SYS"
+ }
+ s INDEX("EnsNspace")=nsi

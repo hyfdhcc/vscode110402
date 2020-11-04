@@ -1,0 +1,42 @@
+ROUTINE compareloop
+compareloop ; different styles of looping
+	/* The first three loops are logically equivalent,
+	    but the 1st is recommended over the 2nd and 3rd versions, */
+	/* The 4th loop is a copy of the third loop,
+	    but without the internal quit, so there's a logical error. */
+	   
+usefor write !, "Using For"
+    for  
+        {
+        set x = $random(10)
+        quit:(x = 5)  // this quit ends the code block AND terminates the loop
+		write !, x
+        }
+        
+usewhile write !!, "Using While"
+    set x = ""
+    while x '= 5 // this condition is evaluated each time, for no reason
+        {
+        set x = $random(10)
+        quit:(x = 5)  // this quit ends the code block AND terminates the loop
+		write !, x
+        }
+        
+usedo write !!, "Using Do/While"
+    do 
+        {
+        set x = $random(10)
+        quit:(x = 5)  // this quit ends the code block AND terminates the loop
+		write !, x
+		}
+    while x '= 5 // this condition is evaluated each time, for no reason
+    
+badusedo write !!, "Using Do/While, but it writes the terminating 5"
+    do 
+        {
+        set x = $random(10)
+		write !, x
+		}
+    while x '= 5 // this condition terminates the loop (a little too late)
+    
+ 

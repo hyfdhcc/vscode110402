@@ -1,0 +1,51 @@
+ROUTINE ECPCliW [Type=INT]
+ECPCliW(sys,session,servername) ; ECP NETWORK CLIENT WRITE DAEMON ;
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;ECPCliW -- ECP Client-side Write Daemon
+ ;
+ ; Each time the ECP client-side Read Daemon (ECPCliR) succeeds in
+ ; establishing a new TCP connection to the server, it jobs off a new copy of
+ ; this routine to handle the writing-side of the connection.  If this
+ ; connection gets reset or we decide to stop using it, then the system code
+ ; in StartClientWriteDmn will return here, and this job simply halts.  The
+ ; read dmn is responsible for looping and setting up new connections, if
+ ; desired. 
+ ;
+ Set $ZT="err"  ; GK362
+ Set TcpDev=$ZU(53) Use TcpDev
+ Write "DD0",!  ;; Send super server key ASAP
+ s clientipaddr=$s($zbitget($zversion(0)_$c(0,0,0,0),42):$SYSTEM.TCPDevice.PeerAddr(0),1:$zu(54,2,$zu(111,0)))
+ Do $ZU(67,15,clientipaddr,$J) ; Set pidtab ipname
+ Do $ZU(67,12,servername,$J)   ; Set pidtab clientname
+ If $System.ECP.Debug()\$zh("2000")#2=1 d $zu(9,"","ECPw: debug: about to call StartClientWriteDmn!!")
+ Do $System.ECP.StartClientWriteDmn(sys,session)
+ If $System.ECP.Debug()\$zh("2000")#2=1 d $zu(9,"","ECPw: debug: StartClientWriteDmn returned!")
+ Close TcpDev
+ Set $ZT="" 
+ Quit 
+err ; GK362+
+	Set $ZT="fatalerror"
+	d $zu(9,"","ECPCliW: error @ ("_$zu(56,2)_") $ZE("_$ZE_") dmn("_$g(clientipaddr)_") sys("_sys_")",(1  /* Warning */>0),1  /* Warning */)
+	Quit
+fatalerror
+	Set $ZT="fatalexit"
+	Do $zu(9,"","Fatal Error "_$ZE_" in ECPCliW at "_$ZU(56,2)_" -- Exiting ECPCliW",(1  /* Warning */>0),1  /* Warning */)
+	do BACK^%ETN
+fatalexit
+	Set $ZT="" 
+	h ; GK362-

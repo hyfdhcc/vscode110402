@@ -1,0 +1,51 @@
+ROUTINE MIS4 [Type=INT]
+MIS4 ;(?,PK) LIST DEVICES & TABLES ; 10 Dec 92  5:44 PM
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+A D OUT^%IS Q:POP  U IO W @IOF,!?30,"%IS table",?45 D ^%D W "  " D ^%T
+ W !!?36,"Prompt",?46,"Other OPEN",?58,"Alt",!
+ W "Device",?11,"#",?22,"Type",?28,"Subtype",?37,"code",?46,"parameters",?58,"dev",?64,"Location",!!
+ S A=0 F I=1:1 S A=$N(^%IS(A)) Q:A<0  I $D(^(A,1)) S X=^(1) D A1
+SUBTYPE ;
+B W !!,"Subtype",?9,"IOM",?15,"IOSL",?21,"IOBS/",?40,"IOF/",!,?21,"ZBS",?40,"ZFF",!!
+ S A="" F I=1:1 S A=$O(^%IS(0,"SUB",A)) Q:A=""  S X=^(A),W=$P(X,"^",2),Y=$P(X,"^",5) W A,?10,+X,?15,$P(X,"^",3),?21,$P(X,"^",4) D B0
+ G B5
+B0 S Z=$X I $L(W)+Z>80,Z>39 W !
+B1 I $L(W)>40 W ?40,$E(W,1,40),! s W=$E(W,41,$L(W)) G B1
+ W ?40,W S W=$P(X,"^",9) W:W'="" !,?21,W S W=$P(X,"^",8),Z=$X I $L(W)+Z>80,Z>39,W'="" W !
+B2 I $L(W)>40 W ?40,$E(W,1,40),! S W=$E(W,41,$L(W)) G B2
+ W ?40,W
+B3 W:Y'="" !,?10,"XY:"
+B4 I $L(Y)>66 W ?10,$E(Y,1,66),! S Y=$E(Y,67,$L(Y)) G B4
+ W:Y'="" ?10,Y W !! Q
+B5 ;W !!!,"Security codes",!!
+ ;S CODE="" F A=1:1 S CODE=$O(^%IS(0,"SEC",CODE)) Q:CODE=""  D C
+ U 0 I IO'="0",$I'=IO U IO W @IOF U 0 C IO
+ Q
+A1 I A=64 W !
+ W A F J=1,2,3,4,6,7,8 W ?$P("11^22^28^37^^46^58^64","^",J)-1," ",$P(X,"^",J) I J=8 W $G(^(0)),!
+ I A#8=7,A>63 W !
+ Q
+C W !,"Security code: ",CODE S AUTO="",PAC="" I $D(^%IS(0,"SEC",CODE)) S AUTO=^(CODE),PAC=^(CODE,0)
+ I AUTO]"" W ?22,"Automatic signon to routine: ",$P(AUTO,"_",2)," in directory: ",^SYS("UCI",+AUTO) W:$P(AUTO,"_",3) " in partition size: ",+$P(AUTO,"_",3)/2
+D I PAC]"" W ?22,"Programmer access code: ",$S(PAC="*":"DEFAULT",PAC]"":PAC,1:"NONE")
+ S U=0 F I=1:1 S U=$N(^%IS(0,"SEC",CODE,U)) Q:U<0  S X=^(U) D UCI
+ W ! Q
+UCI W !,"Directory:  " I $D(^SYS("UCI",U)) W ^(U)
+ E  W U
+ F J=1:1 S Y=$P(X,"_",J) Q:Y=""  S B=$P(Y,"_",2) W:J#5=0 ! W ?J#5*15,$S($P(Y,"_",1)="":$P(B,":",1),1:$P(Y,":",1)) I $P(Y,":",2) W ":",$P(Y,":",2)/2
+ W ! Q

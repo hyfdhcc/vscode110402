@@ -1,0 +1,476 @@
+ROUTINE PKI [Type=INT]
+PKI ; Public Key Infrastructure ; RJW2209 4/24/14
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ Do MENU()
+ Quit
+MENU() PUBLIC { 
+ Set $zt="ERROR"
+ Set List(1)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"2769985424"),"Certificate Authority client")
+ Set List(2)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"942886451"),"Certificate Authority server")
+ For {
+ 	Set Value=""
+	Set Status=##class(%Library.Prompt).GetMenu($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3110499854"),"Select option:"),.Value,.List,,8+128+4)
+ 	If (+Status=0)||(Status=2)||(Value="") Quit
+ 	If Value=1 Do CAClient() Continue
+ 	If Value=2 Do CAServer() Continue
+ }
+ Quit
+ERROR s $zt=""
+ If $ze["<INTERRUPT>" Quit 0
+ ztrap $ze
+}
+CAClient() {
+ Set $zt="ERROR"
+ Set List(1)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"2228826969"),"Submit Certificate Signing Request to Certificate Authority server")
+ Set List(2)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"4240755377"),"Get Certificate(s) from Certificate Authority server")
+ Set List(3)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"2372771294"),"Configure local Certificate Authority client")
+ For {
+ 	Set Value=""
+	Set Status=##class(%Library.Prompt).GetMenu($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3110499854"),"Select option:"),.Value,.List,,8+128+4)
+ 	If (+Status=0)||(Status=2)||(Value="") Quit
+ 	If Value=1 Do SubmitCSR() Continue
+ 	If Value=2 Do GetCertificate() Continue
+ 	If Value=3 Do ConfigureClient() Continue
+ }
+ Quit
+ERROR Set $zt=""
+ If $ze["<INTERRUPT>" Quit 0
+ ztrap $ze
+}
+SubmitCSR() {
+ Set $zt="ERROR"
+ If '$SYSTEM.Security.Check("%Admin_Secure","USE") Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2529476099"),"Operation requires %Admin_Secure:Use privilege") Quit
+ Set client=##class(PKI.CAClient).%OpenId("Cache CA")
+ If '$ISOBJECT(client) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2978617499"),"Certificate Authority client not configured.") Quit
+prompt
+ Set Value=""
+ Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1126793698"),"File name root for local Certificate and Private Key files (without extension):"),.Value,1,100,,8)
+ If (+Status=0)||(Status=2)||(Value="") Quit
+ If '(Value?.(1AN,1"_",1"-")) {
+	 Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3124818803"),"Illegal characters in file name root.")
+	 goto prompt
+ }
+ If ($ZCONVERT(Value,"L")="cache") {
+	 Write !,Value,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2180602812")," is a reserved file name root.")
+	 goto prompt
+ }
+ Set name=Value
+ Set Value=""
+ Use:$ZU(96,14)=1 0:(:"+S")
+ Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"808131938"),"Password for Private Key file (optional):"),.Value,0,100,,8)
+ Use:$ZU(96,14)=1 0:(:"-S")
+ If (+Status=0)||(Status=2) Quit
+ Set password=Value
+	If password'="" {
+	Set Value=""
+	Use:$ZU(96,14)=1 0:(:"+S")
+	Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"978021831"),"Confirm password:"),.Value,0,100,,8)
+	Use:$ZU(96,14)=1 0:(:"-S")
+	If (+Status=0)||(Status=2) Quit
+	If password'=Value Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1721163963"),"Values do not match.") Quit
+ }
+ For i=1:1:$L(client.AttributePrompt,",") Set List(i)=$p(client.AttributePrompt,",",i)
+ Set attrList=""
+ Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"112545658"),"Subject Distinguished Name:")
+ For {
+ 	Set Type=""
+	Set Status=##class(%Library.Prompt).GetMenu($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"548923624"),"Select attribute type:"),.Type,.List,,8+128+4)
+ 	If (+Status=0)||(Status=2)||(Type="") Quit
+ 	Set Value=""
+ 	Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"442056759"),"Attribute value:"),.Value,1,100,,8)
+ 	If (+Status=0)||(Status=2)||(Value="") Quit
+ 	If (Type=1)&& ($L(Value)'=2) {
+	 	Write !!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2703112699"),"Country value must be exactly two characters long.")
+	 	Continue
+	}
+	Set $LIST(attrList,Type)=Value
+	Write !!,"Current value:",!,client.BuildSubject(attrList)
+ }
+ If attrList="" {
+	 Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"922665575"),"Subject Distinguished Name can not be empty.")
+	 Quit
+ }
+ Set Value=1
+ Set Status=##class(%Library.Prompt).GetYesNo($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2946266450"),"Confirm Certificate Signing Request submission?"),.Value,,8)
+ If (+Status=0)||(Status=2)||(Value="") Quit
+ If Value=1 {
+	Set Status=client.SubmitCSR(name,attrList,password,.st)
+	If (''st) { Write !,Status }
+	ElseIf ($ZE["<ZSOAP>") && $ISOBJECT(st) { Write !,st.faultstring }
+	Else { Write !,##class(%SYSTEM.Status).GetErrorText(st) }
+ }
+ Quit
+ERROR Set $zt=""
+ If $ze["<INTERRUPT>" Quit 0
+ ztrap $ze
+}
+GetCertificate() {
+ Set $zt="ERROR"
+ If '$SYSTEM.Security.Check("%Admin_Secure","USE") Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2529476099"),"Operation requires %Admin_Secure:Use privilege") Quit
+ Set client=##class(PKI.CAClient).%OpenId("Cache CA")
+ If '$ISOBJECT(client) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2978617499"),"Certificate Authority client not configured.") Quit
+ Set List(1)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"352136140"),"List certificates issued for this instance")
+ Set List(2)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3246575010"),"List all issued certificates")
+ Set List(3)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2484500178"),"Get Certificate Authority Certificate")
+ Set Value=""
+ Set Status=##class(%Library.Prompt).GetMenu($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3110499854"),"Select option:"),.Value,.List,,8+128+4)
+ If (+Status=0)||(Status=2)||(Value="") Quit
+ If Value=1 {
+	 Set hostname=##class(%SYS.System).GetNodeName()
+	 Set instance=##class(%SYS.System).GetInstanceName()
+	 Set Rset = client.ListCertificates(hostname, instance)
+	 If '(''Rset) Do $SYSTEM.Status.DisplayError(%objlasterror) Quit
+	 If 'Rset.Next() {
+		 Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3073976168"),"No Certificates issued for this instance.")
+		 Quit
+	 }
+	 Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3079124671"),"Certificates issued for instance ")_instance_$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2557207611")," on node ")_hostname_":",!
+	 Write !,Rset.GetColumnName(1)
+	 Write ?10,Rset.GetColumnName(2)
+	 Write !,$$UL(Rset.GetColumnName(1))
+	 Write ?10,$$UL(Rset.GetColumnName(2))
+	 Do {
+		 Write !,Rset.Data(Rset.GetColumnName(1))
+		 Write ?10,Rset.Data(Rset.GetColumnName(2))
+	 } While Rset.Next()
+	 Write !
+ 	 Set Value=""
+	 Set Status=##class(%Library.Prompt).GetNumber($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2127131962"),"Certificate number:"),.Value,,,,8+512)
+	 If (+Status=0)||(Status=2)||(Value="") Quit
+	 Set Number=Value
+ } ElseIf Value=2 {
+	 Set Rset = client.ListCertificates()
+	 If '(''Rset) Do $SYSTEM.Status.DisplayError(%objlasterror) Quit
+	 If 'Rset.Next() {
+		 Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"603413621"),"No issued Certificates.")
+		 Quit
+	 }
+	 Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3214852922"),"Issued Certificates:"),!
+	 Write !,Rset.GetColumnName(1)
+	 Write ?10,Rset.GetColumnName(2)
+	 Write ?45,Rset.GetColumnName(3)
+	 Write ?60,Rset.GetColumnName(4)
+	 Write !,$$UL(Rset.GetColumnName(1))
+	 Write ?10,$$UL(Rset.GetColumnName(2))
+	 Write ?45,$$UL(Rset.GetColumnName(3))
+	 Write ?60,$$UL(Rset.GetColumnName(4))
+	 Do {
+		 Write !,Rset.Data(Rset.GetColumnName(1))
+		 Write ?10,Rset.Data(Rset.GetColumnName(2))
+		 Write:$x>45 ! Write ?45,Rset.Data(Rset.GetColumnName(3))
+		 Write:$x>60 ! Write ?60,Rset.Data(Rset.GetColumnName(4))
+	 } While Rset.Next()
+	 Write !
+ 	 Set Value=""
+	 Set Status=##class(%Library.Prompt).GetNumber($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2127131962"),"Certificate number:"),.Value,,,,8+512)
+	 If (+Status=0)||(Status=2)||(Value="") Quit
+	 Set Number=Value
+ } ElseIf Value=3 {
+	 Set Number=0
+ }
+ Set Status=client.GetCertificate(Number)
+ Write !,Status
+ Quit
+ERROR Set $zt=""
+ If $ze["<INTERRUPT>" Quit 0
+ ztrap $ze
+}
+ConfigureClient() {
+ Set $zt="ERROR"
+ If '$SYSTEM.Security.Check("%Admin_Secure","USE") Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2529476099"),"Operation requires %Admin_Secure:Use privilege") Quit
+ Set client=##class(PKI.CAClient).%OpenId("Cache CA")
+ If '$ISOBJECT(client) Set client=##class(PKI.CAClient).%New()
+ Set Value=client.Server
+ Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"836724224"),"Certificate Authority server hostname:"),.Value,1,100,,8)
+ If (+Status=0)||(Status=2)||(Value="") Quit
+ Set client.Server=Value
+ Set Value=client.Port
+ Set Status=##class(%Library.Prompt).GetNumber($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2975247674"),"Certificate Authority server port number:"),.Value,1,65535,,8)
+ If (+Status=0)||(Status=2)||(Value="") Quit
+ Set client.Port=Value
+ Set Value=client.Path
+ Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1497193697"),"Certificate Authority server path:"),.Value,1,100,,8)
+ If (+Status=0)||(Status=2)||(Value="") Quit
+ Set client.Path=Value
+ Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3667849460"),"Local technical contact:")
+ Set Value=client.ContactName
+ Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1022533488"),"Name:"),.Value,1,100,,8)
+ If (+Status=0)||(Status=2)||(Value="") Quit
+ Set client.ContactName=Value
+ If $L(client.ContactName) {
+	 Set Value=client.ContactPhone
+	 Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"785545014"),"Phone number:"),.Value,0,100,,8)
+	 If (+Status=0)||(Status=2) Quit
+	 Set client.ContactPhone=Value
+	 Set Value=client.ContactEmail
+	 Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1738842227"),"Email address:"),.Value,0,100,,8)
+	 If (+Status=0)||(Status=2) Quit
+	 Set client.ContactEmail=Value
+ }
+ Set Value=1
+ Set Status=##class(%Library.Prompt).GetYesNo($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2556997463"),"Confirm Certificate Authority client configuration?"),.Value,,8)
+ If (+Status=0)||(Status=2)||(Value="") Quit
+ If Value=1 {
+	 Set Status=##class(PKI.CAClient).Configure(client,.st)
+	 If (''st) { Write !,Status }
+	 Else { Write !,##class(%SYSTEM.Status).GetErrorText(st) }
+ }
+ Quit
+ERROR Set $zt=""
+ If $ze["<INTERRUPT>" Quit 0
+ ztrap $ze
+}
+CAServer() {
+ Set $zt="ERROR"
+ Set List(1)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"1364511770"),"Process pending Certificate Signing Request(s)")
+ Set List(2)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"272911485"),"Configure local Certificate Authority server")
+ For {
+ 	Set Value=""
+	Set Status=##Class(%Library.Prompt).GetMenu($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3110499854"),"Select option:"),.Value,.List,,8+128+4)
+ 	If (+Status=0)||(Status=2)||(Value="") Quit
+ 	If Value=1 Do Sign() Continue
+ 	If Value=2 Do ConfigureServer() Continue
+ }
+ Quit
+ERROR Set $zt=""
+ If $ze["<INTERRUPT>" Quit 0
+ ztrap $ze
+}
+Sign() {
+ Set $zt="ERROR"
+ If '$SYSTEM.Security.Check("%Admin_Secure","USE") Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2529476099"),"Operation requires %Admin_Secure:Use privilege") Quit
+ Set server=##class(PKI.CAServer).%OpenId("Cache CA")
+ If '$ISOBJECT(server) Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2585170346"),"Certificate Authority server not configured.") Quit
+ Set Rset = ##class(%Library.ResultSet).%New("PKI.CSR:List")
+ If '(''Rset) Do $SYSTEM.Status.DisplayError(%objlasterror) Quit
+ Do Rset.Execute()
+ If 'Rset.Next() {
+	 Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3691445333"),"No pending Certificate Signing Requests.")
+	 Quit
+ }
+ Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"295460316"),"Pending Certificate Signing Request(s):")
+ Write !,?5,Rset.GetColumnName(2)
+ Write ?40,Rset.GetColumnName(3)
+ Write ?55,Rset.GetColumnName(4)
+ Write !,?5,$$UL(Rset.GetColumnName(2))
+ Write ?40,$$UL(Rset.GetColumnName(3))
+ Write ?55,$$UL(Rset.GetColumnName(4))
+ Set i=0
+ Do {
+	Set i=i+1
+	Set List(i)=Rset.Data(Rset.GetColumnName(1))
+	Write !,i,")"
+	Write ?5,Rset.Data(Rset.GetColumnName(2))
+	Write:$x>40 ! Write ?40,Rset.Data(Rset.GetColumnName(3))
+	Write:$x>55 ! Write ?55,Rset.Data(Rset.GetColumnName(4))
+ } While Rset.Next()
+ Write !
+ Set Value=""
+ Set Status=##class(%Library.Prompt).GetNumber($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1371711935"),"Select Certificate Signing Request:"),.Value,1,i,,8+512)
+ If (+Status=0)||(Status=2)||(Value="") Quit
+ Set Name=List(Value)
+ Set csr=##class(PKI.CSR).%OpenId(Name)
+ If '$ISOBJECT(csr) Quit
+ Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"181162803"),"Request source:")
+ Write !,?5,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3640585071"),"Hostname: "),csr.Hostname
+ Write !,?5,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3013527077"),"Instance: "),csr.Instance
+ Write !,?5,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3508475563"),"Filename: "),csr.Filename
+ Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1678915791"),"Request content: ")
+ Write !,?5,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1505419816"),"Subject Distinguished Name: "),csr.GetSubject()
+ Write !,?5,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1065938164"),"SHA-1 Fingerprint: "),csr.GetSHA1Fingerprint()
+ Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"4061566924"),"Technical contact:")
+ Write !,?5,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3109375206"),"Name: "),csr.ContactName
+ Write !,?5,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"653822123"),"Phone number: "),csr.ContactPhone
+ Write !!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"292645454"),"WARNING!")
+ Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3386538165"),"Before issuing a Certificate you must speak with the Technical Contact listed")
+ Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2722515424"),"above, and verify:")
+ Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"67079745"),"1. Their identity.")
+ Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"900643801"),"2. Their authority to hold a certificate containing the Subject Distinguished")
+ Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3421236426"),"   name shown above, signed by this Certificate Authority.")
+ Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3874746031"),"3. That the SHA-1 Fingerprint shown above matches the one reported to them when")
+ Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"633448467"),"   they submitted the Certificate Signing Request.")
+ Write !
+ Kill List
+ Set List(1)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"2145258646"),"Issue Certificate for TLS/SSL, XML encryption and signature verification")
+ Set List(2)=$get(^%qCacheMsg("%UTILITY",$s($mvv(58)="":"en",1:$mvv(58)),"3113167420"),"Issue Certificate for Intermediate Certificate Authority server")
+ Set List(3)=$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3925580311"),"Delete Certificate Signing Request")
+ Set Value=1
+ Set Status=##Class(%Library.Prompt).GetMenu($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3110499854"),"Select option:"),.Value,.List,,8+128+4)
+ If (+Status=0)||(Status=2)||(Value="") Quit
+ If Value=3 {
+	Set Value=0
+	Set Status=##class(%Library.Prompt).GetYesNo($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2632049671"),"Confirm Certificate Signing Request deletion?"),.Value,,8)
+	If (+Status=0)||(Status=2)||(Value="") Quit
+	If Value=1 {
+		Do ##class(PKI.CSR).%DeleteId(Name)
+		Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1462235849"),"Certificate Signing Request deleted.")
+	}
+	Quit
+ }
+ Set certType=Value
+ Set Value=""
+ Use:$ZU(96,14)=1 0:(:"+S")
+ Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2319294689"),"Password for Certificate Authority's Private Key file:"),.Value,1,100,,8)
+ Use:$ZU(96,14)=1 0:(:"-S")
+ If (+Status=0)||(Status=2) Quit
+ Set password=Value
+ Set Status=server.Sign(Name,password,certType,.st)
+ If (''st) { Write !,Status }
+ Else { Write !,##class(%SYSTEM.Status).GetErrorText(st) }
+ Quit
+ERROR Set $zt=""
+ If $ze["<INTERRUPT>" Quit 0
+ ztrap $ze
+}
+ConfigureServer() {
+ Set $zt="ERROR"
+ If '$SYSTEM.Security.Check("%Admin_Secure","USE") Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2529476099"),"Operation requires %Admin_Secure:Use privilege") Quit
+ Set server=##class(PKI.CAServer).%OpenId("Cache CA")
+ If $ISOBJECT(server) {
+	 Set Value=0
+	 Set Status=##class(%Library.Prompt).GetYesNo($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2431945315"),"Reinitialize Certificate Authority server?"),.Value,,8)
+	 If (+Status=0)||(Status=2)||(Value="") Quit
+	 If Value=1 {
+		 Write !!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"292645454"),"WARNING!")
+		 Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1391437632"),"This will delete the Certificate Authority server configuration and")
+		 Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2474078361"),"all stored Certificates and pending Certificate Signing Requests.")
+		 Set Value=0
+		 Set Status=##class(%Library.Prompt).GetYesNo($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3254389078"),"Confirm Certificate Authority server reinitialization?"),.Value,,8)
+		 If (+Status=0)||(Status=2)||(Value="") Quit
+		 If Value=1 {
+			 Set server=""
+			 Do ##class(PKI.CAServer).%DeleteId("Cache CA")
+			 Do ##class(PKI.CSR).%DeleteExtent()
+			 Do ##class(PKI.Certificate).%DeleteExtent()
+		 }
+	 }
+ }
+ Set attrList=""
+ Set password=""
+ Set days=""
+ If '$ISOBJECT(server) {
+	 Set server=##class(PKI.CAServer).%New()
+prompt
+	 Set Value=""
+	 Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2705323614"),"File name root for Certificate Authority's Certificate and Private Key files (without extension):"),.Value,1,100,,8)
+	 If (+Status=0)||(Status=2)||(Value="") Quit
+	 If '(Value?.(1AN,1"_",1"-")) {
+		 Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3124818803"),"Illegal characters in file name root.")
+		 goto prompt
+	 }
+	 If ($ZCONVERT(Value,"L")="cache") {
+		 Write !,Value,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2180602812")," is a reserved file name root.")
+		 goto prompt
+	 }
+	 Set server.CAFilename=Value
+	 Set Value=""
+	 Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"254666254"),"Directory for Certificate Authority's Certificate and Private Key files:"),.Value,0,100,,8)
+	 If (+Status=0)||(Status=2) Quit
+	 Set server.CAPath=##class(%Library.File).NormalizeDirectory(Value)
+	 If '(##class(%Library.File).Exists(server.CAPath_server.CAFilename_".cer") &&  ##class(%Library.File).Exists(server.CAPath_server.CAFilename_".key")) {
+		 Set Value=""
+		 Use:$ZU(96,14)=1 0:(:"+S")
+		 Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2319294689"),"Password for Certificate Authority's Private Key file:"),.Value,1,100,,8)
+		 Use:$ZU(96,14)=1 0:(:"-S")
+		 If (+Status=0)||(Status=2) Quit
+		 Set password=Value
+		 Set Value=""
+		 Use:$ZU(96,14)=1 0:(:"+S")
+		 Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"978021831"),"Confirm password:"),.Value,1,100,,8)
+		 Use:$ZU(96,14)=1 0:(:"-S")
+		 If (+Status=0)||(Status=2) Quit
+		 If password'=Value Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1721163963"),"Values do not match.") Quit
+		 For i=1:1:$L(server.AttributePrompt,",") Set List(i)=$p(server.AttributePrompt,",",i)
+		 Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1841767271"),"Certificate Authority's Subject Distinguished Name:")
+		 For {
+		 	Set Type=""
+			Set Status=##class(%Library.Prompt).GetMenu($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"548923624"),"Select attribute type:"),.Type,.List,,8+128+4)
+		 	If (+Status=0)||(Status=2)||(Type="") Quit
+		 	Set Value=""
+		 	Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"442056759"),"Attribute value:"),.Value,0,100,,8)
+		 	If (+Status=0)||(Status=2) Quit
+		 	If (Type=1)&& ($L(Value)'=2) {
+			 	Write !!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2703112699"),"Country value must be exactly two characters long.")
+			 	Continue
+		 	}
+		 	Set $LIST(attrList,Type)=Value
+		 	Write !!,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3844781990"),"Current value:"),!,server.BuildSubject(attrList)
+		 }
+		 If attrList="" {
+			 Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"922665575"),"Subject Distinguished Name can not be empty.")
+			 Quit
+		 }
+		 Set Value=server.Days*10
+		 Set Status=##class(%Library.Prompt).GetNumber($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2768323098"),"Validity period for Certificate Authority Certificate (days):"),.Value,1,36500,,8)
+		 If (+Status=0)||(Status=2)||(Value="") Quit
+		 Set days=Value
+	 }
+ } Else {
+	 Write !,"Certificate Authority server filename: ",server.CAFilename
+	 Write !,"Certificate Authority server file path: ",server.CAPath
+ }
+ Set Value=server.Days
+ Set Status=##class(%Library.Prompt).GetNumber($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2036836288"),"Validity period for Certificates issued by Certificate Authority (days):"),.Value,1,36500,,8)
+ If (+Status=0)||(Status=2)||(Value="") Quit
+ Set server.Days=Value
+ Write !,"Configure email:"
+ Set Value=server.SMTPServer
+ Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"3419524308"),"SMTP server:"),.Value,0,100,,8)
+ If (+Status=0)||(Status=2) Quit
+ Set server.SMTPServer=Value
+ If $L(server.SMTPServer) {
+	 Set Value=server.SMTPUsername
+	 Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1148207579"),"SMTP username:"),.Value,0,100,,8)
+	 If (+Status=0)||(Status=2) Quit
+	 Set server.SMTPUsername=Value
+	 If $L(server.SMTPUsername) {
+		 Set Value=""
+		 Use:$ZU(96,14)=1 0:(:"+S")
+		 Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2087001951"),"SMTP password:"),.Value,1,100,,8)
+		 Use:$ZU(96,14)=1 0:(:"-S")
+		 If (+Status=0)||(Status=2) Quit
+		 Set server.SMTPPassword=Value
+		 Set Value=""
+		 Use:$ZU(96,14)=1 0:(:"+S")
+		 Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"978021831"),"Confirm password:"),.Value,1,100,,8)
+		 Use:$ZU(96,14)=1 0:(:"-S")
+		 If (+Status=0)||(Status=2) Quit
+		 If server.SMTPPassword'=Value Write !,$get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"1721163963"),"Values do not match.") Quit
+	 }
+	 Set Value=server.AdminEmail
+	 Set Status=##class(%Library.Prompt).GetString($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"887856928"),"Certificate Authority server administrator's email address:"),.Value,1,100,,8)
+	 If (+Status=0)||(Status=2)||(Value="") Quit
+	 Set server.AdminEmail=Value
+ }
+ Set Value=1
+ Set Status=##class(%Library.Prompt).GetYesNo($get(^%qCacheMsg("%Utility",$s($mvv(58)="":"en",1:$mvv(58)),"2965048557"),"Confirm Certificate Authority server configuration?"),.Value,,8)
+ If (+Status=0)||(Status=2)||(Value="") Quit
+ If Value=1 {
+	 Set Status=##class(PKI.CAServer).Configure(server,attrList,password,days,.st)
+	 If (''st) { Write !,Status }
+	 Else { Write !,##class(%SYSTEM.Status).GetErrorText(st) }
+ }
+ Quit
+ERROR Set $zt=""
+ If $ze["<INTERRUPT>" Quit 0
+ ztrap $ze
+}
+UL(String) PRIVATE {
+	s $P(x,"-",$l(String)+1)=""
+	q x
+}

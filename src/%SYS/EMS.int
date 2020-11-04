@@ -1,0 +1,81 @@
+ROUTINE %SYS.EMS [Type=INT]
+%SYSEMS
+ q
+StartLog(LogFile) public {
+ Kill ^||%LOGFILE
+ Set ^||%LOGFILE=LogFile
+ Close ^||%LOGFILE
+ Open ^||%LOGFILE:"NW":2 
+ If '$test {
+	d $zu(9,"","Failed to open install log "_LogFile_", install continuing",1 /* broadcast and log message*/,1  /* Warning */)
+	Kill ^||%LOGFILE
+	Quit
+ }
+ Set io=$io
+ Use ^||%LOGFILE
+ Use io
+ Use $io::("^"_$ZNAME)
+ Do $zutil(82,12,1)
+ q
+}
+EndLog() public {
+ s $zt="Error"
+ Set log=$get(^||%LOGFILE)
+ If log="" q 
+ Write !,"Closed install log at ",$zdt($h,3),!
+ Do $zutil(82,12,0)
+ Close log
+ Kill ^||%LOGFILE
+ q
+Error s $zt=""
+ d BACK^%ETN
+ q
+}
+rstr(sz,to) [rt] public {
+	New rt Set vr="rt"
+	Set rd=$zutil(82,12,0)
+	Set:$data(sz) vr=vr_"#"_sz Set:$data(to) vr=vr_":"_to
+	Read @vr
+	Do:$data(to) $zutil(96,4,$t) Do $zutil(82,12,rd)
+	Quit rt
+}
+wchr(s) Do output($char(s)) Quit
+wff() Do output($char(12)) Quit
+wnl() Do output($char(13,10)) Quit
+wstr(s) Do output(s) Quit
+wtab(s) Do output($justify("",s-$x)) Quit
+output(s) {
+	Do $zutil(82,12,0)
+	Set io=$io,zr=$zreference
+	;If s["ERROR",s'["ERRORTRAP" Write !,$char(7) If $increment(^||%BUILDERRORS) Set ^||%LOGFILE("output")=1
+	;If s["<INTERRUPT>"||(s["<BREAK>") Write $char(7),s Do EndLog() Do ZR(zr) Quit
+	Set noescape=$replace(s,$char(27,91,109),""),noescape=$replace(noescape,$char(27,91,49,109),"")
+	;If s[$char(27) Set ^||%LOGFILE("output")=1
+	Set file=$get(^||%LOGFILE)
+	If file="" Do EndLog() Do ZR(zr) Quit
+	;If '$get(^||%LOGFILE("short"))||($get(^||%LOGFILE("output"))) Write s If s[$char(13) { Kill ^||%LOGFILE("output") }
+	Use file Write noescape Use io
+	Do $zutil(82,12,1)
+	Do ZR(zr)
+}
+ZR(x) ;
+ZRsetzr ZT:'$D(x) $ZUTIL(96,3,10)
+ if $E(x,1,2)'?1(0A,1"^"1(1"[",1"|",1"%",1A)) {
+	 if $ZBITGET($ZVERSION(0),30),$E(x,1,2)="^(" {
+		 n lang
+		 s lang=$ZU(55,10)  ;should be COS mode since this is LANGV00
+		 do ZRsetzrsub
+		 s lang=$ZU(55,lang)
+		 quit
+	 }
+	 ZT $ZUTIL(96,3,3)
+ }
+ZRsetzrsub ;JO2176
+ S $ZT="ZRerr" N sw,i
+ I x="" d $zu(96,28) Q
+ I x'[""""!$ZU(68,1) S i=$G(@x) Q
+ F i=1:1:$QL(x)-1 I $QS(x,i)="" S $ZT="" ZT $ZUTIL(96,3,16)
+ S sw=$ZU(68,1,1),i=$G(@x),i=$ZU(68,1,sw)
+ Q
+ZRerr S $ZT="" I $D(sw),$S(x="":$ZU(68,43,sw),1:$ZU(68,1,sw))
+ ZT $ZUTIL(96,3,$ZUTIL(96,0))

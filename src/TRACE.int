@@ -1,0 +1,191 @@
+ROUTINE TRACE [Type=INT]
+TRACE    ; Process TRACE utility ;$Change: 4521965 $
+ ; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/diagnostic/trace.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+  ;
+  ;
+  w !,"TRACE utility for Cache. You can signal a process to write a record of all"
+  W !,"procedure, function, or subroutine calls to a file. Then use this utility to "
+  w !,"interpret and display the trace. The trace file is named: CacheTrace_'pid'.txt"
+  w !
+  w !,"Use $$DIR^TRACE(dir) to set the directory where the file(s) should be written"
+  w !,"(process must have create/write access to the directory). $$DIR^TRACE() returns"
+  w !,"the current directory for trace files."
+  w !
+  w !,"Use $$ON^TRACE(pid) to start the trace and $$OFF^TRACE(pid) to end the "
+  w !,"recording. Then just run ^TRACE to see the results."
+  w !
+  ;
+  n pid,out,err,io
+  w !,"Process ID for trace file: " r pid
+  q:pid=""
+  s tf=$$DIR()_"CacheTrace_"_pid_".txt"
+  w !,"Output to: <0> " r out s:out="" out=0 s io=$IO w !
+  i out'=0 {
+      o out:"WN":5 e  w !!,"Unable to open output file ",out q
+      w !,"Processing file ... "
+      u out
+  }  
+  s err=$$Display(tf) u io
+  i err'=0 w !!,err
+  c out
+  q
+  ;
+  ; Read and interpret trace result from a file.
+  ; Output written to current device.
+  ;
+  ; Input: FileName
+  ; Return: Error - "0" is no error, otherwise negative number code and text.
+  ;			e.g. "-1,Unable to open file "
+  ;					
+Display(tf) PUBLIC {
+  s err=0,$ZT="derr",$ZE=""
+  o tf:"R":5 e  s err="-1,Unable to open file "_tf q err
+  s io=$IO,done=0
+  w !,"Reading TRACE file ",tf
+  u tf r line
+  if $p(line,":")'="START" {
+      u io w !,"No START tag found - ",line
+      s level=0,(stime,dtim)=0,(ldsfn,sfn)=$zu(40,0,41),(ldrou,rou)=""
+  } else {
+	  s info=$p(line,":",2,$l(line,":")),stime=$p(info,",",1)
+	  s (ldsfn,sfn)=$p(info,",",2),(ldrou,rou)=$p(info,",",3),level=$p(info,",",4)+1
+	  s tver=$p(info,",",5),dtim(level)=$p(info,",",1)
+	  u io w !,"Trace started - process running routine '",ldrou,"' in ",$s(ldsfn=$zu(40,0,41):"UNKNOWN",1:$p($zu(49,+ldsfn,3),"^",2))
+	  i tver'=1 w !!,"** Version mismatch with trace file, display may not be accurate. **",!
+	  u tf r line
+  }
+  ; display current stack info
+  i $p(line,":")="STACK" {
+	  u io w !,"Current stack for process (level=",level,") :"
+	  while ($p(line,":")="STACK") {
+	      u io w !,?2,line
+	      u tf r line
+	  }  
+  }
+  s last=""
+  while ('done) {
+      s tag=$p(line,":"),next=1 u io
+      if (tag="STOP") {
+	      s info=$p(line,":",2,$l(line,":")),tim=$p(info,",",1)
+	      u io w !!,"End of trace. (",tim-stime," ms)",! s done=1,next=0
+      } elseif (tag="DO") {
+	      s info=$p(line,":",2,$l(line,":")),dtim(level)=$p(info,",",1)
+	      s sfn=$p(info,",",2),rou=$p(info,",",3),ln=$p(info,",",4)
+	      i ( rou]"" & ((rou'=ldrou) ! (sfn'=ldsfn))) {
+		      u io w !,?(level*2),"** Routine mismatch - DO=",sfn,",",rou,", LOADED=",ldsfn,",",ldrou," **"
+	      }
+	      s code=$$getline(sfn,rou,ln)
+	      u io w !!,?(level*2),"CALL @ +",ln,"^",rou," - "
+	      w:$l(code)>(60-$l(rou)) !,?((level+1)*2) w code
+	      s level=level+1
+      } elseif (tag="QUIT") {
+	      s info=$p(line,":",2,$l(line,":"))
+	      s tim=$p(info,",",1),ln=$p(info,",",2)
+	      ; xecutes may throw these QUIT w/ line=0, ignore them
+	      if (ln=0) {
+		      u io w !,?(level*2),"** QUIT with line=0 **"
+	      } else {
+		      s level=level-1
+	          i level<0 u io w !,"** Error in stack level tracing. **" s level=0
+	          s code=$$getline(sfn,rou,ln)
+	          u io w !,?(level*2),"QUIT @ +",ln,"^",ldrou," ("
+	          w $s($g(dtim(level))]"":tim-dtim(level),1:"?")," ms) - "
+	          w:$l(code)>(60-$l(rou)) !,?(level*2) w code
+	      }
+      } elseif (tag="RTNLD") {
+	      s info=$p(line,":",2,$l(line,":")),tim=$p(info,",",1)
+	      s sfn=$p(info,",",2),(ldrou,rou)=$p(info,",",3),ln=$p(info,",",4)
+	      if last="QUIT" {
+		      u io w !,?(level*2),"RETURN to routine '",ldrou,"'"
+		      i sfn'=ldsfn w !,?((level+1)*2)," in ",$s(sfn=$zu(40,0,41):"UNKNOWN",1:$p($zu(49,+sfn,3),"^",2)) s ldsfn=sfn
+	      } else {
+		      u io w !,?(level*2),"LOAD new routine '",ldrou,"'"
+		      i sfn'=ldsfn w !,?((level+1)*2)," in ",$s(sfn=$zu(40,0,41):"UNKNOWN",1:$p($zu(49,+sfn,3),"^",2)) s ldsfn=sfn
+	      }
+      } elseif (tag="ARG") {
+	      while (tag="ARG") {
+		      u io w !,?(level*2),line
+		      u tf r line s tag=$p(line,":")
+	      }
+	      s next=0
+      } else {
+	      u io w !,?(level*2),"Unknown tag - ",line
+      }
+      s last=tag
+      i next u tf r line
+  }
+  u io
+  c tf
+  q err
+  ;
+getline(sfn,rou,line)
+  i sfn=$zu(40,0,41) ! (rou="") q ""
+  i line=0 q "* UNKNOWN *"
+  s ns="^^"_$s(sfn=$zu(40,0,41):"UNKNOWN",1:$p($zu(49,+sfn,3),"^",2)),t="+"_line_"^"_rou
+  zn ns s l=$t(@t) zn "%SYS"
+  i l="" s l="[no source]"
+  q l
+  ;
+derr ; handle unexpected error
+  s $zt=""
+  i $ze["ENDOFFILE" s err="-2,No STOP tag found in file."
+  e  s err="-3,Unexpected error - "_$ze
+  zn "%SYS" c tf
+  q err
+}
+ ; start TRACE
+ON(pid) PUBLIC {
+  i $$DIR() ="" {
+	  i $g(^SYS("MONITOR","TRACE"))="" q "-2,No TRACE directory defined."
+	  s ok=$$DIR(^SYS("MONITOR","TRACE"))
+	  i $p(ok,",")<0 q "-3,Error in TRACE directory setting."
+  } 
+  s ok=$zu(84,18,1,pid)
+  i ok=0 q "-1,PID not found"
+  q 1
+}
+ ; stop TRACE
+OFF(pid) PUBLIC {
+  s ok=$zu(84,18,0,pid)
+  i ok=0 q "-1,PID not found"
+  q 1
+}
+ ; list PIDs with TRACE flag on
+LIST() PUBLIC {
+  q $zu(84,18,2)
+}
+ ;
+ ; get/set TRACE directory
+ ; pass 'dir' as full directory spec, including final delimiter
+ ; 'dir'="" returns current directory
+ ;
+DIR(dir) PUBLIC {
+  i $g(dir)="" {
+      s len=$v($zu(40,2,174),-2)
+      s dir=$v($zu(40,2,174)+1,-2,-len)
+      q dir
+  }
+  s dir=##class(%Library.File).NormalizeDirectory(dir)
+  i '##class(%Library.File).DirectoryExists(dir) q "-1,No such directory."
+  s len=$l(dir)
+  v $zu(40,2,174):-2:1:len
+  f i=1:1:len v $zu(40,2,174)+i:-2:1:$a(dir,i)
+  s ^SYS("MONITOR","TRACE")=dir
+  q dir
+}

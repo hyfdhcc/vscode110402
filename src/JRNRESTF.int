@@ -1,0 +1,632 @@
+ROUTINE JRNRESTF [Type=INT]
+JRNRESTF ;Restore Database from Journal Files (Fast!) ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/jrnrestf.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+restore(fastrest) ;
+ s fastrest=+$g(^SYS("RESTORE","JOURNAL.FAST"),2) i 'fastrest q
+ i '$$ClearSwitch10^JRNRESTB() s fastrest=0 q  
+ i $g(ZJRNUSE)||$g(ZJRNUSEMARK)||$g(dejrn) s fastrest=1
+ i $S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0),$d(clujrn) s fastrest=1
+ s savedisablesort=$g(disablesort),disablesort=1
+ i $g(restopt)'["0" d getrestopts^JRNRESTB(.restopt,1) s restopt=restopt_"0"
+ s shrid=$$InitShare(RestTime,.err) ;defines shrid
+ i $g(err)]"" d resterrlog^JRNRESTB(err)
+ i shrid<0 s fastrest=0 s:$g(savedisablesort)]"" disablesort=savedisablesort q  
+ s statnode=$name(^SYS("RESTORE","JOURNAL",RestTime,"Status"))
+ s trannode=$name(^SYS("RESTORE","JOURNAL",RestTime,"transactions"))
+ i fastrest=2 {
+   s promptnode=$name(@tempnode@("Prompt"))
+   s @promptnode=prompt
+   j restore2:(:3):10 e  d resterrlog^JRNRESTB("unable to job off restore2") s fastrest=1
+ }
+ i fastrest=1 d onejobrest^JRNRESTB q  ;onejobrest will call FreeShare() upon exit
+ d MONITOR(RestTime)
+ m tranopen=@trannode@("open"),badtran=@trannode@("bad")
+ q
+restore2 ;
+ s CHATTY=0 ;a non-interative job
+ s srcdir="" f  s srcdir=$o(dejrn(srcdir),1,AllGlo) q:srcdir=""  d:'AllGlo
+ . s target=$p(AllGlo,",",2,$l(AllGlo))
+ . i target="" s target=srcdir
+ . i $g(nomount(target)) k dejrn(srcdir) ;ignore updates to this database
+ . e  i '$$mount^JRNRESTB(target) k dejrn(srcdir) ;ignore updates to this database 
+ . s targetsfn=$zu(49,target) ;>=0
+ . s global="" f  s global=$o(dejrn(srcdir,global)) q:global=""  s gloidx=$zu(78,74,targetsfn,global) 
+ d onejobrest^JRNRESTB ;onejobrest will call FreeShare() upon exit
+ q
+DejrnFile(jrnf,addr,shrid) ;
+ s $zt="DejrnFileErr"
+ s dev=$zu(78,5,jrnf,0,shrid) i dev<0 ztrap "FILE"
+ i $zu(78,6,dev)
+ i fastrest=1 d DejrnRedirSetup(.dejrn) q dev
+ i '$$DejrnRedirSetup(.dejrn) g closejrnf 
+ f  s last=$zu(78,47,addr),addr=$p(last,",",2),stat=+last q:stat'>0  d
+ . i stat=5 k tranopen($zu(78,10,addr),$ZU(78,25,addr)) i 1
+ . e  i stat=4 s pid=$zu(78,10,addr),sys=$ZU(78,25,addr),tranopen(pid,sys)=addr_","_jrnf,tranopen(pid,sys,"cp")=-1 
+ s sfnskip=$zu(78,76,shrid,-2)
+ s sfn=0 f  {
+   s sfn=$f(sfnskip,1,sfn) q:'sfn  ;look for '1's, which indicate bad db's
+   s targetdir=$g(mounted(sfn-2)) 
+   i targetdir'="",'$g(nomount(targetdir)) { ;the bad db is new
+     s nomount(targetdir)=1 k dir(targetdir) 
+     i $zu(9,"","[JOURNAL RESTORE] Database "_targetdir_" skipped")
+   }
+ }
+ s jrnend=$zu(78,18,0),lastaddr=$zu(78,18,jrnend)
+ i addr<lastaddr d
+ . s resterr="Journal "_$g(jrnf)_" ends unexpectedly at "_addr_" (end expected at "_lastaddr_") - possible corruption in the journal" 
+ . ztrap "JEND"
+closejrnf ;
+ d $zu(78,7,dev) s dev=-1
+ i $zu(78,53,shrid,0,0)
+ q dev
+DejrnFileErr s $zt=""
+ d nxterr^JRNRESTB
+ g closejrnf
+DejrnRedirSetup(redir) ;
+ i $g(ALL) q $$DejrnAllSetup()
+ n srcdir,info,sfn,cnt,target
+ s srcdir="" f  {
+   s srcdir=$o(RedirAdd(srcdir),1,sdir) q:srcdir=""
+   k redir(sdir) ;sdir and srcdir may not be an item anymore
+ }
+ k RedirAdd
+ s srcdir="",cnt=0 f  {
+   s srcdir=$o(redir(srcdir),1,target) q:srcdir=""
+   i ($e(srcdir,1,8)=":mirror:") {
+     s sfn=$zu(78,31,srcdir_":",2)
+   } else {
+     s sfn=$zu(78,31,srcdir,1)
+   }
+   i sfn<0 continue  ;skip directory that is not in journal
+   s target=$p(target,",",2,$l(target))
+   i target="" s target=srcdir
+   i $g(nomount(target))||'$$mount^JRNRESTB(target) k redir(srcdir) continue 
+   s info=$zu(49,target) 
+   d $zu(78,46,sfn,+info,$p(info,",",13)) 
+   s cnt=cnt+1,mounted(+info)=target
+   s sdir=$ZU(78,31,sfn) ;as what's to be retrieved from journal record
+   i sdir'=srcdir s RedirAdd(srcdir)=sdir
+ }
+ s srcdir="" f  {
+   s srcdir=$o(RedirAdd(srcdir),1,sdir) q:srcdir=""
+   m redir(sdir)=redir(srcdir)
+ }
+ q cnt
+DejrnAllSetup() ;restore everything to their original locations
+ n sfn,info,target,cnt
+ s cnt=0 f sfn=0:1:$zu(40,0,41)-1 s target=$ZU(78,31,sfn) i target]"",'$g(nomount(target)) d
+ . i '$$mount^JRNRESTB(target) ;ignore updates to this database 
+ . e  s info=$zu(49,target) d $zu(78,46,sfn,+info,$p(info,",",13)) s cnt=cnt+1,mounted(sfn)=target q
+ q cnt
+InitShare(JrnRestID,err) ;
+ n shrid,defpref,prefetch,minpagestouse,freegmhpages,maxpagestouse,pagestouse
+ n defquesiz,quesiz,stksiz,flag59,UpdaterPID
+ s err="",shrid=-1,$zt="InitShareErr"
+ s minpagestouse=5 ;one for redir table, two for queue, two for stack
+ s freegmhpages=$v($zu(40,2,150),-2,$ZU(40,0,1)) ;# of free gmheap pages
+ s maxpagestouse=freegmhpages\2
+ i maxpagestouse<minpagestouse s maxpagestouse=minpagestouse
+ s pagestouse=maxpagestouse
+ s defquesiz=(pagestouse-1)\2 ;in pages
+ d ##class(%SYS.Journal.System).GetDejournalSettings("jrnrest","",.prefetch,.quesiz,.stksiz,.sizmod)
+ If quesiz<0 Set quesiz=defquesiz
+ If stksiz<0 Set stksiz=defquesiz
+ Set shrid=$zu(78,50,sizmod,quesiz,stksiz)
+ i shrid<0 s err="Error "_shrid_" in allocating memory" q "-2,"_err
+ s ^SYS("RESTORE","JOURNAL",JrnRestID,"share")=shrid
+ s tempnode=$$InitTempNode($name(^SYS("RESTORE","JOURNAL",JrnRestID)),shrid)
+ s flag59=$zu(68,59)
+ j DejrnSetkill(shrid,0,$g(nojrn)):(:3):10
+ i '$zc s err="Unable to job off Update Daemon" q "-3,"_err
+ s UpdaterPID=$zc
+ s ^SYS("RESTORE","JOURNAL",JrnRestID,"setkill",UpdaterPID)=0
+ i prefetch {
+   d $zu(78,70,shrid,prefetch) 
+   s prefstrategy=$g(^SYS("RESTORE","JOURNAL.FAST","prefetch","strategy"),-10000)
+   s rc=$zu(78,90,shrid,prefstrategy) 
+   f i=0:1:(prefetch-1) {
+     j DejrnDbfetch(shrid,i,flag59):(:2):10 
+     i $zc s ^SYS("RESTORE","JOURNAL",JrnRestID,"dbfetch",$zc)=i
+     e  s err="Unable to job off Prefetching Daemon #"_i
+   }
+ }
+ h 1
+ q shrid  
+InitShareErr ;
+ s $zt=""
+ i $ze'["INTERRUPT" d BACK^%ETN s err=$ze,$ze="" 
+ i shrid'<0 d FreeShare(JrnRestID)
+ q "-9,"_err
+FreeShare(JrnRestID,force) ;
+ i $g(shrid)'=$g(^SYS("RESTORE","JOURNAL",JrnRestID,"share")) d resterrlog^JRNRESTB("shrid="_$g(shrid)_" not matching "_$g(^SYS("RESTORE","JOURNAL",JrnRestID,"share"))_", the one associated with "_JrnRestID) q
+ d FreeTempNode($name(^SYS("RESTORE","JOURNAL",JrnRestID)))
+ i '$g(force) d $zu(78,51,-1,0,-1) s shrid=-1,^SYS("RESTORE","JOURNAL",JrnRestID,"share")=-1 q
+ q
+InitTempNode(IdNode,shrid) ;
+ s $zt="InitTempNodeErr"
+ n tmpnode,pid,index
+ s tmpnode=$g(@IdNode@("TempNode")),pid=$j
+ i tmpnode="" {
+   s index=$i(^CacheTemp),tmpnode=$name(^CacheTemp(index))
+   s ^CacheTempNodes("gbl",$j,$name(^CacheTemp(index)))=$lb($h,$username)
+ }
+ s @tmpnode=$lb(IdNode,pid)
+ i $zu(78,71,shrid,tmpnode)
+ q tmpnode
+InitTempNodeErr s $zt="" d BACK^%ETN ztrap $ze
+FreeTempNode(IdNode) ;
+ n tmpnode,pid,shrid
+ s $zt="FreeTempNodeErr" 
+ s tmpnode=$g(@IdNode@("TempNode")) 
+ i tmpnode="" {
+   s shrid=$g(@IdNode@("share"),-1) i +shrid'=shrid ztrap "SHARE"
+   s tmpnode=$zu(78,71,shrid)
+   i tmpnode=""  ;should we log something here??
+   e  s pid=$li(@tmpnode,2) k @tmpnode k ^CacheTempNodes("gbl",$j,$name(@tmpnode))
+ } else {
+   k @tmpnode
+ }
+ q 1
+FreeTempNodeErr s $zt="" d $zu(9,"",$ze,(1>0),1) s $ze="" q 0
+DejrnSetkill(shrid,que,nojrn) ;
+ s $zt="DejrnSetkillExit" i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"} ; Verified 9/26/16 STC
+ d $zu(68,59,$g(flag59))
+ i $zu(68,1,1)
+ i $g(disjrn) d DISABLE^%SYS.NOJRN
+ f skiprec=0:1 q:'$$DejrnSetkillSub()
+DejrnSetkillExit s $zt="^%ETN"
+ i $zu(78,53,shrid,0,1)
+ i $zu(78,51,-1,0,-1)
+ i $ze]"",'$g(zjrnerr) d BACK^%ETN
+ q
+DejrnSetkillSub() ;
+ s $zt="DejrnSetkillErr"
+ k adr ;affecting skiprec
+ i $zu(78,51,shrid,skiprec,1) 
+ q 0 ;exit restore
+DejrnSetkillErr s $zt=""
+ s querecinf=$zu(78,53,shrid,8) ;sfn,gcol,gref
+ s fastaddr=+querecinf
+ s targetsfn=+$p(querecinf,",",2)
+ s targetdir=$p($zu(49,+targetsfn,3),"^",2) 
+ s globcoll=$p(querecinf,",",3)
+ s globnode=$p(querecinf,",",4,$l(querecinf))
+ s globref="^"_$zu(70,4,globnode,$zu(70,1,globcoll)) 
+ s globnam=$qs(globref,0) ;
+ Try {
+   i $o(^SYS("RESTORE","JOURNAL",RestTime,"Files",""),-1,%jrnfile)
+ } Catch {
+   s %jrnfile="" ;ignore the error (perhaps CACHESYS is not accessible)
+ }
+ s %jrnfile=$p($g(%jrnfile),",")
+ d skiprec^JRNRESTB 
+ i $g(nomount(targetdir)),$zu(78,76,shrid,targetsfn)
+ q 1 ;not aborting
+DejrnDbfetch(shrid,que,flag59) ;
+ s $zt="DejrnDbfetchExit"
+ d $zu(68,59,$g(flag59))
+ i $zu(68,1,1)
+ i $zu(78,51,shrid,que,2)
+DejrnDbfetchExit s $zt="^%ETN"
+ i $zu(78,51,-1,0,-1)
+ i $ze]"" d BACK^%ETN
+ q
+MONITOR(JrnRestID,interval) ;
+ s $zt="MONITORerr"
+ n JrnRestNode,addrcur,dejrnstat,dup,filepath,filesize,glo,ii
+ n jrnfcur,jrnfnum,jrnfprv,rc,sharid
+ s jrnfprv="",jrnfnum=0,filesize=0,dejrnstat=0
+ s JrnRestNode=$name(^SYS("RESTORE","JOURNAL",JrnRestID))
+ s sharid=$g(@JrnRestNode@("share"))
+ i sharid<0 {
+   w !,"[Journal restore has ended]",!
+   q 0
+ }
+ n erridx d ShowErr(JrnRestID,.erridx)
+ n jrnfile,a,tempnode,promptnode,prompt
+ s tempnode=$g(@JrnRestNode@("TempNode"))
+ i tempnode="" s tempnode=$zu(78,71,sharid)
+ s promptnode=$name(@tempnode@("Prompt"))
+ s prompt=$g(@promptnode)
+ s interval=$g(interval,10)
+ for  {
+     i $$Stat(sharid,0,.dejrnstat) q  ;restore completed or aborted
+     i dejrnstat]"" {
+       s jrnfcur=$p(dejrnstat,",",1)
+       s addrcur=$p(dejrnstat,",",3)
+       i jrnfprv'=jrnfcur {	// dejournaling a different file now
+	 i jrnfprv'="" w $j(100,6,2)_"%" ;indicate file completely dejournaled
+	 f  {
+	   s filepath=$g(@JrnRestNode@("Files",$i(jrnfnum)))
+	   i filepath="" q  ;presumably the file being processed
+	   s filepath=$zu(12,$p(filepath,","))
+	   i filepath=jrnfcur q  ;by now jrnfnum matches jrnfcur
+	   w !,filepath,!,$j(100,6,2)_"%" ;indicate file completely dejournaled
+	 }
+	 w !,jrnfcur,! 
+	 s filesize=$zu(140,1,jrnfcur) 
+	 i filesize'>0 d resterrlog^JRNRESTB("Error: file size = "_filesize)
+	 s jrnfprv=jrnfcur 
+       }
+       i filesize>0 w $j(addrcur/filesize*100,6,2)_"% "
+     }
+     d ShowErr(JrnRestID,.erridx)
+     i prompt {
+       s a=1 f  {
+         i $d(@promptnode@("default")) q
+	 i $i(a)>(interval*100) q
+	 h .01
+       }
+       i '$d(@promptnode@("default")) continue  ;no prompt for user
+       i jrnfprv'="" w $j(100,6,2)_"%" ;indicate file completely dejournaled
+       s jrnfprv=""
+       f  {
+         s jrnfile=$g(@promptnode@("default"))
+         W !!,"Restore From Journal File: ",jrnfile," =>" R a,!
+         k @promptnode@("error")
+         s @promptnode@("input")=a
+         s a=0 f  {
+           i $d(@promptnode@("error")) q
+           i $i(a)#100=1,$$Stat(sharid,0,.dejrnstat) q  ;restore completed or aborted
+           h .01
+         }
+         i $g(@promptnode@("error"))="" q  ;user input accepted
+         W @promptnode@("error"),! ;error message about user input 
+       }
+       h 1
+       continue
+     }
+     h $g(interval,10)
+ }
+ i dejrnstat>0 {
+   i jrnfprv'="" w $j(100,6,2)_"%" ;indicate file completely dejournaled
+   f  s jrnfnum=$o(@JrnRestNode@("Files",jrnfnum),1,filepath) q:jrnfnum=""  w !,$p(filepath,","),!,$j(100,6,2)_"%" ;indicate file completely dejournaled
+   w !,"[Journal restore completed at ",dejrnstat,"]",!
+   i $d(@JrnRestNode@("DB")) {
+     w !,"The following databases have been updated:",!
+     s sfn="",cnt=0 f  {
+       s sfn=$o(@JrnRestNode@("DB",sfn),1,dir) q:sfn=""  
+       w !,$i(cnt),". ",dir
+     }
+     w !
+   } else {
+     w !,"No database has been updated",!
+   }
+   d ShowErr(JrnRestID,.erridx)
+ } else {
+   d resterrlog^JRNRESTB("[Journal restore aborted: "_$p(dejrnstat,",",2,$l(dejrnstat)))
+ }
+ q dejrnstat ;normal exit: journal restore either completed or aborted
+MONITORerr s $zt="" 
+ n ze s ze=$ze,$ze="" ;since it is just monitoring, no need to pass $ze up
+ i ze["<INTERRUPT>" {
+   w !!,"To monitor journal restore progress, ",!,?8,"DO MONITOR^JRNRESTF(""",JrnRestID,""",",$g(interval,10),")",!
+   q 0 ;monitoring aborted by user 
+ }
+ d resterrlog^JRNRESTB("Monitoring aborted on unexpected error "_ze)
+ q "0,"_ze ;error exit: abort monitoring on unexpected error
+ShowErr(JrnRestID,erridx) ;
+ n JrnRestNode,numerr,i,errmsg,ans
+ s JrnRestNode=$name(^SYS("RESTORE","JOURNAL",JrnRestID))
+ s erridx=+$g(erridx)
+ i $g(@JrnRestNode@("Errors"))>erridx {
+   w !!,*7,"[*** ERRORS ***]"
+   s numerr=@JrnRestNode@("Errors")
+   s i=erridx f  {
+     s i=$o(@JrnRestNode@("Errors",i),1,errmsg) q:i=""  q:i>numerr
+     w !,$j(i,$l(numerr)+1),". ",errmsg
+     i i#23=0 {
+       r !,"--More-- ['Q' to quit or any other key to continue]",ans
+       i "qQ"[$e(ans) q
+     }
+   }
+   s erridx=numerr
+   w !!
+ }
+ q
+Stat(sharid,sys,stat) ;
+ s $zt="StatErr"
+ s stat=$zu(78,53,sharid,1,sys)
+ i stat="" {
+   s stat=$g(^SYS("RESTORE","JOURNAL",JrnRestID,"Status"))
+   i stat q stat ;restore completed or aborted
+ }
+ q 0
+StatErr s $zt=""
+ i $ze'["<FUNCTION>" ztrap $ze ;abort on unexpected error or INTERRUPT
+ s $ze=""
+ s stat=$g(^SYS("RESTORE","JOURNAL",JrnRestID,"Status"))
+ i stat q stat ;restore completed or aborted
+ s stat="" q 0 ;<FUNCTION> due to other cause
+TranslateCount(count) { ;q $$TranslateCount^SHDWSTAT(count)
+ i count<10000 q count
+ s count=count/1000
+ i count<10000 q $j(count,1,4-$l(count\1))_"K"
+ s count=count/1000
+ i count<10000 q $j(count,1,4-$l(count\1))_"M"
+ q $j(count/1000,1,4-$l(count/1000\1))_"G"
+}
+TranslateSize(bytesize) q $$TranslateSize^SHDWSTAT(bytesize)
+TranslateTime(secs) q $$TranslateTime^SHDWSTAT(secs)
+TranslateTimeRange(timelo,timehi) q $$TranslateTimeRange^SHDWSTAT(timelo,timehi)
+TranslateRate(rate) { ;rate is presumed to have decimal point
+ i rate<10000 q $j(rate,1,4-$l(rate\1))_" " ;to avoid mixing with next field
+ s rate=rate/1000
+ i rate<10000 q $j(rate,1,4-$l(rate\1))_"K"
+ s rate=rate/1000
+ i rate<10000 q $j(rate,1,4-$l(rate\1))_"M"
+ q $j(rate/1000,1,4-$l(rate/1000\1))_"G"
+}
+Monitor(sharid,interval) [] public {
+ s $zt="Error"
+ s gcntprv=0,bufhitprv=0,logrdprv=0,lastaddprv=0,findblkprv=0
+ s sys=0,dejrnstat=$zu(78,53,sharid,1,sys)
+ s jrnfprv=$p(dejrnstat,",",1)
+ s queoff0=$p(dejrnstat,",",3),queoffprv=queoff0
+ s dejrnstat=$zu(78,53,sharid,4)
+ s appoff0=+dejrnstat,appoffprv=appoff0
+ s appcnt0=$p(dejrnstat,",",2),appcntprv=appcnt0
+ s quecnt0=$p(dejrnstat,",",3),quecntprv=quecnt0
+ s zhtime0=$zh,(zhtime,zhtimq0,zhtima0)=zhtime0 
+ for  {
+     w !,$zdt($h,3)
+     s gupdstat=$zu(78,73,sharid,2) ;glob stat of updaters
+     s grefstat=$zu(78,73,sharid,3) ;glob stat of prefetchers
+     i grefstat="" s numpref=0
+     e  s numpref=$l(grefstat,",")
+     s perfstat=$zu(78,68,sharid)
+     s readwaitcnt=$p(perfstat,"^",3)
+     s readwaittim=$p(perfstat,"^",2)/1000 ;converted to sec from msec
+     s readwaitmax=$p(perfstat,"^",4)/1000 ;converted to sec from msec
+     w !,$j("QueueWaitTime: ",16),"max=",$$TranslateTime(readwaitmax)
+     i readwaitcnt w ", avg=",$$TranslateTime(readwaittim/readwaitcnt)," (",readwaittim,"/",readwaitcnt,")"
+     s stkswwaitcnt=$p(perfstat,"^",6)
+     s stkswwaittim=$p(perfstat,"^",5)/1000 ;converted to sec from msec
+     s stkswwaitmax=$p(perfstat,"^",7)/1000 ;converted to sec from msec
+     w !,$j("StackWaitTime: ",16),"max=",$$TranslateTime(stkswwaitmax)
+     i stkswwaitcnt w ", avg=",$$TranslateTime(stkswwaittim/stkswwaitcnt)," (",stkswwaittim,"/",stkswwaitcnt,")"
+     s q=1
+     s updstat=$p(perfstat,";",q)
+     s waittim=$p(updstat,",")/1000 ;converted to sec from msec
+     s waitmax=$p(updstat,",",2)/1000 ;converted to sec from msec
+     s convoycnt=$p(updstat,",",3)
+     s convoymax=$p(updstat,",",4)
+     s updatecnt=$p(updstat,",",5)
+     s gstat=$p(gupdstat,",",q)
+     s jobnum=$p(gstat,":")
+     w !,$j("UD ConvoySize: ",16),"max=",convoymax
+     i convoycnt w ", avg=",$j(updatecnt/convoycnt,0,2)," (",updatecnt,"/",convoycnt,")"
+     w !,$j("UD WaitTime: ",16),"max=",$$TranslateTime(waitmax)
+     i convoycnt w ", avg=",$$TranslateTime(waittim/convoycnt)," (",waittim,"/",convoycnt,")"
+     s sys=0,dejrnstat=$zu(78,53,sharid,1,sys)
+     s jrnfcur=$p(dejrnstat,",",1)
+     s queoff=$p(dejrnstat,",",3)
+     s dejrnstat=$zu(78,53,sharid,2)
+     s sizecur=$p(dejrnstat,",",1)
+     s timecur=$p(dejrnstat,",",2)
+     i timecur {
+       w !,$j("PrvFilesRdRate: ",16)
+       w $$TranslateRate(sizecur/timecur),"Bps (",sizecur,"/",timecur,")"
+     }
+     s appoff=$zu(78,53,sharid,4)
+     s appcnt=$p(appoff,",",2),appcntincr=appcnt-appcntprv,appcntprv=appcnt,appcntcumu=appcnt-appcnt0
+     s quecnt=$p(appoff,",",3),quecntincr=quecnt-quecntprv,quecntprv=quecnt,quecntcumu=quecnt-quecnt0
+     s zhtimeprv=zhtime,zhtime=$zh,zhtimeincr=zhtime-zhtimeprv
+     i jrnfcur=jrnfprv {
+       s queoffincr=queoff-queoffprv,queoffprv=queoff,queoffcumu=queoff-queoff0
+     } else {	;file has switched -- reset byte counts and file timer
+       s (queoffprv,queoffincr,queoffcumu,queoff0)=queoff
+       s zhtimq0=zhtime
+       s jrnfprv=jrnfcur
+     }
+     s appoff=+appoff
+     i appoff>=appoffprv { 
+       s appoffincr=appoff-appoffprv,appoffprv=appoff,appoffcumu=appoff-appoff0
+     } else { ;must be processing entries from a different file now
+       s (appoffprv,appoffincr,appoffcumu,appoff0)=appoff
+       s zhtima0=zhtime
+     }
+     s zhtimecumu=zhtime-zhtime0,zhtimecumq=zhtime-zhtimq0,zhtimecuma=zhtime-zhtima0
+     w !,"===== MonRec/",$j(zhtimecumu,1,4-$l(zhtimecumu\1))
+     w ?(21-2),"FileByte/",$j(zhtimecumq,1,4-$l(zhtimecumq\1)),"|",$j(zhtimecuma,1,4-$l(zhtimecuma\1))
+     w ?41,$j("TotRec",10),":+/",$j(zhtimeincr,1,4-$l(zhtimeincr\1))
+     w ?61,$case($ZBITGET($ZVERSION(0),46),0:$case($f(jrnfcur,";"),0:$e(jrnfcur,*-8-$l($p(jrnfcur,".",$l(jrnfcur,"."))),*),:$e(jrnfcur,*-8-$l($p(jrnfcur,".",$l(jrnfcur,"."))),$f(jrnfcur,";")-2)),:jrnfcur),":+/",$j(zhtimeincr,1,0)
+     w !,"RD"
+     i 'zhtimecumu w $j(quecntcumu,12),":N/A"
+     e  w $j(quecntcumu,12),":",$$TranslateRate(quecntcumu/zhtimecumu)
+     i 'zhtimecumq w $j(queoffcumu,12),":N/A"
+     e  w ?21,$j(queoffcumu,12),":",$$TranslateRate(queoffcumu/zhtimecumq)
+     w ?41,$j(quecnt,12),":",$$TranslateRate(quecntincr/zhtimeincr)
+     w ?61,$j(queoff,12),":",$$TranslateRate(queoffincr/zhtimeincr)
+     w !,"UD"
+     i 'zhtimecumu w $j(appcntcumu,12),":N/A"
+     e  w $j(appcntcumu,12),":",$$TranslateRate(appcntcumu/zhtimecumu)
+     i 'zhtimecuma w $j(appoffcumu,12),":N/A"
+     e  w ?21,$j(appoffcumu,12),":",$$TranslateRate(appoffcumu/zhtimecuma)
+     w ?41,$j(appcnt,12),":",$$TranslateRate(appcntincr/zhtimeincr)
+     w ?61,$j(appoff,12),":",$$TranslateRate(appoffincr/zhtimeincr)
+     w !,"===== Job# "
+     w ?12,$j("+",10),":gcnt"
+     w ?29,$j("+",10),":addfnd"
+     w ?46,$j("+",10),":logrd"
+     w ?63,$j("+",10),":bufhit"
+     s q=1
+     s gstat=$p(gupdstat,",",q)
+     s jobnum=$p(gstat,":")
+     s gcnt=$p(gstat,":",2),gcntinc=gcnt-$g(gcntprv(jobnum)),gcntprv(jobnum)=gcnt
+     s bufhit=$p(gstat,":",3),bufhitinc=bufhit-$g(bufhitprv(jobnum)),bufhitprv(jobnum)=bufhit
+     s logrd=$p(gstat,":",5),logrdinc=logrd-$g(logrdprv(jobnum)),logrdprv(jobnum)=logrd
+     s lastadd=$p(gstat,":",6),lastaddinc=lastadd-$g(lastaddprv(jobnum)),lastaddprv(jobnum)=lastadd
+     w !,"UD",?6,jobnum
+     w ?12,$j(gcntinc,10),":",$$TranslateRate(gcnt)
+     w ?29,$j(lastaddinc,10),":",$$TranslateRate(lastadd)
+     w ?46,$j(logrdinc,10),":",$$TranslateRate(logrd)
+     w ?63,$j(bufhitinc,10),":",$$TranslateRate(bufhit)
+     f p=1:1:numpref d
+     . s gstat=$p(grefstat,",",p)
+     . s jobnum=$p(gstat,":")
+     . s gcnt=$p(gstat,":",2),gcntinc=gcnt-$g(gcntprv(jobnum)),gcntprv(jobnum)=gcnt
+     . s bufhit=$p(gstat,":",3),bufhitinc=bufhit-$g(bufhitprv(jobnum)),bufhitprv(jobnum)=bufhit
+     . s logrd=$p(gstat,":",5),logrdinc=logrd-$g(logrdprv(jobnum)),logrdprv(jobnum)=logrd
+     . s findblk=$p(gstat,":",6),findblkinc=findblk-$g(findblkprv(jobnum)),findblkprv(jobnum)=findblk
+     . w !,"PD",p,?6,jobnum
+     . w ?12,$j(gcntinc,10),":",$$TranslateRate(gcnt)
+     . w ?29,$j(findblkinc,10),":",$$TranslateRate(findblk)
+     . w ?46,$j(logrdinc,10),":",$$TranslateRate(logrd)
+     . w ?63,$j(bufhitinc,10),":",$$TranslateRate(bufhit)
+     w !
+     h $g(interval,10)
+ }
+Error s $zt="" 
+ i $ze["INTERRUPT" q
+ i $zj\2#2=0 d $zu(9,"","Monitor^JRNRESTF exited on "_$ze) q
+ w !,$ze,!
+}
+STOP(x) S x=$$UC($E(x,1,4)) Q (x["EXIT")!(x["STOP")!(x["QUIT")!(x["HALT")!($E(x)="^")
+UC(x) q $zcvt(x,"u")
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R
+YNN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No/Never w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ","Vv"[D:"Never => ",1:"") ;Yes, No, Never, or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YNV"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"ynv","YNV") I "^YNV"'[R W "  enter Yes or No, or V for Never, please"
+ S POP=(R="^") W *8,$E($S(R="N":"No",R="Y":"Yes",R="V":"Never",1:""),$L(X),5) Q R
+PATRN(X) N q,i,x,c S q=0,x="" F i=1:1:$L(X) S c=$E(X,i) S:c="""" c=c_c DO
+ . I "*?&#"'[c S x=x_$S(q:c,1:"1"""_c),q=1 Q  ;simple text -- no pattern
+ . S x=x_$E("""",q)_$S(c="&":"1A",c="#":"1N",c="*":".E",1:"1E"),q=0 Q
+ S:q x=x_"""" S X=$P($P($P($P(X,"?"),"#"),"&"),"*") Q x ;return ?@x
+HasFile(f) Q ''$zu(78,22,f) ;1: file exists 0: not
+ ; BITWISE.INC, DPB139 07/09/93
+FIXDIR(dir) ;procedure, dir is passed by reference
+ Q:dir=""
+ i ($zversion(1)=1) d
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ i '($zversion(1)=1) Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))
+ i '($zversion(1)=1) s dir=dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+ Q
+fixdir(dir) ;function
+ Q:dir="" ""
+ i ($zversion(1)=1) d  q dir
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")) dir
+ Q dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+basename(f) ;similar to basename on UNIX
+ Q $P(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),1,$L(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))-1)_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+appdir(d1,d2) ;use $zu(12,d2) to append d2 to canonic dir
+ i ($zversion(1)=1) S $E(d1,$L(d1))="."_d2_"]"
+ i '($zversion(1)=1) S d1=d1_d2
+ Q d1
+VALIDIR(dir) ;validate directory dir and create it if dir doesn't exist
+ new flag
+ s flag=1
+ g vdir2
+validir(dir,flag) ;validate directory dir and optionally create it if it
+vdir2 ; VALIDIR(dir) comes here with flag set to 1
+ quit:$$ChkDirOrSpecEXISTS(dir)'="" 1   ; dir is valid and exists
+ quit:$$ChkDirVALID(dir)="" 0    ; dir is not valid
+ i flag'=1 q 0  ; flag says don't create, return failure
+ new x
+ set x=$$mkdir(dir)  ; returns 0 for success, 1 for failure
+ q:x=1 0  ; failed to create
+ quit:$$ChkDirOrSpecEXISTS(dir)="" 0   ; it doesn't we failed
+ q 1  ; success
+mkdir(dir) ;create a new directory
+ i ($zversion(1)=1) q:$$ChkDirVALID(dir)="" 1  ; dir is invalid, return failure
+ q '##class(%Library.File).CreateDirectoryChain(dir)
+jrnshort(jf,short) ;get/set short form of a journal file name FIXME HYY1999
+         N (jf,short)
+         S len=$L($P(jf,";"))
+         Q:$G(short)="" $E(jf,len-11,len) ;"GET" form
+         S $E(jf,len-11,len)=short ;"SET" form
+         Q jf
+GJrnPrefix(jf) ;extract prefix from the journal file name jf
+         N (jf)
+         S fname=$P(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),$L(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")))       
+         Q $e(fname,1,$l($p(fname,"."))-8)
+GetJrnFileName(path) { 
+	i $f(path,"/") q $p(path,"/",$l(path,"/")) ;presumably a Unix path
+	if $f(path,"\") q $p(path,"\",$l(path,"\")) ;presumably a Windows path
+	s vmsfile=$p(path,"]",2) i vmsfile="" q path ;a name only, not a path
+	q $p(vmsfile,";") ;return name from a VMS path without trailing ";"
+}
+dirinvalidmsg(dir1,dir2) 
+ n valid1,valid2,cnt,msg
+ s valid1=$$VALIDIR(dir1),valid2=$$VALIDIR(dir2)
+ s cnt=valid1+valid2 ; cnt = 0 if both invalid, 1 if one is valid
+ s msg="The following journaling "
+ s:cnt msg=msg_"directory is" 
+ s:'cnt msg=msg_"directories are"
+ s msg=msg_" not valid"_$C(13,10)
+ s:'valid1 msg=msg_"     "_dir1_$C(13,10)
+ s:'valid2 msg=msg_"     "_dir2_$C(13,10)
+ q msg
+ChkDirVALID(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,1)
+ChkDirEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkDirOrSpecEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,3)
+ChkDir(R) N N S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkBad S $ZT="" W !,"<"_$P($P($ZE,"<",2),">")_"> error -- invalid directory"
+ Q ""
+ASKSET(prompt,val,backup,help,pattern) ;procedure
+ N x,done,def,enahelp,helpavail,backupavail
+ s done=0
+ s def=$G(val)
+ s backup=$G(backup,0) 
+ s enabackup=$S(backup=-1:0,1:1)
+ s backupavail=$S(backup=1:1,1:0)
+ s help=$G(help)
+ s enahelp=$S(help="*":0,1:1) ;there might not be any help though
+ s helpavail=$s(enahelp&($L(help)!($D(help)>1)):1,1:0)
+ if 'enabackup n POP
+ s POP=0
+ f  d  q:done!POP
+ . W !,$G(prompt)
+ . w:($X+$L(def))>65 !,?5
+ . w:$L(def) " <",def,">"
+ . if helpavail!backupavail do
+ . . w " [" w:helpavail "?" w:backupavail "^" w "]"
+ . w:(($X+$L(def))>75) !,?5
+ . W " => " 
+ . R x,!
+ . if x="^" d  q
+ . . if 'enabackup s done=1 q
+ . . if backupavail s POP=1 q
+ . . w "...backup not available here"
+ . if enabackup,x="""^""" s x="^",done=1 q
+ . ;
+ . if x="?" d  q
+ . . if 'enahelp s done=1 q
+ . . if 'helpavail w "...help not available here" q
+ . . if $D(help)=1 w !?5,help q
+ . . s x="" f  s x=$O(help(x)) q:x=""  w !,?5,help(x)
+ . . w !
+ . if enahelp,x="""?""" s x="?",done=1 q
+ . i x]"",$g(pattern)]"",x'?@pattern w !?5,$s(helpavail:help,1:"[bad format]") q
+ . s:'$L(x) x=val 
+ . s done=1
+ s:'POP val=x
+ q

@@ -1,0 +1,670 @@
+ROUTINE WMIMOF2 [Type=INT]
+WMIMOF2	; Windows Management Instrumentation MOF defintions ; RFD460  06/15/09
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;
+ ; Class definitions for Cache WMI used to generate the MOF file and IscMOF.
+ ; Definitions are stored in $TEXT pieces as described below.
+ ; Do build^WMIMOF to generate both the .MOF and the .h files.
+ ; 
+ ; At the "Schema^WMIMOF" tag is a list of all Cache classes. Those point to the
+ ; Property defintions stored here:
+ ;
+ ; The Property definitions are constructed similarly to the Class definitions in
+ ; ^WMIMOF at the Class name text label. The first line is a Property definition containing:
+ ; 
+ ; ";;Property_type ; Name_of_Property ; Example_Instance ; Property_qualifiers ; Class_Ref".
+ ; 
+ ; The lines after a Property are the Property Description, terminated by a blank line.
+ ; 
+ ; Property Qualifiers are a comma-delimited list of qualifiers in MOF format 
+ ; (copied directly into the MOF). All Properties are 'Read' by default.
+ ; 
+ ; NOTE !! - The order of properties within a class is important for decoding the 
+ ; messages returned to the DLL. The order here is maintained in IscMOF.h and must
+ ; match the order they appear in the messages constructed by ^WMI.
+ ;
+ ; NOTE !! - The DLL needs the config name to Get a specific instance. It assumes that 
+ ; the first property of each class is the key for that class, and also that the configuration 
+ ; name is the first "_" piece in all keys.
+ ;  
+ ; ==========================================================================
+ ; 
+ ;
+DatabaseSystem	; properties of a Cache configuration. 
+ ;;string;Name;CONFIG1;Key;
+ ;;The text name for this configuration. The name serves as the key for instances of the DatabaseSystem
+ ;;
+ ;;uint16;EnabledState;3;;
+ ;;The current state of the configuration, where 2=Enabled, 3=Disabled. 'Disabled' will 
+ ;;typically mean the configuration is shut down, but could also mean that the we are not 
+ ;;able to connect for some reason. This may also be set to 5 for 'Not Applicable' if the 
+ ;;configuration does not support (older version) or allow WMI connections.
+ ;;
+ ;;datetime;TimeOfLastStateChange;;;
+ ;;The date and time that the system was started.
+ ;;
+ ;;string;ConfigFile;C:/cache/cache.cpf;;
+ ;;The name of the file which contains the startup parameters for this configuration.
+ ;;
+ ;;string;Directory;C:/cache;;;
+ ;;The name of the directory where this configuration is installed.
+ ;;
+ ;;string;Version;;;
+ ;;The installed version string for this configuration, e.g. 5.1.0.579
+ ;;
+ ;;uint32;Port;;;
+ ;;The TCP port number used to connect to this configuration
+ ;;
+ ;;uint32;CurrentUsers;;;
+ ;;The current number of active users for this configuration
+ ;;
+ ;;uint32;RoutineCache;;;
+ ;;The active size of routine memory cache for this configuration (in MB).
+ ;;
+ ;;uint32;DatabaseCache;;;
+ ;;The active size of database memory cache for this configuration (in MB).
+ ;;
+ ;;uint32;LicenseUsed;;;
+ ;;The current number of licenses used on this configuration.
+ ;;
+ ;;uint32;LicenseHigh;;;
+ ;;The high-water mark for licenses used on this configuration.
+ ;;
+ ;;ENDOFMOF
+ ;
+CommonDatabase	; properties of a database within a Cache configuration. 
+ ;;string;InstanceID;CONFIG1_1;Key;
+ ;;The ID for a Cache database. This ID is a constructed ID using the 
+ ;;the configuration name and a database index number.
+ ;;
+ ;;string;Name;C:\\CacheSys\\Mgr\\User\\Cache.dat;;
+ ;;The file name associated with this database.
+ ;;
+ ;;string;ElementName;USER;;
+ ;;The name assigned by the user when creating this database.
+ ;;
+ ;;string;DatabaseVersion;5.1.0.579.0;;
+ ;;The current install version of Cache for the configuration that controls this database.
+ ;;
+ ;;uint32;SizeAllocated;;;
+ ;;The size of the disk space allocated for this database.
+ ;;
+ ;;uint32;SizeUnits;3;;
+ ;;The units for the SizeAllocated property, normally Megabytes (3).
+ ;;
+ ;;uint16;EnabledState;3;;
+ ;;An indicator whether this database is Mounted (2) or NotMounted (3).
+ ;;
+ ;;uint16;ReadOnly;0;;
+ ;;An indicator whether this database is mounted with only Read access, ReadOnly=1 and ReadWrite=0.
+ ;;
+ ;;uint16;Cluster;0;;
+ ;;An indicator whether this database is mounted for Cluster access, ClusterMounted=1 and NoCluster=0.
+ ;;
+ ;;uint32;FreeSpace;0;;
+ ;;The amount of Free Space available in this database. The units are also 
+ ;;indicated by SizeUnits and usually Megabytes. Note that the FreeSpace 
+ ;;measurement must be calculated periodically, and is only available 
+ ;;if the %Monitor FreeSpace property in Cache has been activated.
+ ;;
+ ;;ENDOFMOF
+ ;
+AssociatedDatabaseSystem	; identifies the relationship between databases and the config
+ ;;REF;Database;;Key;Cache_CommonDatabase
+ ;;The database managed by the Cache configuration.
+ ;;
+ ;;REF;Configuration;;;Cache_DatabaseSystem
+ ;;The Cache configuration that is responsible for the database.
+ ;;
+ ;;ENDOFMOF
+ ;
+SystemStatistics	; abstract parent class for Cache statistics at the config level
+ ;;string;InstanceID;CONFIG1_1;Key;
+ ;;The ID for a Cache statistical class. This ID is a constructed ID using the 
+ ;;the configuration name, a one or two character indicator for the type of statistics, 
+ ;;and in some cases an index number.
+ ;;
+ ;;ENDOFMOF
+ ;
+ElementStatisticalData	; relationship between statistical elements and the Cache config
+ ;;REF;Statistics;;Key;Cache_SystemStatistics
+ ;;The statistics for this Cache configuration.
+ ;;
+ ;;REF;Configuration;;;Cache_DatabaseSystem
+ ;;The Cache configuration that is being monitored.
+ ;;
+ ;;ENDOFMOF
+ ;
+DatabaseStatistics	; general performance metrics for a Cache configuration.
+ ;;string;InstanceID;CONFIG1;Override
+ ;;The ID for the general Cache performance metrics instance. This ID is constructed 
+ ;;using the configuration name.
+ ;;
+ ;;uint32;Lines;;;
+ ;;The number of commands that have been executed in this configuration. A 
+ ;;general measure of the amount of 'work' done. This was previously a count
+ ;;of the Lines of code executed, changed for performance reasons, but the
+ ;;property name was left the same. 
+ ;;
+ ;;uint32;RoutineLoads;;;
+ ;;The number of Routines that have been loaded in this configuration.
+ ;;
+ ;;uint32;GlobalRefs;;;
+ ;;The number of Global references performed on this configuration.
+ ;;
+ ;;uint32;GlobalSets;;;
+ ;;The number of Global updates (sets and kills) performed on this configuration.
+ ;;This was previously a separate SET counter, but changed for performance reasons.
+ ;;
+ ;;uint32;GlobalKills;;;
+ ;;The number of Global kills performed on this configuration. This counter is no
+ ;;longer available. The count of KILLs is included as total updates in GlobalSets.
+ ;;
+ ;;uint32;DiskReads;;;
+ ;;The number of database reads from disk for this configuration.
+ ;;
+ ;;uint32;DiskWrites;;;
+ ;;The number of database writes to disk for this configuration.
+ ;;
+ ;;uint32;LogicalReads;;;
+ ;;The number of number of database reads that were available in memory cache 
+ ;;and did not require disk access for this configuration.
+ ;;
+ ;;uint32;JournalEntries;;;
+ ;;The number of Journal entries written for this configuration.
+ ;;
+ ;;uint32;Locks;;;
+ ;;The number of Locks issued for this in this configuration.
+ ;;
+ ;;uint32;LocksSucceed;;;
+ ;;The number of successful Locks on this configuration.
+ ;;
+ ;;uint32;LocksFailed;;;
+ ;;The number of failed Locks on this configuration.
+ ;;
+ ;;uint32;GloThrottleCur;;;
+ ;;The number of jobs currently counted as 'in global' for this configuration.
+ ;;
+ ;;uint32;GloThrottleMax;;;
+ ;;The maximum number of jobs to allow 'in global' on this configuration.
+ ;;
+ ;;uint32;GloThrottleCnt;;;
+ ;;The number of jobs required to wait for the throttle on this configuration.
+ ;;
+ ;;boolean;GloUpLock;;;
+ ;;An indicator that the Write Demon has suspended global updates (1/0) in this configuration.
+ ;;
+ ;;uint32;GloUpCount;;;
+ ;;The number of users currently doing global updates (ijucnt) in this configuration.
+ ;;
+ ;;boolean;WDemonWake;
+ ;;An indicator that the Write Demon is 1=running, or 0=waiting for wakeup in this configuration.
+ ;;
+ ;;ENDOFMOF
+ ;
+ECPClientStatistics	; metrics for the configuration acting as an ECP client.
+ ;;string;InstanceID;CONFIG1_ECP_C;Override;
+ ;;The ID for the Cache ECP client performance metrics instance. This ID is constructed 
+ ;;using the configuration name, and an ECP client indicator.
+ ;;
+ ;;uint32;MaxClientConnections;;
+ ;;The maximum possible number of connections from this client.
+ ;;
+ ;;uint32;ActiveClientConnections;;
+ ;;The number of current active connections from this client.
+ ;;
+ ;;uint32;GlobalRefs;
+ ;;The number of Global references made on this configuration which required ECP requests, 
+ ;;i.e. the globals were not found in the local global cache.
+ ;;
+ ;;uint32;BytesSent;
+ ;;The number of Bytes sent by this configuration as an ECP client.
+ ;;
+ ;;uint32;BytesReceived;
+ ;;The number of Bytes received by this configuration as an ECP client.
+ ;;
+ ;;uint32;BlocksAdded;;
+ ;;The number of blocks added to local cache.
+ ;;
+ ;;uint32;BlocksBufferPurge;;
+ ;;The number of blocks purged by buffer allocation.
+ ;;
+ ;;uint32;BlocksServerPurge;;
+ ;;The number of blocks purged as requested by Server.
+ ;;
+ ;;uint32;GlobalRefsLocal;;
+ ;;The number of Local global references.
+ ;;
+ ;;uint32;GlobalRefsRemote;;
+ ;;The number of Remote global references.
+ ;;
+ ;;uint32;GlobalUpdatesLocal;;
+ ;;Tthe number of Local global updates.
+ ;;
+ ;;uint32;GlobalUpdatesRemote;;
+ ;;The number of Remote global updates.
+ ;;
+ ;;uint32;RoutineCallsLocal;;
+ ;;The number of Local routine calls.
+ ;;
+ ;;uint32;RoutineCallsRemote;;
+ ;;The number of Remote routine calls.
+ ;;
+ ;;uint32;RoutineBufferLocal;;
+ ;;The number of Local routine buffer loads and saves.
+ ;;
+ ;;uint32;RoutineBufferRemote;;
+ ;;The number of Remote routine buffer loads and saves.
+ ;;
+ ;;uint16;CacheEfficiencyLocal;;
+ ;;The cache efficiency rating for local buffers.
+ ;;
+ ;;uint16;CacheEfficiencyRemote;;
+ ;;The cache efficiency rating for remote buffers.
+ ;;
+ ;;ENDOFMOF
+ ;
+ECPServerStatistics	; system metrics for the Cache ECP servers in a configuration.
+ ;;string;InstanceID;CONFIG1_ECP_S;Override
+ ;;The ID for the Cache ECP server performance metrics instance. This ID is constructed 
+ ;;using the configuration name, and an ECP server indicator.
+ ;;
+ ;;uint32;MaxServerConnections;;
+ ;;Maximum possible number of connections to this server.
+ ;;
+ ;;uint32;ActiveServerConnections;;
+ ;;Number of current active connections to this server
+ ;;
+ ;;uint32;GlobalRefs;;
+ ;;The number of Global references returned by this configuration as an ECP server.
+ ;;
+ ;;uint32;GlobalUpdates;;
+ ;;The number of global references that updated the database.
+ ;;
+ ;;uint32;RequestsReceived;
+ ;;The number of Requests received by this configuration as an ECP server.
+ ;;
+ ;;uint32;RequestBuffers;;
+ ;;The number of request buffers processed by this configuration as an ECP server.
+ ;;
+ ;;uint32;BlocksSent;;
+ ;;The number of Blocks sent by this configuration as an ECP server.
+ ;;
+ ;;uint32;LocksGranted;;
+ ;;The number of lock requests that are immediately granted.
+ ;;
+ ;;uint32;LocksFailed;;
+ ;;The number of lock requests that immediately fail.
+ ;;
+ ;;uint32;LocksQueued;;
+ ;;Tthe number of lock requests that must be queued.
+ ;;
+ ;;uint32;LocksQueuedGranted;;
+ ;;The number of lock requests that are queued and later granted.
+ ;;
+ ;;uint32;LocksQueuedFailed;;
+ ;;The number of lock requests that are queued and later fail.
+ ;;
+ ;;uint32;BytesSent;;
+ ;;The number of Bytes sent by this configuration as an ECP server.
+ ;;
+ ;;uint32;BytesReceived;;
+ ;;The number of Bytes received by this configuration as an ECP server.
+ ;;
+ ;;uint32;ServerBlockPurge;;
+ ;;The number of blocks the server has requested the client to purge.
+ ;;
+ ;;uint32;RoutinePurge;;
+ ;;The number of messages sent by the server to purge a routine on the client .
+ ;;
+ ;;uint32;BigKill;;
+ ;;The number of messages sent by the server for big kills.
+ ;;
+ ;;uint32;BigString;;
+ ;;The number of times the block was not sent to the client because the result was a big string.
+ ;;
+ ;;ENDOFMOF
+ ;
+WriteDemonStatistics	; status and statistical properties of the Write Demons
+ ;;string;InstanceID;CONFIG1_WD_1;Override
+ ;;The ID for the Cache Write Demon statistics instance. This ID is constructed 
+ ;;using the configuration name, and Write Demon index.
+ ;;
+ ;;uint32;CurrentBlocks;
+ ;;The number of Blocks written in the current cycle of this Write Demon.
+ ;;
+ ;;uint32;TotalBlocks;
+ ;;The cumulative number of blocks written by this Write Demon.
+ ;;
+ ;;uint32;Cycles;
+ ;;The number of active cycles for this Write Demon.
+ ;;
+ ;;uint32;BlocksPerCycle;
+ ;;The average number of blocks written per cycle by this Write Demon.
+ ;;
+ ;;string;VolumeQueue;
+ ;;A list of databases being served by this Write Demon.
+ ;;
+ ;;ENDOFMOF
+ ;
+GlobalBufferStatistics	; stats for each buffer size group of a Cache configuration. 
+ ;;string;InstanceID;CONFIG1_GB_1;Override
+ ;;The ID for the Cache Global Buffer statistics instance. This ID is constructed 
+ ;;using the configuration name, and Global Buffer index.
+ ;;
+ ;;uint32;Size
+ ;;The buffer size for this queue.
+ ;;
+ ;;uint32;Number
+ ;;The number of buffers of this size.
+ ;;
+ ;;uint32;BatchQueue
+ ;;The offset to the start of the LRU (least recently used) queue.
+ ;;
+ ;;uint32;Interactive
+ ;;The current number of buffers in the interactive process portion of the LRU queue.
+ ;;
+ ;;uint32;MaxInteractive
+ ;;The maximum number of buffers in the interactive process portion of the LRU queue.
+ ;;
+ ;;uint32;MinRequeue
+ ;;The threshold for re-queueing a buffer (interactive processes).
+ ;;
+ ;;uint32;MinRequeueB
+ ;;The threshold for re-queueing a buffer (batch processes).
+ ;;
+ ;;uint32;RequeueCount
+ ;;The number of buffers requeued in the interactive process portion of the LRU queue.
+ ;;
+ ;;uint32;RequeueCountB
+ ;;The number of buffers requeued in the batch process portion of the LRU queue.
+ ;;
+ ;;uint32;WriteQueueSize
+ ;;The current number of interactive buffers queued to be written.
+ ;;
+ ;;uint32;OffLruCount
+ ;;The number of buffers removed from the LRU queue.
+ ;;
+ ;;uint32;WriteSize
+ ;;The number of buffers in the current write cycle.
+ ;;
+ ;;uint32;WriteMax
+ ;;The threshold for waking the Write Demon (interactive processes).
+ ;;
+ ;;uint32;Available
+ ;;The current number of available buffers (interactive processes).
+ ;;
+ ;;uint32;ClosedMin
+ ;;The threshold for no updaters to enter the global module (interactive processes).
+ ;;
+ ;;uint32;ClosedMinB
+ ;;The threshold for no updaters to enter the global module (batch processes).
+ ;;
+ ;;ENDOFMOF
+ ;
+ResourceSeizeStatistics	; one instance for each resource - seize_type combination in a Cache config
+ ;;string;InstanceID;CONFIG1_RSZ_1;Override
+ ;;The ID for the Cache Resource Seize statistics instance. This ID is constructed 
+ ;;using the configuration name, and a Resource/Seize index.
+ ;;
+ ;;string;ElementName;Pid-Nsz
+ ;;A name created by concatenating the resource and seize type, e.g. Pid-Nsz.
+ ;;
+ ;;uint32;Count
+ ;;The count for this resource/seize combination.
+ ;;
+ ;;ENDOFMOF
+ ;
+ECPConnection ; abstract parent class for ECP client and server connections.
+ ;;string;Name;CONFIG1_ECPServer_1;Key
+ ;;The connection name, used as the instance Key. Constructed using the configuration
+ ;;name, a single letter identifier for 'S'erver or 'C'lient, and the ConnectionNumber.
+ ;;
+ ;;ENDOFMOF
+ ;
+ECPServerConnection ; one instance for each ECP Server Connection.
+ ;;string;Name;CONFIG1_ECPServer_1;Override
+ ;;The connection name, used as the instance Key. Constructed using the configuration
+ ;;name, a single letter identifier for 'S'erver or 'C'lient, and the ConnectionNumber.
+ ;;
+ ;;uint16;OperationalStatus;;ValueMap{ "0", "1", "2", "3", "4", "5", "6", "7", "8", "9","10", "11"}, Values{ "Unknown", "Other", "OK", "Degraded", "Stressed", "Predictive Failure", "Error", "Non-Recoverable Error", "Starting", "Stopping", "Stopped", "In Service"}
+ ;;ECP states mapped to CIM standard of OK, Stopped, InService, Stressed, Starting.
+ ;;
+ ;;string;StatusDescription;;
+ ;;A text description of OperationalStatus. This is used to further explain some of the ECP-specific 
+ ;;states as they apply to the CIM standard status codes.
+ ;;
+ ;;uint32;ConnectionNumber;;
+ ;;An integer identifying this ECP connection. Used internally as an index into the table
+ ;;of connections, this may not necessarily be contiguous for active connections.
+ ;;
+ ;;string;SourceHostName;;
+ ;;The logical name for the client connecting to this Server. this is in the format 'host.connection', 
+ ;;where 'host' is the system name for the client and 'connection' is the logical name for the Server
+ ;;as defined on the client.
+ ;;
+ ;;string;SourceGUID;;
+ ;;A globally unique ID assigned to the client.
+ ;;
+ ;;string;SourceIPAddress;;
+ ;;The client IP address.
+ ;;
+ ;;uint32;SourcePortNumber;;
+ ;;The client IP port number.
+ ;;
+ ;;ENDOFMOF
+ ;
+ECPClientConnection ; one instance for each ECP Client Connection.
+ ;;string;Name;CONFIG1_ECPClient_1;Override
+ ;;The connection name, used as the instance Key. Constructed using the configuration
+ ;;name, a single letter identifier for 'S'erver or 'C'lient, and the ConnectionNumber.
+ ;;
+ ;;uint16;OperationalStatus;;ValueMap{ "0", "1", "2", "3", "4", "5", "6", "7", "8", "9","10", "11"}, Values{ "Unknown", "Other", "OK", "Degraded", "Stressed", "Predictive Failure", "Error", "Non-Recoverable Error", "Starting", "Stopping", "Stopped", "In Service"}
+ ;;ECP states mapped to CIM standard of 揙K, Stopped, InService, Stressed, Starting?
+ ;;
+ ;;string;StatusDescription;;
+ ;;A text description of OperationalStatus. This is used to further explain some of the ECP-specific 
+ ;;states as they apply to the CIM standard status codes.
+ ;;
+ ;;uint32;ConnectionNumber;;
+ ;;An integer identifying this ECP connection. Used internally as an index into the table
+ ;;of connections, this may not necessarily be contiguous for active connections.
+ ;;
+ ;;string;LogicalName;;
+ ;;The logical name assigned to the server by this configuration.
+ ;;
+ ;;string;SourceIPAddress;;
+ ;;The IP address for this client.
+ ;;
+ ;;uint32;SourcePortNumber;;
+ ;;The IP port number being used on this client.
+ ;;
+ ;;string;DestinationIPAddress;;
+ ;;The IP address of the server for this connection.
+ ;;
+ ;;uint32;DestinationPortNumber;;
+ ;;The IP port number for the server on this connection.
+ ;;
+ ;;string;DestinationHostName;;
+ ;;The host name of the server for this connection.
+ ;;
+ ;;ENDOFMOF
+ ;
+ECPServerConnectionStats ; statistics for an individual ECP Server Connection.
+ ;;string;InstanceID;CONFIG1_ECPServer_1;Key
+ ;;The ID for the ECPServerConnection metrics instance. This ID is constructed 
+ ;;using the configuration name, an indicator 'ECP_S' for an ECP Server, and the ConnectionNumber.
+ ;;
+ ;;uint32;GlobalRefs;;
+ ;;The number of Global references returned by this configuration as an ECP server.
+ ;;
+ ;;uint32;GlobalUpdates;;
+ ;;The number of global references that updated the database.
+ ;;
+ ;;uint32;RequestsReceived;
+ ;;The number of Requests received by this configuration as an ECP server.
+ ;;
+ ;;uint32;RequestBuffers;;
+ ;;The number of request buffers processed by this configuration as an ECP server.
+ ;;
+ ;;uint32;BlocksSent;;
+ ;;The number of Blocks sent by this configuration as an ECP server.
+ ;;
+ ;;uint32;LocksGranted;;
+ ;;The number of lock requests that are immediately granted.
+ ;;
+ ;;uint32;LocksFailed;;
+ ;;The number of lock requests that immediately fail.
+ ;;
+ ;;uint32;LocksQueued;;
+ ;;Tthe number of lock requests that must be queued.
+ ;;
+ ;;uint32;LocksQueuedGranted;;
+ ;;The number of lock requests that are queued and later granted.
+ ;;
+ ;;uint32;LocksQueuedFailed;;
+ ;;The number of lock requests that are queued and later fail.
+ ;;
+ ;;uint32;BytesSent;;
+ ;;The number of Bytes sent by this configuration as an ECP server.
+ ;;
+ ;;uint32;BytesReceived;;
+ ;;The number of Bytes received by this configuration as an ECP server.
+ ;;
+ ;;uint32;ServerBlockPurge;;
+ ;;The number of blocks the server has requested the client to purge.
+ ;;
+ ;;uint32;RoutinePurge;;
+ ;;The number of messages sent by the server to purge a routine on the client .
+ ;;
+ ;;uint32;BigKill;;
+ ;;The number of messages sent by the server for big kills.
+ ;;
+ ;;uint32;BigString;;
+ ;;The number of times the block was not sent to the client because the result was a big string.
+ ;;
+ ;;ENDOFMOF
+ ;
+ECPConnectionToSystem ; association between an ECPConnection and a DatabaseSystem
+ ;;REF;ECPConnection;;Key;Cache_ECPConnection
+ ;;An ECP Connection for this Cache configuration.
+ ;;
+ ;;REF;Configuration;;;Cache_DatabaseSystem
+ ;;The Cache configuration that manages the Connection.
+ ;;
+ ;;ENDOFMOF
+ ;
+ECPConnectionStatisticalData ; association between a ECPServerConnectionStats and an ECPConnection
+ ;;REF;ECPConnection;;Key;Cache_ECPConnection
+ ;;The ECP Connection that is being monitored.
+ ;;
+ ;;REF;Statistics;;;Cache_ECPServerConnectionStats
+ ;;The statistics for the ECP Connection.
+ ;;
+ ;;ENDOFMOF
+ ;
+ShadowJournal ; abstract parent class for Shadow Journal connections/servers.
+ ;;string;InstanceID;CONFIG1_Shadow_1;Key;
+ ;;The ID for a Cache Shadow Journal class. This ID is a constructed ID using the 
+ ;;the configuration name, the string 'Shadow' and either 'Src' or 'Dest', and 
+ ;;the index number of the Shadow connection/server.
+ ;;
+ ;;ENDOFMOF
+ ;
+ShadowSourceConn ; status and metrics for an individual Shadow Source connection.
+ ;;string;InstanceID;CONFIG1_ShadowSrc_1;Override
+ ;;The ID for the ShadowSourceConn metrics instance. This ID is constructed 
+ ;;using the configuration name, a type indicator of 'ShadowSrc', and the connection number.
+ ;;
+ ;;string;Port;;
+ ;;The Superserver port number of the Cache source instance.
+ ;;
+ ;;string;Address;;
+ ;;The IP address of the shadow destination machine.
+ ;;
+ ;;string;Journal;;
+ ;;The full directory path and file name of journal file currently being copied.
+ ;;
+ ;;string;PID;;
+ ;;The process ID number of the shadow journal copying process.
+ ;;
+ ;;string;Latency;;
+ ;;The estimated time for the shadow to catch up copying the source journal file.
+ ;;
+ ;;uint32;Rate;;
+ ;;The rate in KBs per second that the shadow copies the source journal files.
+ ;;
+ ;;ENDOFMOF
+ ;
+ShadowDestServer ; status and metrics for an individual Shadow Destination serve.
+ ;;string;InstanceID;CONFIG1_ShadowDest_1;Override
+ ;;The ID for the ShadowDestServer metrics instance. This ID is constructed 
+ ;;using the configuration name, a type indicator of 'ShadowDest', and the server number.
+ ;;
+ ;;string;Name;;
+ ;;The name of the Destination Shadow Server.
+ ;;
+ ;;string;Status;;
+ ;;One of three shadowing states: 'stopped', 'processing', 'suspended'.
+ ;;
+ ;;string;Checkpoint;;
+ ;;Offset location in the shadow copy of the journal where it is safe to resume processing.
+ ;;
+ ;;uint32;Errors;;
+ ;;The number of errors reported on the shadow destination.
+ ;;
+ ;;uint32;OpenTx;;
+ ;;The number of open transactions on the shadow (if any).
+ ;;
+ ;;string;Latency;;
+ ;;The estimated time to process current journal records copied from the source.
+ ;;
+ ;;ENDOFMOF
+ ;
+ShadowToSystem ; identifies the relationship between a Cache instance and a Shadow Journal connection
+ ;;REF;Shadow;;Key;Cache_ShadowJournal
+ ;;The Shadow Journal connection/service running on the Cache configuration.
+ ;;
+ ;;REF;Configuration;;;Cache_DatabaseSystem
+ ;;The Cache configuration that is running the Shadow Journal connection/service.
+ ;;
+ ;;ENDOFMOF
+ ;
+Event ; Event class
+ ;;string;InstanceID;CONFIG1_EVT_1;Key
+ ;;A unique ID for a Cache Event. This ID is constructed using the configuration name, 
+ ;;an indicator 'EVT' for an Event, and a sequential counter.
+ ;;
+ ;;string;Name;;
+ ;;The name of this Cache Event.
+ ;;
+ ;;string;Config;;
+ ;;The Cache configuration which generated the Event.
+ ;;
+ ;;uint32;SNMP_ID;;
+ ;;A numeric value identifying this Event type. This number matches the SNMP trap ID
+ ;;
+ ;;uint16;Severity;;
+ ;;The severity of the Event, where 0=info, 1=warning, 2=severe, 3=fatal.
+ ;;
+ ;;string;AdditionalInfo;;
+ ;;A text string containing any secondary information about the event. For example
+ ;;a database full event would indicate the name of the database here.
+ ;;
+ ;;ENDOFMOF
+ ;

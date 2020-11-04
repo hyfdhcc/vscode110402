@@ -1,0 +1,1036 @@
+ROUTINE Integrity [Type=INT]
+Integrity ; Integrity Checker. ; RJF253 3/17/17
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+    New %A,%ANS,%I,%UI,DEND,DIRNAM,EVERY,GD,IO,IOBS,IOF,IOM,IOPAR,IOSL,IOST,
+	IOT,MSYS,POP,R2,RMSDF,GLOBAL,IO,a,all,glo,glolist,mtemp1,rc,%UI,seldbs,ABORT,
+	GLOALL,MULTIPLE,IOMS,%objlasterror,DIRSTAT,errs
+    Set MULTIPLE=0,EVERY=0
+    Set IOMS=$System.Device.GetRightMargin()
+Start ;
+    If '$SYSTEM.Security.Check("%Admin_Operate","USE") {
+	Write !,"Operation requires %Admin_Operate:Use privilege"
+	Quit
+    }
+    New %TIM,%startdirtime,datasize,dirbigblks,dirbigbytes,
+	dirbigstrings,dirpntblks,dirpntbytes,dirtotblks,dirtotbytes,
+	errdirtotal,errmaxpersys,errorreturn,errsystotal,globigblks,
+	globigbytes,globigstrings,glopntblks,glopntbytes,glototblks,
+	glototbytes,i,x,direrrors,freecount,baddir,errsum
+    Set %UI="CHUI",ABORT=0
+    If '$g(MULTIPLE) {
+	Set seldbs=0,EVERY=0,GLOALL=0
+	Write !,"This utility is used to check the integrity of a database",
+	      !,"and the pointer structure of one or more globals.",
+	      !!,"Output results on "
+	Do OUT^%IS
+	Quit:POP'=0
+    }
+    If $I'=IO {
+	Use IO
+	Write "Cache Database Integrity Check on "_$ZD($H,-1)_" at "_$zt($p($h,",",2),-1),
+	      !,"System: "_$zu(110)_"  Configuration: "_$p($zu(86),"*",2),!,!
+	Use 0
+    }
+    Read !,"Stop after any error?"
+    Do NY
+    Set errmaxpersys=$S($t:1,1:1000)
+    Set errsystotal=0 ; start with no errors for the system
+    If $g(MULTIPLE) { Set DIRNAM="" Goto EV0 }
+    Read !,"Do you want to check all databases?"
+    Do NY
+    Write !
+    Goto:$t EVERY
+UCI Use 0 
+    Do ASK^%SYS.FILE 
+    Goto DONE1:(DIRNAM=""!($G(%A)="")) 
+    Do UC1
+    Set errsystotal=0
+    Kill errsum ;tracks last MaxSumErrCnt errors
+    Goto UCI
+UC1 Set $Ztrap="errDM"
+    If '$SYSTEM.Security.Check("%Admin_Operate","USE") {
+	Do msgout($c(13,10)_"Operation requires %Admin_Operate:Use privilege")
+	Quit
+    }
+    Do msgout($c(13,10)_"---Directory "_DIRNAM_"---"_$c(13,10))
+    Set errdirtotal=0
+    Set rc=$$GetDirGlobalsINTEG^%SYS.DATABASE(DIRNAM,.glolist,.errs)
+    For i=1:1:errs {
+	Do ReportError(DIRNAM,errs(i),IO)
+    }
+    If ('+rc) {
+	Set errsystotal=$Get(errsystotal)+1
+	Do ReportError(DIRNAM,rc,IO)
+	Quit
+    }
+    If '$d(glolist) {
+       Do msgout($c(13,10,13,10)_"No globals in this directory"_$c(13,10))
+       Quit
+    }
+    Do CheckGlobalNames(DIRNAM,.glolist,IO)
+    If EVERY!GLOALL { Do allglo Quit }
+    Use 0
+    Read !,"All globals?"
+    Do NY
+    Write !
+    If $t { Do allglo } Else { Do single }
+    Quit
+errDM ;
+    Set $zt=""
+    Do msgout($c(13,10)_"Error "_$ZE_$c(13,10))
+    If $i'=IO { Use 0 Write !,"Error "_$ZE }
+    Quit
+allglo ;
+    If '$SYSTEM.Security.Check("%Admin_Operate","USE") {
+	Write !,"Operation requires %Admin_Operate:Use privilege"
+	Quit
+    }
+    New dirinfo,bigdb,errorLogged
+    Set dirinfo=$zu(49,DIRNAM)
+    Set bigdb=$Piece(dirinfo,",",21)
+    If 'bigdb {
+	Write !,"2K databases no longer supported"
+	Quit
+    }
+    Set %startdirtime=$zh
+    Set rc=$$CheckFreeCount^%SYS.DATABASE(DIRNAM,.freecount)
+    If ('+rc) {
+	Set errsystotal=$Get(errsystotal)+1
+	Set errdirtotal=$Get(errdirtotal)+1
+	Do ReportError(DIRNAM,rc,IO)
+    }
+    Set rc=$$CheckMaps^%SYS.DATABASE(DIRNAM)
+    If ('+rc) {
+        Set errsystotal=$Get(errsystotal)+1,
+	    errdirtotal=$Get(errdirtotal)+1
+	Do ReportError(DIRNAM,rc,IO)
+    }
+    Set errorreturn=0,
+	dirpntbytes=0,
+	dirtotbytes=0,
+	dirpntblks=0,
+	dirtotblks=0,
+	dirbigbytes=0,
+	dirbigblks=0,
+	dirbigstrings=0
+    Set errmaxpersys=$Get(errmaxpersys,1000)
+    Set glo=""
+    For {
+	Set glo=$o(glolist(glo))
+	Quit:glo=""
+	Do msgout($C(13,10)_"Global: "_glo)
+	Set rc=$$CheckIntegrity^%SYS.DATABASE(1,0,DIRNAM,,100,glo,.glolist,dirinfo,
+		.glototblks,.glopntblks,.glototbytes,
+		.glopntbytes,.globigblks,.globigbytes,.globigstrings,.datasize,1)
+	Do ShowMessage(rc,IO)
+	If ('+rc) {
+	    Do RecordError(DIRNAM,rc)
+	    Write:%UI="CHUI" *7,*7
+	    Do msgout($C(13,10))
+	    Set errdirtotal=errdirtotal+1,
+		errsystotal=errsystotal+1
+	    Set:errdirtotal'<500 errorreturn="abortdir"
+	    Set:errsystotal'<errmaxpersys errorreturn="abortsys"
+	}
+	Set dirtotblks=dirtotblks+glototblks,
+	    dirtotbytes=dirtotbytes+glototbytes,
+	    dirpntblks=dirpntblks+glopntblks,
+	    dirpntbytes=dirpntbytes+glopntbytes,
+	    dirbigblks=dirbigblks+globigblks,
+	    dirbigbytes=dirbigbytes+globigbytes,
+	    dirbigstrings=dirbigstrings+globigstrings
+	Quit:$g(errorreturn)="abortdir"
+	Quit:$g(errorreturn)="abortsys"
+    }
+    Set:$g(errdirtotal)>0 direrrors(DIRNAM)=""
+    Do:dirtotblks msgout($C(13,10)_"---Total for directory "_DIRNAM_"---"_$C(13,10)),writedirtotals
+    Quit
+single ;
+    New errorLogged
+    For {
+	Use 0
+	Read !,"Global: ^",glo,!
+	Quit:glo=""
+	If glo="?" {
+	    Write ! Do listglo
+	} ElseIf '$d(glolist(glo)) {
+	    Write "Global does not exist",!
+	} Else {
+	    Do single1
+	}
+    }
+    Quit
+single1 ;
+    Set rc=$$CheckIntegrity^%SYS.DATABASE(1,0,DIRNAM,,100,
+		glo,.glolist,$zu(49,DIRNAM),
+		.glototblks,.glopntblks,.glototbytes,.glopntbytes,
+		.globigblks,.globigbytes,.globigstrings,.datasize)
+    If ('+rc) {
+	Use IO
+	Write *7,*7,!
+	Set errsystotal=$Get(errsystotal)+1,
+	    errdirtotal=$Get(errdirtotal)+1
+	Set direrrors(DIRNAM)=""
+	Do RecordError(DIRNAM,rc)
+    }
+    If %UI="CHUI",IO'=$IO { Use IO Write !,"Global: ",glo,! }
+    Do ShowMessage(rc,IO)
+    Quit
+listglo ;
+    Set glo=""
+    For {
+	Set glo=$o(glolist(glo))
+	Quit:glo=""
+	Write glo
+	If $x>60 { Write ! } Else { Write ?$x+11\12*12 }
+    }
+    Write !
+    Quit
+EVERY ;
+    Use:%UI="CHUI" IO
+    Set DIRNAM="",EVERY=1
+    Kill direrrors
+EV0 ;
+    For {
+	If seldbs {
+	    Set PIECE=PIECE+1,DIRNAM=$P(SVDIRNAM,",",PIECE)
+	} Else {
+	    Set DIRNAM=$O(^SYS("UCI",DIRNAM))
+	}
+	Quit:DIRNAM=""
+	If %UI="CHUI",EVERY,($i'=IO) {
+	    Use 0
+	    Write !,"Checking "_DIRNAM_" at "_$zt($p($h,",",2),-1)
+	}
+	Continue:$g(^SYS("UCI",DIRNAM))]""
+	Set %A=DIRNAM
+	Set DIRSTAT=$P($ZU(49,DIRNAM),",")
+	If DIRSTAT<0 { Do ERR1 Continue }
+	Do FILE
+	Do:%A'="" UC1
+	If ($g(errorreturn)="abortsys")||($ze["<ZAbor") {
+	   Set ABORT=1
+	   Quit
+	}
+    }
+    Goto DONE
+FILE ;
+    Set $ZT="NOFILE^"_$ZN
+    Goto INT^%SYS.FILE ; %FILE quits back to EV0
+NOFILE ;
+    Set %A=""
+    Quit
+ERR ;
+    Set:$ZE?1"<ZAbor".E ABORT=1
+DONE Close 63
+    If %UI="GUI" {
+	Do:'ABORT msgout($C(13,10)_"Integrity Check Completed at "_$zdt($h,-1))
+	If $$IjcMsg^%Wprima("JS")
+    }
+    If errsystotal {
+	Do msgout($c(13,10)_"*****ERRORS WERE FOUND *****"_$c(13,10))
+	Set errsum=$G(errsum,0)  ;really should be defined by now
+	If errsum>100 {
+	    Do msgout($c(13,10)_"***** "_(100-errsum)_" overflowed the summary. See the report for the full list of errors *****")
+	} ElseIf errsum {
+	    Do msgout($c(13,10)_"***** The following errors were detected *****")
+	}
+	Set DIRNAM=""
+	Set i=$O(errsum(""))
+	While (i'="") {
+	    If DIRNAM'=errsum(i,1) {
+		Set DIRNAM=errsum(i,1)
+		Kill direrrors(DIRNAM)
+		Do msgout($C(13,10,10)_"************************************************")
+		Do msgout($C(13,10)_"*** Errors in directory: "_DIRNAM_" ***")
+		Do msgout($C(13,10)_"************************************************")
+	    }
+	    Do ShowMessage(errsum(i,2),IO)
+	    Set i=$O(errsum(i))
+	}
+	If $D(direrrors) {
+	    Do msgout($C(13,10,10)_"**** The following directories had errors not reported in the above summary ****")
+	    Set baddir=$O(direrrors(""))
+	    While (baddir'=""){
+		Do msgout($c(13,10)_"Errors were found in directory "_baddir)
+		Set baddir=$Order(direrrors(baddir)) 
+	    }
+	}
+    }
+    Do:'errsystotal msgout($c(13,10)_"No Errors were found."_$c(13,10))
+    Do:$g(errorreturn)="abortdir" msgout($c(13,10)_"*****Checking was aborted because of too many errors ("_errdirtotal_") in directory "_DIRNAM)
+    Do:$g(errorreturn)="abortsys" msgout($c(13,10)_"*****Checking was aborted because of too many errors ("_errsystotal_") on this system.")
+DONE1 ;
+	u 0
+    If %UI="CHUI" {
+	If $I'=IO {
+	    Close IO
+	} ElseIf $D(IOMS)=1 {
+	    Use IO:/MAR=IOMS
+	}
+    }
+    Quit
+msgout(mess) [IO] { Do wrtmsg(mess,IO) }
+NY  New X,A
+    Set X=$X
+NYQ Read "  No=> ",A
+    Set A=$f("NnYy",$e(A))
+    If 'A { Write !?X Goto NYQ }
+    Set $T=(A'<4)
+    Quit
+writedirtotals ;
+    New bytes,blksize,kb,mb
+    Set blksize=$Piece(dirinfo,",",2)
+    Do writesub("Pointer Level",dirpntblks,dirpntbytes,0)
+    Do writesub("Data Level",dirtotblks-dirpntblks-dirbigblks,dirtotbytes-dirpntbytes-dirbigbytes,0)
+    Do writesub("Big String",dirbigblks,dirbigbytes,1)
+    Do writesub("Total",dirtotblks+$$getadditionalblocks(DIRNAM,dirinfo,bigdb),dirtotbytes,0)
+    Set kb=freecount*blksize\1024,mb=0
+    Set:kb>10240 kb=kb\1024,mb=1
+    Set a=$fn(freecount,","),a=$j("",10-$l(a))_a_" Free blocks"
+    Set a=a_$j("",43),a=$e(a,1,43-$l(kb))_kb_$s(mb:"MB",1:"kb")
+    Do msgout(a_$c(13,10))
+    Do msgout($C(13,10)_"Elapsed time = "_$fn(($zh-%startdirtime),"",1)_" seconds "_$zdt($h,-1)_$C(13,10))
+    If errdirtotal {
+	Set errsum=$G(errsum,0)
+	If errsum>100 {
+	    Do msgout($c(13,10)_"***** "_(100-errsum)_" overflowed the summary. See the report for the full list of errors *****")
+	} ElseIf errsum {
+	    Do msgout($c(13,10)_"***** The following errors were detected *****")
+	}
+	Set i=$O(errsum(""))
+	While (i'="") {
+	    Set DIRNAM=errsum(i,1)
+	    Kill direrrors(DIRNAM)
+	    Do ShowMessage(errsum(i,2),IO)
+	    Set i=$O(errsum(i))
+	}
+	Do:$D(direrrors) msgout("  *** "_errdirtotal_" ERROR"_$case(errdirtotal,1:"",:"S")_" ***")
+    } Else {
+	Do msgout($c(13,10)_"No Errors were found in this directory."_$c(13,10,13,10))
+    }
+    Quit
+writesub(message,blks,bytes,bigflag) [datasize,blksize,dirbigstrings] PRIVATE {;
+    Set a=$fn(blks,","),a=$j("",10-$l(a))_a_" "_message_" blocks"
+    If blks {
+	Set kb=blks*(blksize\1024),mb=0 ;s kb=bytes\1024
+	Set:kb>10240 kb=kb\1024,mb=1
+	Set a=a_$j("",43),a=$e(a,1,43-$l(kb))_kb_$s(mb:"MB",1:"kb")
+	Set:blks a=a_" ("_(bytes\blks*100\datasize)_"% full)"
+	If bigflag,dirbigstrings { Set a=a_" # = "_$fn(dirbigstrings,",") }
+    }
+    Do msgout(a_$C(13,10))
+}
+CheckPointer ;
+    New %A,DEND,DIRNAM,GD,blk,errmaxperglobal,errmaxpersys,errsystotal,mtemp1,
+	numblks,rc,x
+    Do ASK^%SYS.FILE
+    Quit:DIRNAM=""
+    Open 63:("^^"_DIRNAM)
+    Set errmaxperglobal=100
+    Read !,"Stop after any error?"
+    Do NY
+    Set errmaxpersys=$S($T:1,1:1000)
+    For {
+	Read !!,"Pointer Block: ",blk,!
+	Quit:blk=""
+	Read "# pointer blocks to process: ",numblks,! q:numblks="stop"
+	Set numblks=+numblks
+	Set rc=$$CheckPointerIntegrity^%SYS.DATABASE(DIRNAM,blk,errmaxperglobal,numblks)
+	Do ShowMessage(rc,$Get(IO,0))
+	Do:('rc) RecordError(DIRNAM,rc)
+    }
+    Close 63
+    Quit
+CheckGlobalNames(dbname,&glolist,IO) PRIVATE {
+    Set glo=$O(glolist(""))
+    While ($L(glo)) {
+	If '$zname(glo,3) {
+	    Set rc=$$Error^%apiOBJ(216,glo)
+	    Do ReportError(dbname,rc,IO)
+	}
+	Set glo=$O(glolist(glo))
+    }
+}
+getadditionalblocks(dir,dirinfo,bigdb) [] PRIVATE {
+    Quit:'bigdb 0 ; this does not work for legacy 2k databases
+    Set nummaps=$p(dirinfo,",",24)
+    Set contig=$Case(bigdb,0:0,1:16,2:8,3:4,4:2,5:1)
+    Set maxsat=$Case(bigdb,1:5,2:2,3:1,4:1,5:1)
+    Set addblks=2 ; for blocks 1 and 2
+    Set glodirs=1
+    Open 63:"^^"_dir
+    View 3
+    For { Set link=$v($Zutil(40,32,4),0,4) Quit:'link  Set glodirs=glodirs+1 View link }
+    Set addblks=addblks+glodirs
+    For map=1:1:nummaps {
+	If map=1 {
+	    Set addblks=addblks+12
+	} ElseIf map=2 {
+	    Set addblks=addblks+($case(contig,1:1,:(contig-1))*6)+((maxsat-1)*6)
+	} ElseIf map#contig=1 {
+	    Set addblks=addblks+(contig*6)
+	}
+    }
+    Quit addblks
+}
+guiInteg(index) ;
+    Set $zt="ERR1"
+    Set %UI="GUI",ABORT=0,IO=$I
+    Quit:'$$IjcOpen^%Wprima("Job")
+    If $$IjcMsg^%Wprima("PD"_$J) ; Send a PID message to Message2
+    Set parm=^CacheTemp(index)
+    Set EVERY=$p(parm,";",1)
+    Set DIRNAM=$p(parm,";",2)
+    Set GLOALL=$P(parm,";",3)
+    Set errsystotal=0 ; start with no errors for the system
+    Set seldbs=0 i GLOALL,'EVERY s seldbs=1
+    Do msgout("Cache Database Integrity Check on "_$ZD($H,-1)_" at "_$zt($p($h,",",2),-1)_$c(13,10))
+    Do msgout("System: "_$zu(110)_"  Configuration: "_$p($zu(86),"*",2)_$c(13,10,13,10))
+    Goto EVERY:EVERY ; All databases
+SELDBS ; Selected multiple databases entry point
+    New SVDIRNAM,PIECE
+    Set SVDIRNAM=DIRNAM
+    Set PIECE=0
+    Goto EV0
+Exclude ;
+    If '$SYSTEM.Security.Check("%Admin_Operate","USE") {
+	Write !,"Operation requires %Admin_Operate:Use privilege"
+	Quit
+    }
+    New %A,%ANS,%I,%UI,DEND,DIRNAM,EVERY,GD,IO,IOBS,IOF,IOM,IOPAR,IOSL,IOST,
+	IOT,MSYS,POP,R2,RMSDF,GLOBAL,IO,a,all,glo,glolist,mtemp1,rc,%UI,seldbs,ABORT,
+	GLOALL,ans,di,dir,%UTILITY,DIRSTAT,MULTIPLE,PIECE,SVDIRNAM,IOMS
+    Set MULTIPLE=1,seldbs=1,EVERY=0,GLOALL=1,PIECE=0
+    Set IOMS=$System.Device.GetRightMargin()
+    Write !,"Output results on "
+    Do OUT^%IS
+    Quit:POP'=0
+    Write !,"Enter databases to exclude"
+    Do ^DSET
+    If '%UTILITY {
+        Set seldbs=0,EVERY=1
+	Goto Start
+    }
+    Set dir="",SVDIRNAM=""
+    For {
+	Set dir=$O(^SYS("UCI",dir))
+	Quit:dir=""
+	Continue:$d(%UTILITY(dir))
+	Set SVDIRNAM=SVDIRNAM_","_dir
+    }
+    Set:$e(SVDIRNAM)="," SVDIRNAM=$e(SVDIRNAM,2,*)
+    Goto Start
+Multiple ;
+    If '$SYSTEM.Security.Check("%Admin_Operate","USE") {
+	Write !,"Operation requires %Admin_Operate:Use privilege"
+	Quit
+    }
+    New %A,%ANS,%I,%UI,DEND,DIRNAM,EVERY,GD,IO,IOBS,IOF,IOM,IOPAR,IOSL,IOST,
+	IOT,MSYS,POP,R2,RMSDF,GLOBAL,IO,a,all,glo,glolist,mtemp1,rc,%UI,seldbs,ABORT,
+	GLOALL,ans,di,dir,%UTILITY,DIRSTAT,MULTIPLE,PIECE,SVDIRNAM,IOMS
+    Set MULTIPLE=1,seldbs=1,EVERY=0,GLOALL=0,PIECE=0
+    Set IOMS=$System.Device.GetRightMargin()
+    Write !,"Output results on "
+    Do OUT^%IS
+    Quit:POP'=0
+    Read !,"Check all databases? Yes => ",ans
+    If "Yy"[$e(ans) {
+	Set seldbs=0,EVERY=1,GLOALL=1
+	Goto Start
+    }
+    Do ^DSET
+    Quit:%UTILITY=0
+    Set dir="",SVDIRNAM=""
+    For di=1:1:%UTILITY {
+	Set dir=$O(%UTILITY(dir))
+	Quit:dir=""
+	Set SVDIRNAM=SVDIRNAM_","_dir
+    }
+    Set:$e(SVDIRNAM)="," SVDIRNAM=$e(SVDIRNAM,2,*)
+    Set GLOALL=(%UTILITY'=1)
+    Goto Start
+ERR1 ;
+    Set $zt=""
+    If $ZE?1"<ZAbor".E {
+	Set ABORT=1
+	Goto DONE
+    }
+    If $g(DIRSTAT)=-1 {
+	Do msgout($C(13,10)_"***** "_DIRNAM_" is dismounted *****"_$C(13,10))
+	Quit
+    }
+    Set errsystotal=$g(errsystotal)+1,direrrors(DIRNAM)=""
+    If $g(DIRSTAT)=-2 {
+	Do msgout($C(13,10)_"***** "_DIRNAM_" does not exist *****"_$C(13,10))
+    } ElseIf $ZE'="" {
+	Do msgout($C(13,10)_"***** "_$ZE_" *****"_$C(13,10))
+    }
+    Quit
+SilentGlobalCheck(filename,dir,gbllist,StopAfterAnyError) ;
+    If '$SYSTEM.Security.Check("%Admin_Operate","USE") {
+	Quit $$Error^%apiOBJ(921,"%Admin_Operate"_":"_"USE")
+    }
+    Quit:$g(gbllist)="" $$Error^%apiOBJ(52)
+    Open filename:"WNS":3
+    Quit:'$T $$Error^%apiOBJ(76)
+    Close filename
+    Kill ^CacheTemp("SilentIntegrityCheck",+$J)
+    Job BackGlobalCheck^Integrity(filename,dir,gbllist,+$J,$g(StopAfterAnyError))::30
+    Quit:'$T $$Error^%apiOBJ(205)
+    While '$d(^CacheTemp("SilentIntegrityCheck",+$J)) { Hang 1 }
+    Quit:^CacheTemp("SilentIntegrityCheck",+$J)=0 $$Error^%apiOBJ(76)
+    Quit 1
+BackGlobalCheck(filename,DIRNAM,gbllist,pid,StopAfterAnyError) ;
+    Set:$G(pid)="" pid=+$J
+    Set StopAfterAnyError=+$g(StopAfterAnyError)
+    If '$SYSTEM.Security.Check("%Admin_Operate","USE") {
+	Set IO=-1
+	Do msgout("Operation requires %Admin_Operate:Use privilege")
+	Set ^CacheTemp("SilentIntegrityCheck",pid)=0
+	Quit
+    }
+    New (filename,DIRNAM,gbllist,pid)
+    Set $Ztrap="errBackG"
+    Set %UI="CHUI"
+    Lock +^CacheTemp("SilentIntegrityCheck",pid)
+    Open filename:"WNS":3
+    If '$T {
+	Set ^CacheTemp("SilentIntegrityCheck",pid)=0
+	Set IO=-1
+	Do msgout("Back^Integrity failed to open file "_filename)
+ 	Lock -^CacheTemp("SilentIntegrityCheck",pid)
+ 	Quit
+    }
+    Set ^CacheTemp("SilentIntegrityCheck",pid)=1
+    Set IO=filename
+    Do msgout("Cache Database Integrity Check on "_$ZD($H,-1)_" at "_$zt($p($h,",",2),-1)_$c(13,10))
+    Do msgout("System: "_$zu(110)_"  Configuration: "_$p($zu(86),"*",2)_$c(13,10,13,10))
+    Set errsystotal=0 ; start with no errors for the system
+    Set errmaxpersys=$s($g(StopAfterAnyError):1,1:1000)
+    For gindex=1:1:$listlength(gbllist) {
+	Set glo=$li(gbllist,gindex)
+	Set:$e(glo)="^" glo=$e(glo,2,*)
+	Do msgout($c(13,10)_"Global: ^"_glo_$c(13,10))
+	Do single1
+    }
+    If errsystotal {
+	Do msgout($c(13,10)_"*****ERRORS WERE FOUND *****"_$c(13,10))
+	Set errsum=$G(errsum,0)  ;really should be defined by now
+	If errsum>100 {
+	    Do msgout($c(13,10)_"***** "_(100-errsum)_" overflowed the summary. See the report for the full list of errors *****")
+	} ElseIf errsum {
+	    Do msgout($c(13,10)_"***** The following errors were detected *****")
+	}
+	Set DIRNAM=""
+	Set i=$O(errsum(""))
+	While (i'="") {
+	    If DIRNAM'=errsum(i,1) {
+		Set DIRNAM=errsum(i,1)
+		Kill direrrors(DIRNAM)
+		Do msgout($C(13,10,10)_"************************************************")
+		Do msgout($C(13,10)_"*** Errors in directory: "_DIRNAM_" ***")
+		Do msgout($C(13,10)_"************************************************")
+	    }
+	    Do ShowMessage(errsum(i,2),IO)
+	    Set i=$O(errsum(i))
+	}
+	If $D(direrrors) {
+	    Do msgout($C(13,10,10)_"**** The following directories had errors not reported in the above summary ****")
+	    Set baddir=$O(direrrors(""))
+	    While (baddir'=""){
+		Do msgout($c(13,10)_"Errors were found in directory "_baddir)
+		Set baddir=$Order(direrrors(baddir))
+	    }
+	}
+    } Else {
+	Do msgout($c(13,10)_"No Errors were found."_$c(13,10))
+    }
+errBackG
+    Set $zt=""
+    Close IO
+    Lock -^CacheTemp("SilentIntegrityCheck",pid)
+    Quit  
+Silent(filename,dirlist,StopAfterAnyError)
+    Quit:'$SYSTEM.Security.Check("%Admin_Operate","USE") $$Error^%apiOBJ(921,"%Admin_Operate"_":"_"USE")
+    Open filename:"WNS":3
+    Quit:'$T $$Error^%apiOBJ(76)
+    Close filename
+    Kill ^CacheTemp("SilentIntegrityCheck",+$J)
+    Job Back^Integrity(filename,$g(dirlist),+$J,$g(StopAfterAnyError))::30
+    If '$Test Quit $$Error^%apiOBJ(205)
+    For  Quit:$d(^CacheTemp("SilentIntegrityCheck",+$J))  Hang 1
+    Quit:^CacheTemp("SilentIntegrityCheck",+$J)=0 $$Error^%apiOBJ(76)
+    Quit 1
+Back(filename,dirlist,pid,StopAfterAnyError)
+    Set:$G(pid)="" pid=+$J  ;Use $J if pid argument is omitted or passed as null
+    i '$SYSTEM.Security.Check("%Admin_Operate","USE") s IO=-1 d msgout("Operation requires %Admin_Operate:Use privilege") s ^CacheTemp("SilentIntegrityCheck",pid)=0 q
+    New (filename,dirlist,pid)
+    Set $Ztrap="errBack"
+    Set %UI="CHUI"
+    Lock +^CacheTemp("SilentIntegrityCheck",pid)
+    Open filename:"WNS":3
+    If $T {
+ 	s ^CacheTemp("SilentIntegrityCheck",pid)=1
+    } Else {
+ 	s ^CacheTemp("SilentIntegrityCheck",pid)=0
+ 	s IO=-1 d msgout("Back^Integrity failed to open file "_filename)
+ 	Lock -^CacheTemp("SilentIntegrityCheck",pid)
+ 	Quit
+    }
+    Set GLOALL=1,EVERY=($g(dirlist)="")
+    Set errsystotal=0 ; start with no errors for the system
+    Set errmaxpersys=$s($g(StopAfterAnyError):1,1:1000)
+    Set seldbs=0
+    Set silent=1
+    Set IO=filename
+    Do msgout("Cache Database Integrity Check on "_$ZD($H,-1)_" at "_$zt($p($h,",",2),-1)_$c(13,10))
+    Do msgout("System: "_$zu(110)_"  Configuration: "_$p($zu(86),"*",2)_$c(13,10,13,10))
+    If EVERY Do EVERY Goto errBack
+    Set DIRNAM=""
+    For idir=1:1:$ll(dirlist) s DIRNAM=$li(dirlist,idir) Do UC1
+errBack
+    Set $zt=""
+    Close IO
+    Lock -^CacheTemp("SilentIntegrityCheck",pid)
+    Quit  
+CheckList(outputglo,dirlist,StopAfterAnyError,listofglolist,maxproc) [] PUBLIC {
+	Quit:'$SYSTEM.Security.Check("%Admin_Operate","USE") $$Error^%apiOBJ(921,"%Admin_Operate"_":"_"USE")
+	If $g(outputglo)="" {
+		Set outputglo=$name(^CacheTempIntegrityOutput(+$J))
+		Kill @outputglo
+    }
+	Set sc=1
+	Set listofglolist=$g(listofglolist),listlen=$ll(listofglolist)
+	If $g(dirlist)="" {
+		Set dir="",dirlist=""
+		For {
+			Set dir=$o(^SYS("UCI",dir)) Quit:dir=""
+			Continue:$g(^SYS("UCI",dir))'=""
+			Set dirlist=dirlist_$lb(dir)
+		}
+	} Else {								; SJ2720+
+		// Eliminate duplicate datasets, combine global lists if duplicate
+		Set num=$ll(dirlist)
+		Set outlist="",lglolist=""
+		For i=1:1:num {
+			Set dir=##class(%Library.File).NormalizeDirectory($lg(dirlist,i))
+			If '$d(dir(dir),pos) {
+				Set outlist=outlist_$lb(dir)
+				Set:i'>listlen lglolist=lglolist_$li(listofglolist,i,i)
+				Set dir(dir)=i
+			} ElseIf i'>listlen {
+				Set $li(lglolist,pos)=$lg(lglolist,pos)_$lg(listofglolist,i)
+			}
+		}
+		Set listofglolist=lglolist,dirlist=outlist			; SJ2720-
+	}
+	Set num=$ll(dirlist)
+	Set ^CacheTempIntegrity(+$J,"l")=dirlist,^("g")=listofglolist,^("c")=0
+	Set maxproc=+$g(maxproc)
+	Set cores=$system.CPU.%New().nCores
+	Set:maxproc>cores maxproc=cores
+	Set:maxproc<1 maxproc=cores
+	Set maxerr=$Select($Get(StopAfterAnyError):1,1:100)
+	Try {
+		If maxproc=1 {
+			For i=1:1:num {
+				Set rc=$$CheckDirIntegrity^%SYS.DATABASE($li(dirlist,i),outputglo,,,maxerr,$lg(listofglolist,$s(i>listlen:listlen,1:i)))
+				Set ^CacheTempIntegrity(+$J,"r",i)=rc
+				If ('rc) && 
+				   (($system.Status.GetErrorCodes(rc)'=267) 
+				      || ($i(integcheckerror)=1)) {
+					Set sc=$select(+sc:rc,1:$$AppendStatus^%occSystem(sc,rc))
+				}
+			}
+			Quit
+		}
+		Set queue=$system.WorkMgr.Initialize(,.sc,maxproc) 
+		Quit:('sc)
+		For dirlistelenum=1:1:num {
+			Set dir=$List(dirlist,dirlistelenum)
+			Set dirinfo=$zu(49,dir)
+			If dirinfo<0  {
+				If +dirinfo=-1,'$case($v($Piece(dirinfo,",",21)*$ZU(40,0,1)+$zu(40,2,128),-2,$ZU(40,0,1)),4294967295:0,:1) {
+					Set tmpsc=$$Error^%apiOBJ(327,$Piece(dirinfo,",",2)\1024)
+				} Else {
+					Set tmpsc=$$Error^%apiOBJ($case(+dirinfo,-1:300,-2:6046,:314),dir)
+				}
+				Do addDirInfoToOutput(outputglo,dir,1,tmpsc)
+				Set fatal(dir)=1
+				Set sc=$select(+sc:tmpsc,1:$$AppendStatus^%occSystem(sc,tmpsc))
+				Continue
+			}
+			Set tmpsc=$$GetDirGlobalsINTEG^%SYS.DATABASE(dir,.gloarray,.errs)
+			If ('tmpsc) {
+				Do addDirInfoToOutput(outputglo,dir,1,tmpsc)
+				Set sc=$select(+sc:tmpsc,1:$$AppendStatus^%occSystem(sc,tmpsc))
+				Continue
+			}
+			Set globals=$ListGet(listofglolist,$Select(dirlistelenum>listlen:listlen,1:dirlistelenum))
+			If globals'="" {
+				For i=1:1:$ListLength(globals) { 
+					Set globs(dir,i)=$List(globals,i)
+				}
+			} Else {
+				Set glo=""
+				For i=1:1 { 
+					Set glo=$Order(gloarray(glo))
+					Quit:glo=""  
+					Set globs(dir,i)=glo
+				}
+			}
+			If errs {
+				For i=1:1:errs { Do addDirInfoToOutput(outputglo,dir,1,errs(i)) }
+				Set integcheckerror=1
+			}
+		}
+		If $Get(StopAfterAnyError) && $Get(integcheckerror) {
+			Set sc=$select(+sc:$$Error^%apiOBJ(267),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(267)))
+			Quit
+		}
+		Set queuedcnt=0
+		For i=1:1 {
+			Quit:'$Data(globs)
+			Set dir=""
+			For  {
+				Set dir=$Order(globs(dir))
+				Quit:dir=""
+				If $Data(globs(dir,i),glo) {
+					Set tmpsc=queue.QueueCallback("$$CheckOneGlobal^Integrity","$$CheckOneGlobalCallback^Integrity",outputglo,dir,glo)
+					If ('tmpsc) {
+						Do addDirInfoToOutput(outputglo,dir,1,sc)
+						Set sc=$select(+sc:tmpsc,1:$$AppendStatus^%occSystem(sc,tmpsc))
+					} Else { 
+						Set queuedcnt=queuedcnt+1
+					}
+				} Else {
+					Kill globs(dir)
+				}
+			}
+		}
+		For i=1:1:num {
+			Set dir=$List(dirlist,i)
+			Continue:$Data(fatal(dir))
+			Set starttime=$ZH,direrrs=0,dirsc=1
+			Set tmpsc=$$CheckFreeCount^%SYS.DATABASE(dir,.freecount)
+			If ('tmpsc) { Set direrrs=direrrs+1,dirsc=$select(+dirsc:tmpsc,1:$$AppendStatus^%occSystem(dirsc,tmpsc)),integcheckerror=1 }
+			Set tmpsc=$$CheckMaps^%SYS.DATABASE(dir)
+			If ('tmpsc) { Set direrrs=direrrs+1,dirsc=$select(+dirsc:tmpsc,1:$$AppendStatus^%occSystem(dirsc,tmpsc)),integcheckerror=1 }
+			Set tmpsc=$$CheckMIB^%SYS.DATABASE(dir)
+			If ('tmpsc) { Set direrrs=direrrs+1,dirsc=$select(+dirsc:tmpsc,1:$$AppendStatus^%occSystem(dirsc,tmpsc)),integcheckerror=1 }
+			Do addDirInfoToOutput(outputglo,dir,direrrs,dirsc,$ZH-starttime,freecount)
+		}
+		If $Get(StopAfterAnyError) && $Get(integcheckerror) {
+			Set sc=$select(+sc:$$Error^%apiOBJ(267),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(267)))
+			Quit
+		}
+		Set waitcnt=0
+		Set atend='queuedcnt
+		while ('atend) {
+			Set tmpsc=queue.Wait(,.atend)
+			If ('tmpsc) {
+				If $system.Status.GetErrorCodes(tmpsc)=267 {
+					Set integcheckerror=1 
+				} Else { 
+					Set sc=$select(+sc:tmpsc,1:$$AppendStatus^%occSystem(sc,tmpsc))
+				}
+				Quit:$Get(StopAfterAnyError)
+			}
+			set waitcnt=waitcnt+1
+		}
+		Ztrap:((queuedcnt'=waitcnt)&&'$Get(StopAfterAnyError)) "WAIT"
+		Set:$Get(integcheckerror) sc=$select(+sc:$$Error^%apiOBJ(267),1:$$AppendStatus^%occSystem(sc,$$Error^%apiOBJ(267)))
+	} catch err {
+		Set sc=$select(+sc:err.AsStatus(),1:$$AppendStatus^%occSystem(sc,err.AsStatus()))
+		Do queue.Clear()
+	}
+	Quit sc
+}
+CheckOneGlobal(outputglo,dir,glo) [errorreturn] PUBLIC {
+	New errorreturn
+	Quit:$ListGet($Get(@outputglo@(dir)))>=500 1
+	Set elapsed=$zh
+	Set sc=$$CheckIntegrity^%SYS.DATABASE(1,0,dir,,100,glo,,,
+				.glototblks,.glopntblks,.glototbytes,.glopntbytes,
+				.globigblks,.globigbytes,.globigstrings,.datasize,
+				1,outputglo)
+	Set elapsed=$zh-elapsed
+	If (''sc) { 
+		Do addDirInfoToOutput(outputglo,dir,0,"",elapsed,,glototblks,glototbytes,glopntblks,glopntbytes,globigblks,globigbytes,globigstrings)
+	} ElseIf ($system.Status.GetErrorCodes(sc)=267) {
+		Do addDirInfoToOutput(outputglo,dir,1,"",elapsed,,glototblks,glototbytes,glopntblks,glopntbytes,globigblks,globigbytes,globigstrings)
+	} Else { 
+		Do addDirInfoToOutput(outputglo,dir,1,sc,elapsed,,glototblks,glototbytes,glopntblks,glopntbytes,globigblks,globigbytes,globigstrings)
+	}
+	Quit sc
+}
+CheckOneGlobalCallback(outputglo,dir,glo) PUBLIC { 
+	Set %exit=1
+	Quit 1
+}
+addDirInfoToOutput(outputglo,dir,numerrors,sc,elapsed,freecount,totblks,totbytes,pntblks,pntbytes,bigblks,bigbytes,bigstrings) PRIVATE {
+	Lock +@outputglo@(dir)
+	try {
+		Set $lb(errdirtotal,infolist,dirsc)=$get(@outputglo@(dir))
+		Set $lb(direlapsed,dirfreecount,dirtotblks,dirtotbytes,dirpntblks,dirpntbytes,dirbigblks,dirbigbytes,dirbigstrings)=$get(infolist)
+		Set:$get(freecount)'="" dirfreecount=freecount
+		Set:$get(numerrors)'="" errdirtotal=$get(errdirtotal)+numerrors
+		Set:$get(elapsed)'="" direlapsed=$get(direlapsed)+elapsed
+		Set:$get(totblks)'="" dirtotblks=$get(dirtotblks)+totblks
+		Set:$get(totbytes)'="" dirtotbytes=$get(dirtotbytes)+totbytes
+		Set:$get(pntblks)'="" dirpntblks=$get(dirpntblks)+pntblks
+		Set:$get(pntbytes)'="" dirpntbytes=$get(dirpntbytes)+pntbytes
+		Set:$get(bigblks)'="" dirbigblks=$get(dirbigblks)+bigblks
+		Set:$get(bigbytes)'="" dirbigbytes=$get(dirbigbytes)+bigbytes
+		Set:$get(bigstrings)'="" dirbigstrings=$get(dirbigstrings)+bigstrings
+		If ($get(sc)'="") && ('sc) {
+			If $get(dirsc)="" { Set dirsc=sc }
+			Else { Set dirsc=$select(+"0 "_dirsc:sc,1:$$AppendStatus^%occSystem("0 "_dirsc,sc)) }
+			Set dirsc=$e(dirsc,3,*)
+		}
+		Set @outputglo@(dir)=$lb(errdirtotal,$lb(direlapsed,dirfreecount,dirtotblks,dirtotbytes,dirpntblks,dirpntbytes,dirbigblks,dirbigbytes,dirbigstrings),dirsc)
+	} catch { 
+ 		Lock -@outputglo@(dir)
+ 		throw
+ 	}
+	Lock -@outputglo@(dir)
+}
+Display(outputglo,flags,dirsum) [] PUBLIC {
+    Set:$g(outputglo)="" outputglo=$name(^CacheTempIntegrityOutput(+$J))
+    Set flags=+$g(flags)
+    If '$d(@outputglo) {
+        Write !,"Output global ",outputglo," is empty"
+		Quit
+    }
+    Set dir=""
+    For {
+		Set infdir="",dir=$o(@outputglo@(dir),1,infdir)
+		Quit:dir=""
+		Continue:infdir=""
+		Set cnt=$lg(infdir)
+		If (cnt=0 && (flags>0)) continue
+		W !,"Directory: ",dir
+		If cnt="" {
+		    W ?60,"Unable to open"
+		    Continue
+		}
+		If cnt {
+			W !,"Errors found in ",cnt," globals or supporting structures",!
+		} Else {
+			W !,"No errors found"
+		}
+ 		Set err=$lg(infdir,3)
+ 		If err'="" { Do ShowMessage("0 "_err,$i) }
+		Set glo=""
+		For {
+		    Set glo=$o(@outputglo@(dir,glo),1,infglo)
+		    Quit:glo=""
+		    Set msg=$g(@outputglo@(dir,glo,0)),war=$g(^(1)),err=$g(^(2))
+		    If err="",flags {
+			Continue:war=""
+			Continue:flags>1
+		    }
+		    Write !
+		    Write:err'="" "**** "
+		    Write "Global: ",glo,?60,$lg(infglo)," errors found"
+		    If war'="",flags<2 { Do ShowMessage("1 "_war,$i) }
+		    If err'="" { 
+		    	Do ShowMessage("0 "_err,$i)
+		    	Set retryresult = $g(@outputglo@(dir,glo,4))
+		    	If retryresult=0 W !," When retried the errors in global "_glo_" remained unchanged",!
+		    	If retryresult=1 W !," These errors in global "_glo_" differ from the errors prior to the retry",!
+		    }
+		    If msg'="" { Do ShowMessage("1 "_msg,$i) }
+		}
+		If +$g(dirsum) {
+			Set errcnt=$lg(infdir),dircnts=$lg(infdir,2),dirinfo=$zu(49,dir)
+			Set blksize=$p(dirinfo,",",2),datasize=$Case(blksize,2048:2036,:(blksize-$zu(40,32,10))),bigdb=$Piece(dirinfo,",",21)
+			Set elapsedtime=$lg(dircnts,1),freecount=$lg(dircnts,2),dirtotblks=$lg(dircnts,3)
+			Set dirtotbytes=$lg(dircnts,4),dirpntblks=$lg(dircnts,5),dirpntbytes=$lg(dircnts,6)
+			Set dirbigblks=$lg(dircnts,7),dirbigbytes=$lg(dircnts,8),dirbigstrings=$lg(dircnts,9)
+			Write !,"Summary of blocks in "_dir,!!
+		    Do writecount("Pointer Level",dirpntblks,dirpntbytes,0)
+		    Do writecount("Data Level",dirtotblks-dirpntblks-dirbigblks,dirtotbytes-dirpntbytes-dirbigbytes,0)
+		    Do writecount("Big String",dirbigblks,dirbigbytes,1)
+		    Do writecount("Total",dirtotblks+$$getadditionalblocks(dir,dirinfo,bigdb),dirtotbytes,0)
+		    Set kb=freecount*blksize\1024,mb=0 Set:kb>10240 kb=kb\1024,mb=1
+		    Set a=$fn(freecount,","),a=$j("",10-$l(a))_a_" Free blocks"
+		    Set a=a_$j("",43),a=$e(a,1,43-$l(kb))_kb_$s(mb:"MB",1:"kb")
+		    Write a,!,!,"Elapsed time = "_$fn(elapsedtime,"",1)_" seconds.",!
+		}
+    }
+    Quit
+writecount(message,blks,bytes,bigflag)
+    Set a=$fn(blks,","),a=$j("",10-$l(a))_a_" "_message_" blocks"
+    If blks {
+		Set kb=blks*(blksize\1024),mb=0 ;s kb=bytes\1024
+		Set:kb>10240 kb=kb\1024,mb=1
+		Set a=a_$j("",43),a=$e(a,1,43-$l(kb))_kb_$s(mb:"MB",1:"kb")
+		Set:blks a=a_" ("_(bytes\blks*100\datasize)_"% full)"
+		If bigflag,dirbigstrings { Set a=a_" # = "_$fn(dirbigstrings,",") }
+    }
+    Write a,!
+    Quit
+}
+Errors(outputglo,flags) [] PUBLIC {
+	Set (errors,warnings)=0
+	Set:$g(outputglo)="" outputglo=$name(^CacheTempIntegrityOutput(+$J))
+	Set flags=+$g(flags)
+	If '$d(@outputglo) Quit $s(flags=0:0,1:"0,0")
+	Set dir="",dirlist=""
+	For {
+		Set infdir="",dir=$o(@outputglo@(dir),1,infdir)
+		Quit:dir=""
+		Continue:infdir=""
+		Set dberrors=$lg(infdir,1)
+		Set glo="",dbwarnings=0
+		If flags {
+			For {
+				Set glo=$o(@outputglo@(dir,glo),1,infglo)
+				Quit:glo=""
+				If $g(@outputglo@(dir,glo,1))'="" { Set dbwarnings=dbwarnings+1 }
+			}
+		}
+		if (dberrors+dbwarnings) {
+			set errors=errors+dberrors,warnings=warnings+dbwarnings
+		}
+	}
+	If flags=0 q errors
+	q errors_","_warnings
+}
+RetryErrors(outputglo,flags) [] PUBLIC {
+	Set (errors,warnings)=0
+	Set:$g(outputglo)="" outputglo=$name(^CacheTempIntegrityOutput(+$J))
+	Set flags=+$g(flags)
+	If '$d(@outputglo) Quit $s(flags=0:0,1:"0,0")
+	Set dir="",dirlist=""
+	For {
+		Set infdir="",dir=$o(@outputglo@(dir),1,infdir)
+		Quit:dir=""
+		Continue:infdir=""
+ 		Set dirinfo=$zu(49,dir)
+		Set glo=""
+		For {
+		    Set glo=$o(@outputglo@(dir,glo),1,infglo)
+		    Quit:glo=""
+		    Set error =$g(@outputglo@(dir,glo,2))
+		    If error'="" {
+			    // save the error from prior run
+			    Set savederrors = @outputglo@(dir,glo,2)
+			    Kill @outputglo@(dir,glo,2),glolist
+				Set rc=$$CheckIntegrity^%SYS.DATABASE(1,0,dir,,100,glo,.glolist,dirinfo,
+					.glototblks,.glopntblks,.glototbytes,.glopntbytes,
+					.globigblks,.globigbytes,.globigstrings,.datasize,
+					1,.outputglo)
+				Set newerrors = $g(@outputglo@(dir,glo,2))
+				// If we don't have errors now then it must have been a false positive
+				If newerrors'="" {
+					// compare errors to see if they are the same
+					set newptr=0,saveptr=0,errormismatch=0
+					While $LISTNEXT(newerrors,newptr,onenewerror) {
+						If '$LISTNEXT(savederrors,saveptr,onesavederror) {
+							// saved had fewer errors
+						    Set errormismatch=1
+						    quit
+						}
+						If '$LISTSAME($LI(onenewerror,1,9),$LI(onesavederror,1,9)) {
+						    Set errormismatch=1
+						    quit
+						}
+					}
+					Set @outputglo@(dir,glo,4) = errormismatch 
+				} Else { 
+					Set infdir=@outputglo@(dir)
+					Set $list(infdir,1)=$list(infdir,1)-1
+					Set @outputglo@(dir)=infdir
+				}
+			}
+			If $g(@outputglo@(dir,glo,1))'="" { Set warnings=warnings+1 }
+		}
+		Set errors=errors+$lg(infdir,1)
+    }
+    If flags=0 q errors
+    q errors_","_warnings
+ }
+Query(filename,outdevice) ;
+    Set $Ztrap="errQuery"
+    Open filename::10
+    If '$Data(outdevice) { Set outdevice=0 }
+    ElseIf outdevice {
+	Open outdevice
+	If '$Test Use 0 Write !,"Cannot open "_outdevice_"." Quit
+    }
+    For { Use filename Read line Use outdevice Write !,line }
+    Close filename
+    Close outdevice
+    Quit
+errQuery ;
+    Close filename
+    Close outdevice
+    Quit:$Zerror["<ENDOFFILE>"
+    Use 0
+    Write !,"Error getting Integrity report is: ",$Zerror
+    Quit
+ReportError(dir,rc,IO) PRIVATE {
+    Do ShowMessage(rc,IO) 
+    Do:IO'=$I ShowMessage(rc,$I)
+    Do RecordError(dir,rc)
+}
+RecordError(dir,rc) [errsum] PRIVATE {
+    Set errsum=$G(errsum)+1
+    Kill:errsum>100 errsum(errsum-100)
+    Set errsum(errsum,1)=dir
+    Set errsum(errsum,2)=rc
+}
+GetAsyncReadBuffers() [] PUBLIC {
+    Set rb = $view($ZUTIL(40,2,171)+2,-2,2)
+    Q $case(rb,0:8,:rb)
+}
+GetAsyncReadBufferSize() [] PUBLIC {
+    q $view($ZUTIL(40,2,171)+0,-2,2)
+}
+SetAsyncReadBuffers(value) [] PUBLIC {
+    if (+value<0) ! (+value > 128) {
+	w !,"Value must be between 0 and 128",!
+	Q
+    }
+    view $ZUTIL(40,2,171)+2:-2:2:+value 
+    view $ZUTIL(40,2,171)+6:-2:2:+value
+}
+SetAsyncReadBufferSize(value) [] PUBLIC {
+    if (+value<0) ! (+value > 512) {
+	w !,"Value must be between 0 and 512",!
+	Q
+    }
+    view $ZUTIL(40,2,171)+0:-2:2:+value 
+    view $ZUTIL(40,2,171)+4:-2:2:+value
+}
+ShowMessage(sc,device) [] PRIVATE {
+    Do DecomposeStatus^%SYS.DATABASE(sc,.msglist,0,"")
+    Do wrtmsg($C(13,10),device)
+    For i=1:1:msglist {	Do wrtmsg(msglist(i)_$C(13,10),device) }
+}
+wrtmsg(msg,device) [] PRIVATE {
+    Quit:'$L(msg)  ; Avoid argumentless writes...
+    If device=-1 { Do $zu(9,"",msg,0,0) Quit }
+    If $g(%UI,"CHUI")="CHUI" { Use device Write msg Quit }
+    Do:$$IjcMsg^%Wprima("DI"_msg)="CANCEL"  ; Return value could be cancel message 
+    . i $$IjcMsg^%Wprima("DI"_$C(13,10)_"Abort received!"_$C(13,10))
+    . zt "Abort"
+}

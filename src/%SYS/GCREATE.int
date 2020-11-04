@@ -1,0 +1,295 @@
+ROUTINE %SYS.GCREATE [Type=INT]
+%SYSGCREATE ;(KSO,PK) CREATE A GLOBAL AT A SPECIFIED LOCATION ; JLC1300 06/17/09
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ; GXLATE.INC DPB125 06/04/93
+ i $$isrem^%SYS.GLO w !,*7,"Can't create: global directory is on a remote system" q
+NEW ; Enter here to test out $ZU(178)
+ New dir,keep,protection,rc,val,BLOCK,COL,COLNAME,GG,GLO,GP
+ New POP,found,r,%objlasterror,zu5
+ W !,"Use this utility to create a global and specify custom values for"
+ W !,"collation and protection, where its pointer blocks and data blocks"
+ W !,"should grow, and whether this global should be marked as ""kept""."
+ W !
+getGLO R !,"Global ^",GLO Q:GLO=""  I GLO'?1"^".E S GLO="^"_GLO
+ s $zt="errgetGLO"
+ s val=$$ChkName(GLO)
+ i val'=1 w val,! g getGLO
+ s val=$$ChkDup(GLO)
+ i val'=1 w val,! g getGLO
+ ; If there is an entry for the global in the global translation table
+ ;  and a translation exists, don't allow the global to be created.
+ s val=$$ChkTran(GLO)
+ i val'=1 w val,! g getGLO
+ N COL,NEWCOL,OLDCOL,COLNAME,COLLST,DEL1,DEL2,PCOL,STA,ICOL
+ S DEL1=$$del1^%Wprim,DEL2=$$del2^%Wprim
+ s $zt="errCOLLATION"
+ s zu5=$zu(5) zn "%SYS"
+ S OLDCOL=$zu(23,0),COLNAME=$$NAME^COLLATE(OLDCOL)
+ s r=##class(%Library.ResultSet).%New("%Library.Collate.CollationList")
+ F  D  Q:COL'<0
+ . W !,"Enter desired type of collation: (",COLNAME,") =>"
+ . R NEWCOL I NEWCOL="" S COL=OLDCOL Q
+ . d r.Execute()
+ . S COL=+NEWCOL s found=0
+ . f  q:'r.Next()  i r.GetDataByName("Number")=NEWCOL D  Q
+ . . s found=1,COLNAME=r.GetDataByName("Name") W " ",COLNAME Q
+ . Quit:found
+ . S COL=-1 I $E(NEWCOL)'="?" W *7,"  Invalid option"
+ . d r.Execute()
+ . While (r.Next()) { w !,?5,r.GetDataByName("Number")," - ",r.GetDataByName("Name")," (",r.GetDataByName("Status")," )" }
+ zn zu5
+ s keep=0
+ i $$YN("Do you want to mark this global to be ""kept""","N")="Y" Set keep=1
+ If POP Quit  
+ s rc=$ZUTIL(90,21,"",GLO)
+ i +rc=1 {
+   s dir=$p(rc,",",2,99999)
+   i $e(dir,1,2)'="^^" {
+     w !,"Cannot use %SYS.GCREATE for remote globals."
+     w !,"Global "_GLO_" is mapped to location"_dir
+     q
+   }
+   s dir=$e(dir,3,$l(dir))
+ }
+ i +rc=2 {
+   w !,"This global "_GLO_" in namespace "_$ZU(5)_" is Subscript-Level Mapped."
+   w !,"You cannot use %SYS.GCREATE for this global.",!
+   q
+ }
+ s rc=$$SetDatabaseVariables^%SYS.DATABASE(dir,,,,,,,.GP,.GG)
+ If ('+rc) Do ShowMessage(rc,0) Goto getGLO
+ q:$g(%UI)="GUI"
+ W !,"The directory default for new pointer blocks is "_GP
+ I $$YN("Do you want to specify a different location","N")="N" G getGrowth
+ If POP Quit  
+ W !
+ Read !,"Start pointer blocks at: ",BLOCK G getGLO:'BLOCK S GP=BLOCK
+getGrowth W !!,"The directory default for new data blocks is "_GG
+ I $$YN("Do you want to specify a different location","N")="Y" d  ;q  
+ . Read !,"Start data blocks at: ",BLOCK G getGLO:'BLOCK S GG=BLOCK
+ . I 'BLOCK W !,"[no action]",! G getGLO
+ If POP Quit  
+checkGLO W !!,"*** Final check:"
+ W !?15,"Collating Sequence = ",COLNAME," (",COL,")"
+ w !?15,"Global "_GLO_" will "_$case(keep,1:"",:"not")_" be marked as ""kept""."
+ W !?15,"Pointer blocks start at "_GP
+ W !?15,"Data blocks start at "_GG
+ I $$YN("Is this correct","N")="N" W !,"[No change]",! G getGLO
+ If POP Quit  
+ I $D(@GLO) W !,"[Already defined -- no action]" G A
+ s zu5=$zu(5) zn "%SYS"
+ Set rc=$$CreateGlobal^%SYS.DATABASE(dir,GLO,COL,,,keep,GP,GG)
+ zn zu5
+ If ('+rc) Do ShowMessage(rc,0) Goto getGLO
+ Else  W !,"Done.",! G getGLO
+GCREATEOLD
+ W !,"Use this utility to create a global and specify where its"
+ W !,"pointer blocks and its data blocks should grow."
+ W !,"You can also specify the global's collating sequence."
+ w !,"You can also specify whether to mark this global to be ""kept"""
+ n %ST,dir,BLKSIZ,GD,GP,GG,BLOCK,A,UIC,RD,RG,MAPSIZ,FILSIZ,EXP,MAX,rc,FREEZE
+ n GLO,OGP,OGG
+ W !
+A R !,"Global ^",GLO Q:GLO=""  I GLO'?1"^".E S GLO="^"_GLO
+ s val=$$ChkName(GLO)
+ i val'=1 w val,! g A
+ s val=$$ChkDup(GLO)
+ i val'=1 w val,! g A
+ ; If there is an entry for the global in the global translation table
+ ;  and a translation exists, don't allow the global to be created.
+ s val=$$ChkTran(GLO)
+ i val'=1 w val,! g A
+ N COL,NEWCOL,OLDCOL,COLNAME,COLLST,DEL1,DEL2,PCOL,STA,ICOL
+ S DEL1=$$del1^%Wprim,DEL2=$$del2^%Wprim
+ S OLDCOL=$zu(23,0),COLNAME=$$NAME^COLLATE(OLDCOL)
+ S COLLST=$$GetStdList^COLLATE(DEL2) #;PWC921
+ F  D  Q:COL'<0
+ . W !,"Enter desired type of collation: (",COLNAME,") =>"
+ . R NEWCOL I NEWCOL="" S COL=OLDCOL Q
+ . S COL=+NEWCOL I COL>0,COL'>$L(COLLST,DEL2) D  Q
+ . . S PCOL=$P(COLLST,DEL2,COL),COL=$P(PCOL,DEL1,2)
+ . . S COLNAME=$$NAME^COLLATE(COL) W " (",COLNAME,")" Q
+ . S COL=-1 I $E(NEWCOL)'="?" W *7,"  Invalid option"
+ . F ICOL=1:1 S PCOL=$P(COLLST,DEL2,ICOL),STA=+PCOL Q:PCOL=""  D
+ . . W !?5,$J(ICOL,2)," - ",$P(PCOL,DEL1,3)," (",$S(STA=0:"not loaded",STA=1:"builtin",1:"available"),")"
+ If $Get(%UI)'="GUI" Goto getvars
+GP O 63 V 1 D GFS^|"%SYS"|ST
+ S UIC=$V(%ST("gfuic")+%ST("GFOFFSET"),0,%ST("szuic"))
+ S NUMMAP=$V(%ST("gfmaps")+%ST("GFOFFSET"),0,%ST("szmaps"))
+ S EXP=$V(%ST("gfexp")+%ST("GFOFFSET"),0,%ST("szexp"))
+ S MAX=$V(%ST("gfmax")+%ST("GFOFFSET"),0,%ST("szmax"))
+ S GD=$V(%ST("gfdir")+%ST("GFOFFSET"),0,%ST("szdir"))
+ S GP=$V(%ST("gfgptr")+%ST("GFOFFSET"),0,%ST("szgptr"))
+ S RD=$V(%ST("gfrdir")+%ST("GFOFFSET"),0,%ST("szrdir"))
+ S RG=$V(%ST("gfrgrw")+%ST("GFOFFSET"),0,%ST("szrgrw"))
+ S GG=$V(%ST("gfggrw")+%ST("GFOFFSET"),0,%ST("szggrw"))
+ S MAPSIZ=$V(%ST("gfmsz")+%ST("GFOFFSET"),0,%ST("szmsz"))
+ N zu49 S zu49=$zu(49,$s(($zversion(1)=1):"[]",1:".")),NUMBLKS=$p(zu49,",",4)*1024*1024\$p(zu49,",",2)
+ S OGP=GP,OGG=GG C 63
+ g guiquit
+getvars ;
+ s dir=$zu(12,"")
+ s rc=$$SetDatabaseVariables^%SYS.DATABASE(dir,.BLKSIZ,.UIC,.FILSIZ,.EXP,.MAX,.GD,.GP,.GG,.RD,.RG,0,0,0,.MAPSIZ,0,.FREEZE)
+ S OGP=GP,OGG=GG
+ ;
+guiquit ;
+ q:$g(%UI)="GUI"
+ W !,"The directory default for new pointer blocks is "_GP
+ I $$YN("Do you want to specify a different location","N")'="Y" G GG
+ W !
+B W !,"Start pointer blocks at: " D BLOCK G A:'BLOCK S GP=BLOCK
+GG W !!,"The directory default for new data blocks is "_GG
+ I $$YN("Do you want to specify a different location","N")'="Y" d  q  
+ . i $zbitget($zversion(0),21) g askkeep
+ . e  G CHECK
+ W !
+C R !,"Start data blocks at: " D BLOCK S GG=BLOCK
+ I 'BLOCK W !,"[no action]",! G A
+askkeep
+ s keep=0
+ i $$YN("Do you want to mark this global to be ""kept""","N")="Y" Set keep=1
+CHECK W !!,"*** Final check:"
+ W !?15,"Collating Sequence = ",COLNAME," (",COL,")"
+ w !?15,"Global "_GLO_" will "_$case(keep,1:"",:"not")_" be marked as ""kept""."
+ W !?15,"Pointer blocks start at "_GP
+ W !?15,"Data blocks start at    "_GG
+ I $$YN("Is this correct","N")="N" W !,"[No change]",! G A
+ I $D(@GLO) W !,"[Already defined -- no action]" G A
+ S $ZT="RESET2"
+guiCreate       ; Control Panel entry point called from gCreate.
+ i $zbitget($zversion(0),21) d  d setkeep g done  
+ . s rc=$$ModifyDatabase^%SYS.DATABASE(dir,UIC,FILSIZ,EXP,MAX,GD,GP,GG,FREEZE)
+ . i ('rc) d ShowMessage(rc,0) g A
+ . s rc=$$GetDatabaseStatus^%SYS.DATABASE(dir,.exists,1)
+ . i ('rc) d ShowMessage(rc,0)
+ . ;Continue even if mount fails
+ . s $zt="RESET3"
+ . N PREVCOL,%
+ . S PREVCOL=$zu(23,1,COL),$ZT="RESET3"
+ . S @GLO@(1)="" K ^(1)
+ . S %=$zu(23,1,PREVCOL) D RESET S $ZT=""
+ . S @GLO@(1)="" K ^(1)
+ . g RESET  
+done
+ q:$G(%UI)="GUI"
+ W !,"Done.",! G A
+ ;
+BLOCK S BLOCK=0
+ i $zbitget($zversion(0),21) g justblock 
+MAP R !?13,"Map: ",MAP Q:MAP=""  I MAP<0!(MAP'<NUMMAP) W " ???",! G MAP
+BLK W ?25," Block offset inside map (1-",MAPSIZ-1,"): " R A Q:A=""
+ I A<2!(A>(MAPSIZ-1)) W " ???",! G BLK
+ S BLOCK=MAP*MAPSIZ+A W "    ("_BLOCK_")"
+ Q
+justblock r ?25,"Block :",A q:A=""
+ s BLOCK=A W "    ("_BLOCK_")" q  
+setkeep i 'keep q  
+ s rc=$$SetKeepType^%SYS.DATABASE(dir,GLO,1)
+ i ('rc) d ShowMessage(rc,0)
+ q  
+RESET S $ZT="RESET2" H 2 
+p ;
+ i $zbitget($zversion(0),21) d  q    
+ . s rc=$$ModifyDatabase^%SYS.DATABASE(dir,UIC,FILSIZ,EXP,MAX,GD,OGP,OGG,FREEZE)
+ . i ('rc) w !,"Error resetting pointers:" d ShowMessage(rc,0)
+ . s rc=$$GetDatabaseStatus^%SYS.DATABASE(dir,.exists,1)
+ . i ('rc) d ShowMessage(rc,0)
+RESET2 S $ZT="" W *7,!,"Unable to modify global directory" G A
+RESET3 S $ZT="",%=$zu(23,1,PREVCOL)
+ W *7,!,$P($ZE,">"),"> error attempting to create global"
+ D RESET G A
+ ;
+errCOLLATION s $zt="" w *7,!,"Error getting Collation list" zn:$d(zu5) zu5 G getGLO
+errgetGLO s $zt="" w *7,!,"Unable to create global" zn:$d(zu5) zu5 G getGLO
+UC(x) q $zcvt(x,"u")
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R
+Strip(x) Q $$StrHead($$StrTail(.x)) ;strip both leading and trailing spaces
+StrHead(x) ;return 'x' without any leading spaces
+ Q $E(x,$F(x,$E($TR(x," ")))-1,$L(x))
+StrTail(x) ;return 'x' without any trailing spaces
+ Q $P(x_$J("",$L(x)),$J("",$L(x)))
+StrQuote(x) ; return 'x' without 1 layer of quotes
+ I ($E(x)'="""")!($E(x,$L(x))'="""") Q x
+ S x="S x="_x X x Q x
+ ;
+ ;------------------------------------------------------------------------
+ ; The following three check functions are used by CHUI (in this program)
+ ; and GUI (called from VB, Control Panel). If validation fails,
+ ; an error message will be returned. If succeeds, one will be returend.
+ ;------------------------------------------------------------------------
+ChkName(GLO)    ;validate global name
+ I '$zname($e(GLO,2,$l(GLO)),3) Q " Invalid format for a global name."
+ Q 1
+ChkDup(GLO)     ;validate duplicate
+ I $D(@GLO) Q " Global already defined." 
+ Q 1
+ChkTran(GLO)    ;validate translation
+ ; If there is an entry for the global in the global translation table
+ ; and a translation exists, don't allow the global to be created. 
+ ; Otherwise, kill it anyway.
+ S $ZT="OK2KILL"
+ I ($S($ZU(90,1,"",$E(GLO,2,$L(GLO)))>0:$ZU(90,2,3,$ZU(90,1,"",$E(GLO,2,$L(GLO)))),$ZU(90,1,"",$E(GLO,2,$L(GLO)))<0:$ZU(90,2,6,-$ZU(90,1,"",$E(GLO,2,$L(GLO)))),1:0)'=0) D  q return
+ . s return=" Global "_GLO_" : Translation in effect."
+ . s $ZT="",$ZE=""
+ Q 1
+OK2KILL s $ZT="",$ZE=""
+ n x s x=$zu(68,28,0) K @GLO s x=$zu(68,28,x)
+ Q 1
+gGP() ; Get global defaults for Control Panel
+ s %UI="GUI"
+ d GP
+ q UIC_","_NUMMAP_","_EXP_","_MAX_","_GD_","_GP_","_RD_","_RG_","_GG_","_MAPSIZ_","_NUMBLKS
+ ;
+gCreate(GLO,COL,data)   ;GUI Control Panel entry point for creating global
+ ;Input:  data from GP and maybe updated from GUI
+ ;        GLO = global name with "^"
+ ;        COL = collation sequence number
+ ;Output: none
+ ;Return: 0_del1_errmsg if errored
+ ;        1 if success 
+ n (GLO,COL,data)
+ s %UI="GUI"
+ s $ze="",$zt="gCreateErr^%SYS.GCREATE"
+ s errmsg=""
+ s GP=$p(data,",",6)
+ s GG=$p(data,",",9)
+ s protection=$Case($Ascii(GLO,2)="%",1:215,:195)
+ s rc=$$CreateGlobal^%SYS.DATABASE("",GLO,COL,protection,0,0,GP,GG)
+ i ('+rc) d  g gCreateErr
+ . n msg,i s rc=$$DecomposeStatus^%SYS.DATABASE(rc,.msg,0)
+ . f i=1:1:msg s errmsg=errmsg_msg(i)_$C(13,10)
+ q 1
+gCreateErr      ;
+ q 0_$$del1^%Wprim_"Unable to create global. "_$s($g(errmsg)'="":$c(13,10)_errmsg,1:"")
+ShowMessage(sc,device) [] PRIVATE {
+    Do DecomposeStatus^%SYS.DATABASE(sc,.msglist,0,"")
+    Do wrtmsg($C(13,10),device)
+    For i=1:1:msglist {	Do wrtmsg(msglist(i)_$C(13,10),device) }
+}
+wrtmsg(msg,device) [] PRIVATE {
+    Quit:'$L(msg)  ; Avoid argumentless writes...
+    If device=-1 { Do $zu(9,"",msg,0,0) Quit }
+    If $g(%UI,"CHUI")="CHUI" { Use device Write msg Quit }
+    Do:$$IjcMsg^%Wprima("DI"_msg)="CANCEL"  ; Return value could be cancel message 
+    . i $$IjcMsg^%Wprima("DI"_$C(13,10)_"Abort received!"_$C(13,10))
+    . zt "Abort"
+}

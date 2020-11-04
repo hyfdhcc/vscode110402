@@ -1,0 +1,271 @@
+ROUTINE GLOBUFF [Type=INT]
+GLOBUFF	; Analyze global buffers; RFD993 11/21/13
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+	;
+	w !,"Find which globals are using the most buffers.",!
+	w !,"Display the top <25>: " u 0 r n q:n="^"
+	s n=+n s:n=0 n=25
+	d display(n)
+	q
+ ; count and sort all buffers:
+display(nbuff) PUBLIC {
+	s gbfnum=$V($ZU(40,2,17),-2,$ZU(40,0,1)),total=0,PPG=0
+	; count all buffers for each global/sfn 
+	f buff=0:1:gbfnum-1 {
+		s info=$zu(190,16,buff)
+		s sfn=$p(info,",",1),block=$p(info,",",2),type=$p(info,",",3),gbl=$p(info,",",4)
+		; check for global names which contain "big string" blocks
+		i gbl["*" {
+			s gbl=$p(gbl,"*"),crc=$zcrc(gbl,7)
+			i '$d(CRC(crc,sfn)) s CRC(crc,sfn)=gbl
+			; just in case we find 2 globals with the same CRC-32
+			e  i CRC(crc,sfn)'=gbl s CRC(crc,sfn)=""
+		}
+		if block'=-1 {
+			i gbl="" s gbl="_Unknown_"
+			i gbl="||" s gbl="||_Unknown_"
+			s sub=gbl_"^"_sfn,total=total+1
+			; for "big string" blocks, we'll try and match the CRC later
+			i $ISVALIDNUM(gbl) s GLOBUFF("b",sub)=$g(GLOBUFF("b",sub))+1
+			e  s CNT(sub)=$g(CNT(sub))+1
+		}
+		; count PPGs
+		i $e(gbl,1,2)="||" s PPG=PPG+1
+	}
+	; find global names for big string blocks and add them to the parent global
+	s sub=""
+	f  {
+		s sub=$order(GLOBUFF("b",sub),1,count) Quit:sub=""
+		s crc=$p(sub,"^"),sfn=$p(sub,"^",2),gname=$g(CRC(crc,sfn))
+		i gname="" s gname=$$gbig(sub)
+		i gname]"" {
+			s psub=gname_"^"_sfn
+			s CNT(psub)=$g(CNT(psub))+count
+			k GLOBUFF("b",sub) ; remove if found, we'll report leftovers
+		}
+	}
+	; sort counts and calculate percentages
+	s sub=""
+	f  {
+		s sub=$order(CNT(sub),1,count) Quit:sub=""
+		s GLOBUFF("%",-count,sub)=count/total*100
+	}
+	; get a list of database names
+	s rset=##class(%Library.ResultSet).%New("Config.Databases:LocalDatabaseList")
+	d rset.Execute()
+	while (rset.Next()) {
+		s dbase(rset.Data("Directory"))=rset.Data("Name")
+	}
+	; display results
+	s cnt="",num=1,tcnt=0
+	w !!,"Total buffers: ",gbfnum w:total'=gbfnum ?25," Buffers in use: ",total
+	w ?50," PPG buffers: ",PPG i PPG w " (",$fn((PPG/total)*100,"",3),"%)"
+	w !!,"Item  Global                             Database          Percentage (Count)",!
+	f  {
+		s cnt=$order(GLOBUFF("%",cnt)) Quit:cnt=""
+		s gbl=""
+		f  {
+			s gbl=$order(GLOBUFF("%",cnt,gbl),1,percent) Quit:gbl=""
+			s name=$p(gbl,"^"),sfn=$p(gbl,"^",2),dir=$p($zu(49,+sfn,3),"^",2)
+			w num,?6,name,?40," ",$g(dbase(dir)),?60,$fnumber(percent,"",3)," (",-cnt,")",!
+			s num=num+1 q:num>nbuff
+		}
+		q:num>nbuff
+	}
+	; report any big string blocks we couldn't identify
+	s sub=""
+	i $order(GLOBUFF("b",sub))]"" {
+		w !!,"No global name match for the following 'big string' blocks: ",!
+	}
+	f  {
+		s sub=$order(GLOBUFF("b",sub),1,count) Quit:sub=""
+		s crc=$p(sub,"^"),sfn=$p(sub,"^",2),dir=$p($zu(49,+sfn,3),"^",2)
+		w !,"CRC=",crc," in ",dbase(dir)," - ",count," blocks"
+	}
+	q
+}
+gbig(sub) PUBLIC {
+	s crc=$p(sub,"^"),sfn=$p(sub,"^",2),dir=$p($zu(49,+sfn,3),"^",2)
+	s fnd=0,gname=""
+	s rset=##class(%Library.ResultSet).%New("%SYS.GlobalQuery:DirectoryList")
+	d rset.Execute(dir,,,1,,1)
+	while (rset.Next()) {
+		i crc=$zcrc(rset.Data("Name"),7) {
+			i 'fnd s gname=rset.Data("Name"),fnd=1
+			e  s gname="" q
+		}
+	}
+	q gname
+}
+noname ; list unknown global blocks
+	n gbfnum,total,buff,info,sfn,block,type,gbl
+	s gbfnum=$V($ZU(40,2,17),-2,$ZU(40,0,1)),total=0
+	w !,"Buffer - SFN, Block, BlockType, Global"
+	f buff=0:1:gbfnum-1 {
+		s info=$zu(190,16,buff)
+		s sfn=$p(info,",",1),block=$p(info,",",2),type=$p(info,",",3),gbl=$p(info,",",4)
+		i block'=-1,(gbl="")||(gbl="||") w !,buff,?6," - ",info s total=total+1
+	}
+	w !!,total," buffers found with no global name"
+	q
+Dump(file,delay=30,length=3600,notemp=1) public {
+	Set $ztrap="trap",sc=1,io=$IO
+	If file'="" Open file:("NW":/GZIP=$case($zconvert($piece(file,".",*),"l"),"gz":1,"gzip":1,:0):/OBUFSIZE=32768:/NOXY=1):0 Else  Quit $$Error^%apiOBJ(5001,"Unable to open file "_file)
+	Use:file'="" file
+	Set gbfnum=$V($ZU(40,2,17),-2,$ZU(40,0,1))-1
+	Write "Buffers:"_gbfnum,!
+	Write "Period:"_delay,!
+	Write "NoTemp:"_notemp,!
+	For buff=0:1:gbfnum Set data(buff)="-1,-1",same(buff)=""
+	Set start=$zh
+	While $zh-start<length {
+		Write "Timestamp:"_$horolog,!
+		Set zh=$zh
+		For buff=0:1:gbfnum {
+			Set info=$zutil(190,16,buff)
+			If notemp {
+				If data(buff)=$piece(info,",",1,2) {
+					If $data(same(buff)) {
+						Continue
+					} Else {
+						Set same(buff)=""
+					}
+				} Else {
+					Set data(buff)=$piece(info,",",1,2)
+					Kill same(buff)
+					Continue
+				}
+			} Else {
+				If data(buff)=$piece(info,",",1,2) {
+					Continue
+				} Else {
+					Set data(buff)=$piece(info,",",1,2)
+				}
+			}
+			Set sfn=$p(info,",",1),block=$p(info,",",2)
+			If block=-1 {
+				Write buff_","_block_","_sfn,!
+			} Else {
+				Set type=$p(info,",",3),gbl=$p($p(info,",",4),"*")
+				If type'=24 Continue
+				If $isvalidnum(gbl) {
+					If '$data(crclist(sfn)) Do findCRCFromSFN(sfn,.crclist)
+					Set gbl=$get(crclist(sfn,gbl),gbl)
+				}
+				Write buff_","_block_","_sfn_","_type_","_gbl,!
+			}
+		}
+		Write !
+		Use io Write $zh-zh,! Use:file'="" file
+		Hang delay-($zh-zh)
+	}
+exit	Close:file'="" file Use io
+	Quit sc
+trap	Set $ztrap=""
+	If $zerror'["<INTERRUPT" Set sc=$$Error^%apiOBJ(5002,$zerror)
+	Goto exit
+}
+findCRCFromSFN(sfn,list) {
+	Set list(sfn)=""
+	Set dir=$p($zu(49,+sfn,3),"^",2)
+	Try {
+		s rset=##class(%Library.ResultSet).%New("%SYS.GlobalQuery:DirectoryList")
+		d rset.Execute(dir,,,1,,1)
+		while (rset.Next()) {
+			Set crc=$zcrc(rset.Data("Name"),7)
+			If $data(list(sfn,crc),tmp) {
+				Set list(sfn,crc)=tmp_","_rset.Data("Name")
+			} Else {
+				Set list(sfn,crc)=rset.Data("Name")
+			}
+		}
+	} Catch {
+		; Just ignore an error here and we will not lookup the big string
+	}
+}
+Read(file) public {
+	Quit 1
+	Set $ztrap="trap",sc=1,io=$IO
+	Open file:("RS":/GZIP=$case($zconvert($piece(file,".",*),"l"),"gz":1,"gzip":1,:0):/NOXY=1):0 Else  Quit $$Error^%apiOBJ(5001,"Unable to open file "_file)
+	Use file
+	Read line
+	Set gbfnum=$piece(line,"Buffers:",2)
+	If gbfnum="" Set sc=$$Error^%apiOBJ(5001,"Invalid file "_file) Goto exit
+	Read line
+	Set period=$piece(line,"Period:",2)
+	If period="" Set sc=$$Error^%apiOBJ(5001,"Invalid file "_file) Goto exit
+	Read line
+	Set notemp=$piece(line,"NoTemp:",2)
+	If notemp="" Set sc=$$Error^%apiOBJ(5001,"Invalid file "_file) Goto exit
+	Set movav=60*10\period,movavtime=period*movav
+	For buff=0:1:gbfnum Set data(buff)="-1,-1,0,"
+	For iteration=0:1 {
+		Read line If $zeof Goto exit
+		Set time=$piece(line,"Timestamp:",2) If time="" Set sc=$$Error^%apiOBJ(5001,"No timestamp in "_file) Goto exit
+		Use io Write "Time: ",$zdt(time,3),! Use file
+		Set replaced=0
+		For buffs=1:1 {
+			Read line If $zeof Goto exit
+			If line="" Quit
+			Set buff=$piece(line,","),block=$piece(line,",",2),sfn=$piece(line,",",3),type=$piece(line,",",4),gbl=$piece(line,",",5)
+			Set old=data(buff)
+			If $piece(old,",")'=-1,block'=-1 Set replaced=replaced+1
+			Set data(buff)=block_","_sfn_","_type_","_gbl
+			If iteration>0 { Use io Write "Replaced block ",old," : ",data(buff),! Use file }
+		}
+		If iteration>0 {
+			Set totalreplaced=totalreplaced+replaced
+			Set replaced(iteration)=totalreplaced
+			Set averagereplaced=totalreplaced/(period*iteration)
+			Use io
+			Write "Blocks replaced: ",replaced,"/",buffs-1,!
+			Write "Average replacement rate/s: ",averagereplaced,!
+			Write:averagereplaced>0 "Time to replace a block: ",gbfnum/averagereplaced,"s",!
+			If iteration>movav {
+				Set changed=totalreplaced-replaced(iteration-movav),averagereplaced=changed/movavtime
+				Write "Ten minute replacement rate/s: ",averagereplaced,!
+				Write:averagereplaced>0 "Ten minute av time to replace a block: ",gbfnum/averagereplaced,"s",!
+			}
+			Use file
+		} Else {
+			Set totalreplaced=0
+		}
+		Use io Write ! Use file
+	}
+exit	Close file Use io
+	Quit sc
+trap	Set $ztrap=""
+	If $zerror["<ENDOFFILE>" Goto exit
+	Set sc=$$Error^%apiOBJ(5002,$zerror)
+	Goto exit
+}
+ClearBuffers() public {
+	Set gbfnum=$V($ZU(40,2,17),-2,$ZU(40,0,1)),total=0
+	For buff=0:1:gbfnum-1 {
+		Set info=$zu(190,16,buff)
+		Set sfn=$piece(info,",",1),block=$piece(info,",",2)
+		If block'=-1 {
+			Try {
+				Do $zu(7,sfn,block)
+				Set total=total+1
+			} Catch {
+			}
+		}
+	}
+	Write "Removed ",total," blocks",!	
+}

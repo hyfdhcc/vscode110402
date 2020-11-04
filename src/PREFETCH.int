@@ -1,0 +1,23 @@
+ROUTINE PREFETCH [Type=INT]
+PREFETCH(debug) ;Prefetch Daemon (See $PrefetchOn and $PrefetchOff). ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/sysconfig/prefetch.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ d:(debug) $zu(9,"","Prefetch dmn starting",0,0)
+ d $zu(180,1) // <- 1 prefetchs in batch mode
+ d:(debug) $zu(9,"","Prefetch dmn stopping",0,0)
+ Q 0

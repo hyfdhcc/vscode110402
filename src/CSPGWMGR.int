@@ -1,0 +1,1059 @@
+ROUTINE CSPGWMGR [Type=INT]
+CSPGWMGR;;;CSP Gateway Manager Utility;created:BM 2015-03-04;last changed:BM 2017-06-13
+ // CSPGWMGR initial version by Bernd Mueller (bernd.mueller@intersystems.com) in 2015-03
+ // CSPButtons initial version by Tomas Vaverka (tomas.vaverka@intersystems.com) in 2013
+ // Change-Notes:
+ // 2015-03-09 - BM - fix leaking variables.
+ // 2015-03-09 - BM - added more Params to change Application Path settings.
+ // 2015-03-13 - BM - handle case if there is currently no Gateway connected/registered in Manage CSPGateways, Select Gateway. Add note to clarify that case.
+ // 2015-03-15 - BM - add/integrate CSPButtons.mac (CSP Gateway Diagnostic Report)
+ // 2015-03-16 - BM - Get CSP.log, add option to directly import fetched CSP.log from the Gateway into %ZCSPGTW.CSPLogEvent class/table if available
+ // 2015-03-16 - BM - Get CSP.log, add option to specify startDate for fetching the events
+ // 2015-03-17 - BM - fixes some bugs in input function $$OPTION()
+ // 2015-03-18 - BM - added "Show cspServer-Error-Log" server side error log - ^%cspServer("LOG") and ^cspServer("LOG")
+ // 2015-03-20 - BM - added *PWS* on the CSPGateway in the list of gateways if it is the Private Webserver
+ // 2015-03-24 - BM - removed CSPButtons into separated CSPButtons.mac
+ // 2015-03-27 - BM - replacements of $zutil's
+ // 2015-03-30 - BM - select namespace to enable/disable SOAPLog
+ // 2015-03-30 - BM - added change/modify Gateway Default-Params
+ // 2015-03-31 - BM - removed/converted .. code syntax
+ // 2015-04-01 - BM - change %ZCSPGTW.CSPLogEvent to %CSP.Util.CSPLogEvent to reflect classname change, added Response_Size_Notification_Always to application-access, Web_Server_ID_Cookie to default-params
+ // 2015-04-04 - BM - extend change/modify Default-,System-,Application-Params
+ // 2015-04-08 - BM - fix leaking variables.
+ // 2015-04-08 - BM - some minor changes.
+ // 2015-06-03 - BM - add ability to modify ^%ISCLOG MaxLogEntries and ErrorDetail
+ // 2015-07-01 - BM - add MXT1829 - headers only option (v2015.3) - support in setting ^ISCSOAP ("h" can be used together with "i" and/or "o")
+ // 2015-07-01 - BM - add MAK4344 - Fix UNDEFINED in gateway management CHUI
+ // 2015-10-02 - BM - trying to self init/register PWS if there is no Gateway connected/registered.
+ // 2015-10-03 - BM - add entrys StopPWS, StartPWS and RestartPWS
+ // 2015-10-08 - BM - correct issue with the self init/register PWS on older versions
+ // 2016-10-31 - BM - add Event Log path and file name for the Gateway Event Log to be shown in About CSP Gateway.
+ // 2017-06-13 - BM - webserver port for PWS Start could now be passed/specified with the StartPWS and RestartPWS entrys.
+ // 2017-06-13 - BM - the ^ISCSOAP log can now be enabled with v=verbose flag as well.
+ // 2017-12-28 - CMT1657 - Rework the PWS/Gateway Management routine (CSPGWMGR) to comply with the latest security standards (specifically in relation to 'command injection' vulnerabilities).
+ // 2018-01-29 - CMT1664 - Further refine the PWS/Gateway Management routine (CSPGWMGR) so that the /SHELL switch is not used when invoking the $ZF(-100, ...) function to start the Web Server.
+ // -----------------------------------------------------------------------------
+ // -----------------------------------------------------------------------------
+ If +$System.Version.GetNumber()<2012.1 {
+   Write !,"*** You are running on Cach?"_$System.Version.GetNumber()_" and "_"CSP Gateway Manager Utility"_" is only for Cach?2012.2 and later ***"
+   Quit
+ }
+ If '($roles["%All") {
+   Write !,"*** You need %All privileges to run "_"CSP Gateway Manager Utility"_" ***"
+   Quit
+ }
+ New reppws,pwsreg
+MAIN s $zt="MAINERR"
+ New GW,gwid,GWAPPS,appnum,GWSRVS,srvnum
+ New Option,sc
+ New CSPMgr,CSPMgrs
+ k GW
+ if $g(regpws)=1 d MANAGE g MAIN
+ w !!,"CSP Gateway Manager Utility",", ","v1.0"
+ w !,"================================="
+ w !,"1) Manage CSPGateways"
+ w !,"2) Create CSPButtons Report"
+ w !,"---------------------"
+ w !,"3) Enable ^%ISCLOG ("_$$ISCLOGSTATE()_")"
+ w !,"4) Disable ^%ISCLOG"
+ w !,"5) Export ^%ISCLOG"
+ w !,"6) Enable SOAP-Log - ^ISCSOAP ("
+ w $$ISCSOAPSTATES()
+ w ")"
+ w !,"7) Disable SOAP-Log"
+ w !,"8) Show cspServer-Error-Log"
+ w !,"9) Exit"
+ s Option=$$OPTION("Option?",9,9)
+ if Option=1 d MANAGE g MAIN
+ if Option=2 d CSPButtons g MAIN
+ if Option=3 d ENAISCLOG g MAIN
+ if Option=4 d DISISCLOG g MAIN
+ if Option=5 d EXPISCLOG g MAIN
+ if Option=6 d ENAISCSOAP g MAIN
+ if Option=7 d DISISCSOAP g MAIN
+ if Option=8 d CSPSERVERLOG g MAIN
+ q
+MAINERR s $zt=""
+ if $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q
+MANAGE s $zt="MAINERR"
+ New mgrid,x,i,count
+ if '$g(regpws) w !!,"List of registered CSPGateways:"
+ else  w " *** trying to init PWS and register, please wait ..." Hang 5
+ s:'$d(GW) count=$$GetGWS(.GW)
+ s mgrid=""
+ For x=1:1  {
+   s mgrid=$Order(GW(mgrid))
+   q:mgrid=""
+   s i=GW(mgrid)
+   w !!,mgrid," - ",$p(i,"~",1)_$s($p(i,"~",6)=1:" *PWS*",1:"")_" ("_$p(i,"~",2)_") "_$p(i,"~",3)
+   w:(($tr($p(i,"~",4),$c(0),"")'="")!($tr($p(i,"~",5),$c(0),"")'="")) !,?4,$p(i,"~",4)_" "_$p($p(i,"~",5),"Cache_Server_Pages",1)
+   w:$p(i,"~",7)'="" !,?4,$p(i,"~",7)
+ }
+ if $d(GW)<10 {
+   if $g(pwsreg)<1,$increment(pwsreg) s regpws=$$RegPWS() Q:regpws=1  
+   w !!,"Currently there is no Gateway connected/registered.",!,"Gateways will be initially connect when the first request is made to this server!" 
+   s Option=$$OPTION("<CR> to continue","","")
+   q
+ }
+ k pwsreg,regpws
+ s gwid=$$OPTION("Select Gateway? (1-"_$o(GW(""),-1)_")","",$o(GW(""),-1))
+ if +gwid>0 d MANAGEGW g MANAGE
+ q
+MANAGEGW s $zt="MAINERR"
+ w !
+ w !,"1)  System Status"
+ w !,"2)  Close Connections"
+ w !,"3)  Clear Cache"
+ w !,"4)  Set Username/Password to access CSP-Gateway-Management Forms"
+ w !,"5)  Get CSP.ini"
+ w !,"6)  Activate CSP.ini"
+ w !,"7)  Get System Metrics"
+ w !,"----------------------"
+ w !,"8)  Get/Export CSP.log"
+ w !,"9)  Clear CSP.log"
+ w !,"10) Set CSP.log Event Log Level"
+ w !,"----------------------"
+ w !,"11) Default Parameters"
+ w !,"12) Server Access"
+ w !,"13) Application Access"
+ w !,"14) About CSP Gateway"
+ w !,"----------------------"
+ w !,"15) Exit"
+ s Option=$$OPTION("Option?","",15)
+ if Option=1 d GETSYSSTATUS g MANAGEGW
+ if Option=2 d CLOSECONN g MANAGEGW
+ if Option=3 d CLEARCACHE g MANAGEGW
+ if Option=4 d SETACCESSGWM g MANAGEGW
+ if Option=5 d GETCSPINI g MANAGEGW
+ if Option=6 d ACTIVATECSPINI g MANAGEGW
+ if Option=7 d GETSYSMETRICS g MANAGEGW
+ if Option=8 d GETEXPCSPLOG g MANAGEGW
+ if Option=9 d CLEARCSPLOG g MANAGEGW
+ if Option=10 d SETLOGLEVEL g MANAGEGW
+ if Option=11 d GETDEFPARAMS g MANAGEGW
+ if Option=12 d GETSRVACCESS g MANAGEGW
+ if Option=13 d GETAPPACCESS g MANAGEGW
+ if Option=14 d GETINFO g MANAGEGW
+ q
+GETSYSSTATUS s $zt="MAINERR"
+ q:CSPMgr=""
+ New status,conn,srv,app,apps,cache,form,cnid,srvid,appid,appsid,formid
+ Set sc=CSPMgr.GetSystemStatus(.status)
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ w !,"System Status:"
+ s cnid=""
+ w !!,"C# GW-PID Srv             IP              Port  Srv-PID Status   It/To   Act"
+ For  {
+   s conn=status.Connections.GetNext(.cnid)
+   q:cnid=""
+   w !,cnid,?3,conn.WebServerPID,?10,conn.CacheServerName,?26,conn.IPAddress,?42,conn.TCPPort,?48,conn.CacheServerPID,?56,conn.Status,?65,conn.IdleTime,?73,conn.Activity
+ }  
+ set srvid=""
+ w !!,"S# Srv             IP              Port  Con  InUse Priv  Act    Qd"
+ For  {
+   s srv=status.CacheServers.GetNext(.srvid)
+   q:srvid=""
+   w !,srvid,?3,srv.CacheServerName,?19,srv.IPAddress,?35,srv.TCPPort,?41,srv.TotalConnections,?46,srv.ConnectionsInUse,?52,srv.PrivateConnections,?58,srv.Activity,?65,srv.QueuedRequests
+ }
+ set appid=""
+ w !!,"Path# Path                S# Srv             Act    Status"
+ For  {
+   s app=status.ApplicationPaths.GetNext(.appid)
+   q:appid=""
+   s appsid=""
+   For  {
+     s apps=app.AlternativeServer.GetNext(.appsid)
+     q:appsid=""
+     w !,appid,?6,app.Path,?26,appsid,?29,apps.CacheServerName,?45,apps.Activity,?52,apps.Status
+   }
+ }
+ set cache=status.CachedForms
+ w !!,"Cached Forms        Cached Data (Bytes)      Cached Form Actifity"
+ w !,cache.FormsInCache,?20,cache.CachedData,?45,cache.CacheActivity
+ set formid=""
+ w !!,"Form",?50,"Size",?60,"Actifity"
+ For  {
+   s form=cache.Form.GetNext(.formid)
+   q:formid=""
+   w !,formid,?50,form.Size,?60,form.Activity
+ }
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+GETSYSMETRICS s $zt="MAINERR"
+ q:CSPMgr=""
+ New metrics
+ k metrics
+ Set sc=CSPMgr.GetSystemMetrics(.metrics)
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ w !!,"System Metrics:",!
+ do ShowArray(.metrics)
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+GETCSPINI s $zt="MAINERR"
+ q:CSPMgr=""
+ New ini
+ Set sc=CSPMgr.GetCSPIni(.ini, "stream") //format="array" or "stream"
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ q:ini=""
+ w !!,"CSP.ini:",!
+ do ini.OutputToDevice()
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+GETINFO s $zt="MAINERR"
+ q:CSPMgr=""
+ New info
+ Set sc=CSPMgr.GetInfo(.info)
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ q:info=""
+ w !!,"About CSP Gateway: (broken in GW's before v2015.1/CMT1293)",!
+ w !,"Version",?20," : ",info.Version
+ w !,"Gateway Build",?20," : ",info.Build
+ w !,"Web Server Name",?20," : ",info.WebServerName  //CMT1293
+ w !,"Web Server Port",?20," : ",info.WebServerPort  //CMT1293
+ w !,"Web Server Type",?20," : ",info.WebServerSoftware  //CMT1293
+ w !,"Active Interface",?20," : ",info.ActiveInterface  //CMT1293
+ if +$System.Version.GetNumber()>=2015.1 w !,"Configuration",?20," : ",info.Configuration  //new in CMT1293 2015.1+
+ if +$System.Version.GetNumber()>=2016.2 w !,"Event Log",?20," : ",info.EventLog  //new in CMT1428 2016.2+
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+CLEARCACHE s $zt="MAINERR"
+ q:CSPMgr=""
+ Set sc=CSPMgr.ClearCache()
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ w !,"Cache cleared!"
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+GETEXPCSPLOG s $zt="MAINERR"
+ q:CSPMgr=""
+ New events,LogFile,file,startDate,log,io,fd,ImportCSPLogEvent
+ w !!,"How many event/entrys do you like to fetch? (* = all) <1000>: " r events
+ s:events="" events=1000 s:events="*" events=9999999
+ if $zconvert(events,"L")="e"!($zconvert(events,"L")="q") q
+ w !,"From what Date? (* = all, t=today, t-1=yesterday, ...) <*>: " r fd
+ s:fd=""!(fd="*") fd=0
+ if $zconvert(events,"L")="e"!($zconvert(events,"L")="q") q
+ if $zconvert($e(fd),"L")="t" s fd=+$h-$p($tr(fd," ",""),"-",2)
+ Set ImportCSPLogEvent=0
+ if ##class(%Dictionary.CompiledClass).%ExistsId("%CSP.Util.CSPLogEvent") {
+   if $$YN("Do you want to import directly into %CSP.Util.CSPLogEvent","N")="Y" Set ImportCSPLogEvent=1	 
+ }
+ if ImportCSPLogEvent=0 {
+   Set LogFile=$System.Util.ManagerDirectory()_CSPMgr.Server_"_"_CSPMgr.Port_"_CSP.log"
+   w !!,"Export-Filename? <"_LogFile_"> : " r file
+   s:file="" file=LogFile
+   if $zconvert(file,"L")="e"!($zconvert(file,"L")="q") q
+ }
+ Set startDate = $zdate(fd,11)_", "_$zdate(fd,2)_" "_$ztime($piece(fd,",",2),1)_" GMT"  //0 = from the very begining,
+ //Set sc=CSPMgr.GetCSPLog(.log,"now",-1,events) //last 1000 events from time="now" backwards=-1, to get all -> 999999
+ Set sc=CSPMgr.GetCSPLog(.log,startDate,1,events)
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ do log.Rewind()
+ if $$YN("Fetch "_$s(events=9999999:"all",1:events)_" CSP.log events from "_$s(fd=0:"the begining",1:$zd(fd,3))_" and "_$s(ImportCSPLogEvent=1:"import",1:"export")_" now","Y")="Y" {
+   if ImportCSPLogEvent=1 {
+	 w !
+	 Set result=##class(%CSP.Util.CSPLogEvent).Import(log, "", "", , 1, , 1, 0)
+	 w !!,result,!   
+   }
+   else  {
+     set io=$IO
+     open file:"WNS":2
+     if '$T w !,"Could not export! File could not be created. Please check path of given filename." q
+     Use file do log.OutputToDevice()
+     Close file
+     Use io
+     Write !!,"Log file saved to: ",file_", "_$FNumber($zutil(140,1,file),",")_" bytes",!
+   }
+ }
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+CLEARCSPLOG s $zt="MAINERR"
+ q:CSPMgr=""
+ Set sc=CSPMgr.ClearCSPLog()
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ w !,"CSP.log cleared!"
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+SETLOGLEVEL s $zt="MAINERR"
+ q:CSPMgr=""
+ New loglevel,cU
+ w !,"Log Level? (leave empty to clear) : " r loglevel
+ k cU
+ s cU("Env_Parameters")=loglevel
+ Set sc=CSPMgr.SetDefaultParams(.cU)
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ w !,"Event Log Level "_$s(loglevel="":"Cleared!",1:"set to "_loglevel)
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+SETACCESSGWM s $zt="MAINERR"
+ q:CSPMgr=""
+ New username,password,cU
+ w !,"Username? : " r username
+ w !,"Password? : " r password
+ k cU
+ s cU("Username")=username
+ s cU("Password")=password
+ Set sc=CSPMgr.SetDefaultParams(.cU)
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ w !,"Username/Password to access CSP-Gateway Management Forms set!"
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+CLOSECONN s $zt="MAINERR"
+ q:CSPMgr=""
+ Set sc=CSPMgr.CloseConnections("*") //All
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ w !,"All Connections Closed!"
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+ACTIVATECSPINI s $zt="MAINERR"
+ q:CSPMgr=""
+ Set sc=CSPMgr.ActivateCSPIni()
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ w !,"CSP.ini activated!"
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+GETDEFPARAMS s $zt="MAINERR"
+ q:CSPMgr=""
+ New config
+ k config
+ Set sc=CSPMgr.GetDefaultParams(.config)
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ w !!,"Default Parameter:",!
+ do ShowArray(.config)
+ w !
+ if $$YN("Modify","N")="Y" d MANAGEDEFPARAMS g GETDEFPARAMS
+ q
+MANAGEDEFPARAMS s $zt="MAINERR"
+ q:CSPMgr=""
+ New config,instancehostname,maxconnections,maxcachesize,smforms,smtimeout,sysmanager,sysmanagerunpwoverride,acceptxforwardedfor
+ New customsmloginform,serverresponsetimeout,queuedrequesttimeout,noactivitytimeout,timeoutallconnections,envparameters,eventlogfile
+ New eventlogrotationsize,retainalllogfiles,saexcludefiletypes,webserveridcookie,aspdocroot,aspdirectory,username,password,cconnectlibrarypath
+ k config
+ Set sc=CSPMgr.GetDefaultParams(.config)
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ w !!,"(enter null or """" to specify empty-string/clear the value)",!
+ s instancehostname=$$OPTION("Instance Host Name",$g(config("Instance_Host_Name"),""),,1)
+ q:instancehostname<0
+ s maxconnections=$$OPTION("Maximum Connections",$g(config("MAX_CONNECTIONS"),"1024"),,1)
+ q:maxconnections<0
+ s maxcachesize=$$OPTION("Maximum Cache Size",$g(config("MAX_CACHE_SIZE"),"256K"),,1)
+ q:maxcachesize<0
+ //Web_Server_ID_Cookie  ***NEW in 2015.1***
+ s webserveridcookie=$$OPTION("Web Server ID Cookie",$g(config("Web_Server_ID_Cookie"),"Enabled"),,1)
+ q:webserveridcookie<0
+ //Security
+ s smforms=$$OPTION("Access to these forms",$g(config("SM_Forms"),"Enabled"),,1)
+ q:smforms<0
+ s username=$$OPTION("Username accessing forms",$g(config("Username"),""),,1)
+ q:username<0
+ s password=$$OPTION("Password accessing forms",$g(config("Password"),""),,1)
+ q:password<0
+ s smtimeout=$$OPTION("Session Timeout",$g(config("SM_Timeout"),"300"),,1)
+ q:smtimeout<0
+ s sysmanager=$$OPTION("System Manager Machine/s",$g(config("System_Manager"),""),,1)
+ q:sysmanager<0
+ s sysmanagerunpwoverride=$$OPTION("Override Username and Password",$g(config("System_Manager_UNPW_Override"),"Disabled"),,1)
+ q:sysmanagerunpwoverride<0
+ s acceptxforwardedfor=$$OPTION("Accept client IP addresses forwarded by proxy servers",$g(config("Accept_X_Forwarded_For"),"Disabled"),,1)
+ q:acceptxforwardedfor<0
+ //Custom Login Form = Custom_SM_Login_Form
+ s customsmloginform=$$OPTION("Custom Login Form",$g(config("Custom_SM_Login_Form"),""),,1)
+ q:customsmloginform<0
+ //Connections
+ s serverresponsetimeout=$$OPTION("Server Response Timeout",$g(config("Server_Response_Timeout"),"60"),,1)
+ q:serverresponsetimeout<0
+ s queuedrequesttimeout=$$OPTION("Queued Request Timeout",$g(config("Queued_Request_Timeout"),"60"),,1)
+ q:queuedrequesttimeout<0
+ s noactivitytimeout=$$OPTION("No Activity Timeout",$g(config("No_Activity_Timeout"),"86400"),,1)
+ q:noactivitytimeout<0
+ s timeoutallconnections=$$OPTION("Apply timeout to all connections",$g(config("Timeout_All_Connections"),"Disabled"),,1)
+ q:timeoutallconnections<0
+ s envparameters=$$OPTION("Event Log Level",$g(config("Env_Parameters"),""),,1)
+ q:envparameters<0
+ s eventlogfile=$$OPTION("Event Log File",$g(config("Event_Log_File"),""),,1)
+ q:eventlogfile<0
+ s eventlogrotationsize=$$OPTION("Event Log Rotation Size",$g(config("Event_Log_Rotation_Size"),""),,1)
+ q:eventlogrotationsize<0
+ s retainalllogfiles=$$OPTION("Retain All Log Files",$g(config("Retain_All_Log_Files"),"Disabled"),,1)
+ q:retainalllogfiles<0
+ s cconnectlibrarypath=$$OPTION("SSL/TLS Library Path",$g(config("CCONNECT_LIBRARY_PATH"),""),,1)
+ q:cconnectlibrarypath<0
+ //Preserve Mode Exclude File Types = SA_Exclude_File_Types
+ s saexcludefiletypes=$$OPTION("Preserve Mode Exclude File Types",$g(config("SA_Exclude_File_Types"),""),,1)
+ q:saexcludefiletypes<0
+ //ASP Redirect
+ s aspdocroot=$$OPTION("ASP Redirect - Web Document Root",$g(config("Document_Root"),""),,1)
+ q:aspdocroot<0
+ s aspdirectory=$$OPTION("ASP Redirect - Temp ASP Directory",$g(config("ASP_Directory"),""),,1)
+ q:aspdirectory<0
+ k cU
+ //only update params which really changed
+ s:$g(config("Instance_Host_Name"))'=instancehostname cU("Instance_Host_Name")=instancehostname
+ s:$g(config("MAX_CONNECTIONS"))'=maxconnections cU("MAX_CONNECTIONS")=maxconnections
+ s:$g(config("MAX_CACHE_SIZE"))'=maxcachesize cU("MAX_CACHE_SIZE")=maxcachesize
+ s:$g(config("Web_Server_ID_Cookie"),"Enabled")'=webserveridcookie cU("Web_Server_ID_Cookie")=webserveridcookie
+ s:$g(config("SM_Forms"))'=smforms cU("SM_Forms")=smforms
+ s:$g(config("Username"))'=username cU("Username")=username
+ s:$g(config("Password"))'=password cU("Password")=password
+ s:$g(config("SM_Timeout"))'=smtimeout cU("SM_Timeout")=smtimeout
+ s:$g(config("System_Manager"))'=sysmanager cU("System_Manager")=sysmanager
+ s:$g(config("System_Manager_UNPW_Override"),"Disabled")'=sysmanagerunpwoverride cU("System_Manager_UNPW_Override")=sysmanagerunpwoverride
+ s:$g(config("Accept_X_Forwarded_For"),"Disabled")'=acceptxforwardedfor cU("Accept_X_Forwarded_For")=acceptxforwardedfor
+ s:$g(config("Custom_SM_Login_Form"))'=customsmloginform cU("Custom_SM_Login_Form")=customsmloginform
+ s:$g(config("Server_Response_Timeout"))'=serverresponsetimeout cU("Server_Response_Timeout")=serverresponsetimeout
+ s:$g(config("Queued_Request_Timeout"))'=queuedrequesttimeout cU("Queued_Request_Timeout")=queuedrequesttimeout
+ s:$g(config("No_Activity_Timeout"))'=noactivitytimeout cU("No_Activity_Timeout")=noactivitytimeout
+ s:$g(config("Timeout_All_Connections"),"Disabled")'=timeoutallconnections cU("Timeout_All_Connections")=timeoutallconnections
+ s:$g(config("Env_Parameters"))'=envparameters cU("Env_Parameters")=envparameters
+ s:$g(config("Event_Log_File"))'=eventlogfile cU("Event_Log_File")=eventlogfile
+ s:$g(config("Event_Log_Rotation_Size"))'=eventlogrotationsize cU("Event_Log_Rotation_Size")=eventlogrotationsize
+ s:$g(config("Retain_All_Log_Files"),"Disabled")'=retainalllogfiles cU("Retain_All_Log_Files")=retainalllogfiles
+ s:$g(config("CCONNECT_LIBRARY_PATH"))'=cconnectlibrarypath cU("CCONNECT_LIBRARY_PATH")=cconnectlibrarypath
+ s:$g(config("SA_Exclude_File_Types"))'=saexcludefiletypes cU("SA_Exclude_File_Types")=saexcludefiletypes
+ s:$g(config("Document_Root"))'=aspdocroot cU("Document_Root")=aspdocroot
+ s:$g(config("ASP_Directory"))'=aspdirectory cU("ASP_Directory")=aspdirectory
+ w !
+ if '$d(cU) w !,"No Changes!" s Option=$$OPTION("<CR> to continue","","") q
+ if 0 w !,"***",! zw cU w "***",!
+ if $$YN("Apply Changes","Y")="Y" {
+   Set sc=CSPMgr.SetDefaultParams(.cU)
+   if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+   w !,"Updated!"
+ }
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+GETSRVACCESS s $zt="MAINERR"
+ q:CSPMgr=""
+ New serverList,i,srvName,srvStatus,srvconfig
+ k serverList
+ Set sc=CSPMgr.GetServers(.serverList)
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ k GWSRVS,srvnum
+ w !!,"Server Access:"
+ For i=1:1:$LL(serverList) {
+   s srvName=$p($LG(serverList,i),"=",1)
+   s GWSRVS(i)=srvName
+   s srvStatus=$p($LG(serverList,i),"=",2)
+   w !!,i," - Server Name",?30," : ",srvName
+   w !,"Service-Status",?30," : ",srvStatus
+   k srvconfig
+   Set sc=CSPMgr.GetServerParams(srvName,.srvconfig)
+   if ('sc) w !,$system.Status.GetOneErrorText(sc) continue
+   do ShowArray(.srvconfig,30)
+ }
+ q:i<1
+ s srvnum=$$OPTION("Select Server? (1-"_i_")","",i)
+ if +srvnum>0,$g(GWSRVS(srvnum))'="" d MANAGESRV g GETSRVACCESS
+ q
+MANAGESRV s $zt="MAINERR"
+ q:CSPMgr=""
+ New servicestatus,ipaddress,tcpport,mirroraware,conseclevel,username,password,product,spn
+ New keytable,sslccprotocol,sslcckeytype,sslccverifypeer,sslcccertificatefile,sslcccertificatekeyfile,sslcccacertificatefile,sslccprivatekeypassword
+ New minsrvcons,maxsrvcons,maxconspersession,serverresponsetimeout,noactivitytimeout,timeoutallconnections,envparameters
+ w !!,"Modify Server Access:",GWSRVS(srvnum),!
+ w !,"(enter null or """" to specify empty-string/clear the value)",!
+ k srvconfig
+ Set sc=CSPMgr.GetServerParams(GWSRVS(srvnum),.srvconfig)
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ s servicestatus=$$OPTION("Service Status",$g(srvconfig("Service_Status"),"Enabled"),,1)
+ q:servicestatus<0
+ s ipaddress=$$OPTION("IP Address",$g(srvconfig("Ip_Address"),"127.0.0.1"),,1)
+ q:ipaddress<0
+ s tcpport=$$OPTION("Superserver TCP Port",$g(srvconfig("TCP_Port"),"1972"),,1)
+ q:tcpport<0
+ s mirroraware=$$OPTION("Configuration is Mirror Aware ",$g(srvconfig("Mirror_Aware"),"Disabled"),,1)
+ q:mirroraware<0
+ //Connection Security
+ w !,"(0=Password, 1=Kerberos ,2=Kerberos with Packet Integrity, 3=Kerberos with Encryption, 10 or 11=SSL/TLS)"
+ s conseclevel=$$OPTION("Connection Security Level",$g(srvconfig("Connection_Security_Level"),"0"),,1)
+ q:conseclevel<0
+ s username=$$OPTION("Username accessing server",$g(srvconfig("Username"),""),,1)
+ q:username<0
+ s password=$$OPTION("Password accessing server",$g(srvconfig("Password"),""),,1)
+ q:password<0
+ w !,"(0=Cache, 1=Ensemble)"
+ s product=$$OPTION("Product",$g(srvconfig("product"),"0"),,1)
+ q:product<0
+ s spn=$$OPTION("Service Principal Name",$g(srvconfig("Service_Principal_Name"),""),,1)
+ q:spn<0
+ s keytable=$$OPTION("Key Table",$g(srvconfig("Keytable"),""),,1)
+ q:keytable<0
+ w !,"(1=SSLv2, 2=SSLv3, 4=TLSv1.0 (default), 8=TLSv1.1, @=TLSv1.2)"
+ w !,"(Concatenate values together. Example: to check TLSv1.0, v1.1 and v1.2 -> 48@)"
+ s sslccprotocol=$$OPTION("SSL/TLS Protocol",$g(srvconfig("SSLCC_Protocol"),"4"),,1)
+ q:sslccprotocol<0
+ w !,"(1=DSA, 2=RSA (default))"
+ s sslcckeytype=$$OPTION("SSL/TLS Key Type",$g(srvconfig("SSLCC_Key_Type"),"2"),,1)
+ q:sslcckeytype<0
+ s sslccverifypeer=$$OPTION("Require peer certificate verification",$g(srvconfig("SSLCC_Verify_Peer"),"Disabled"),,1)
+ q:sslccverifypeer<0
+ s sslcccertificatefile=$$OPTION("SSL/TLS Certificate File",$g(srvconfig("SSLCC_Certificate_File"),""),,1)
+ q:sslcccertificatefile<0
+ s sslcccertificatekeyfile=$$OPTION("SSL/TLS Private Key File",$g(srvconfig("SSLCC_Certificate_Key_File"),""),,1)
+ q:sslcccertificatekeyfile<0
+ s sslcccacertificatefile=$$OPTION("SSL/TLS CA Certificate File",$g(srvconfig("SSLCC_CA_Certificate_File"),""),,1)
+ q:sslcccacertificatefile<0
+ s sslccprivatekeypassword=$$OPTION("SSL/TLS Private Key Password",$g(srvconfig("SSLCC_Private_Key_Password"),""),,1)
+ q:sslccprivatekeypassword<0
+ //State-Less Parameters
+ s minsrvcons=$$OPTION("Minimum Server Connections",$g(srvconfig("Minimum_Server_Connections"),"3"),,1)
+ q:minsrvcons<0
+ s maxsrvcons=$$OPTION("Maximum Server Connections",$g(srvconfig("Maximum_Server_Connections"),""),,1)
+ q:maxsrvcons<0
+ s maxconspersession=$$OPTION("Maximum Connections per Session",$g(srvconfig("Maximum_Session_Connections"),"3"),,1)
+ q:maxconspersession<0
+ //Optional Parameters - These parameters will be inherited from the CSP Gateway 'Default Parameters' if not specified here.
+ s serverresponsetimeout=$$OPTION("Server Response Timeout",$g(srvconfig("Server_Response_Timeout"),""),,1)
+ q:serverresponsetimeout<0
+ s noactivitytimeout=$$OPTION("No Activity Timeout",$g(srvconfig("No_Activity_Timeout"),""),,1)
+ q:noactivitytimeout<0
+ s timeoutallconnections=$$OPTION("Apply timeout to all connections",$g(srvconfig("Timeout_All_Connections"),"Disabled"),,1)
+ q:timeoutallconnections<0
+ s envparameters=$$OPTION("Event Log Level",$g(srvconfig("Env_Parameters"),""),,1)
+ q:envparameters<0
+ k cU
+ //only update params which really changed
+ s:$g(srvconfig("Service_Status"),"Enabled")'=servicestatus cU("Service_Status")=servicestatus
+ s:$g(srvconfig("Ip_Address"))'=ipaddress cU("Ip_Address")=ipaddress
+ s:$g(srvconfig("TCP_Port"))'=tcpport cU("TCP_Port")=tcpport
+ s:$g(srvconfig("Mirror_Aware"),"Disabled")'=mirroraware cU("Mirror_Aware")=mirroraware
+ s:$g(srvconfig("Connection_Security_Level"))'=conseclevel cU("Connection_Security_Level")=conseclevel
+ s:$g(srvconfig("Username"))'=username cU("Username")=username
+ s:$g(srvconfig("Password"))'=password cU("Password")=password
+ s:$g(srvconfig("product"),"0")'=product cU("product")=product
+ s:$g(srvconfig("Service_Principal_Name"))'=spn cU("Service_Principal_Name")=spn
+ s:$g(srvconfig("Keytable"))'=keytable cU("Keytable")=keytable
+ s:$g(srvconfig("SSLCC_Protocol"))'=sslccprotocol cU("SSLCC_Protocol")=sslccprotocol
+ s:$g(srvconfig("SSLCC_Key_Type"),"2")'=sslcckeytype cU("SSLCC_Key_Type")=sslcckeytype
+ s:$g(srvconfig("SSLCC_Verify_Peer"),"Disabled")'=sslccverifypeer cU("SSLCC_Verify_Peer")=sslccverifypeer
+ s:$g(srvconfig("SSLCC_Certificate_File"))'=sslcccertificatefile cU("SSLCC_Certificate_File")=sslcccertificatefile
+ s:$g(srvconfig("SSLCC_Certificate_Key_File"))'=sslcccertificatekeyfile cU("SSLCC_Certificate_Key_File")=sslcccertificatekeyfile
+ s:$g(srvconfig("SSLCC_CA_Certificate_File"))'=sslcccacertificatefile cU("SSLCC_CA_Certificate_File")=sslcccacertificatefile
+ s:$g(srvconfig("SSLCC_Private_Key_Password"))'=sslccprivatekeypassword cU("SSLCC_Private_Key_Password")=sslccprivatekeypassword
+ s:$g(srvconfig("Minimum_Server_Connections"))'=minsrvcons cU("Minimum_Server_Connections")=minsrvcons
+ s:$g(srvconfig("Maximum_Server_Connections"))'=maxsrvcons cU("Maximum_Server_Connections")=maxsrvcons
+ s:$g(srvconfig("Maximum_Session_Connections"))'=maxconspersession cU("Maximum_Session_Connections")=maxconspersession
+ s:$g(srvconfig("Server_Response_Timeout"))'=serverresponsetimeout cU("Server_Response_Timeout")=serverresponsetimeout
+ s:$g(srvconfig("No_Activity_Timeout"))'=noactivitytimeout cU("No_Activity_Timeout")=noactivitytimeout
+ s:$g(srvconfig("Timeout_All_Connections"),"Disabled")'=timeoutallconnections cU("Timeout_All_Connections")=timeoutallconnections
+ s:$g(srvconfig("Env_Parameters"))'=envparameters cU("Env_Parameters")=envparameters
+ w !
+ if '$d(cU) w !,"No Changes!" s Option=$$OPTION("<CR> to continue","","") q
+ if 0 w !,"***",! zw cU w "***",!
+ if $$YN("Apply Changes","Y")="Y" {
+   Set sc=CSPMgr.SetServerParams(GWSRVS(srvnum),.cU)
+   if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+   w !,"Updated!"
+ }
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+SETACCESSSRV s $zt="MAINERR"
+ q:CSPMgr=""
+ New username,password,cU
+ w !,"Username? : " r username
+ w !,"Password? : " r password
+ k cU
+ s cU("Username")=username
+ s cU("Password")=password
+ Set sc=CSPMgr.SetServerParams(GWSRVS(srvnum), .cU)
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ w !,"Username/Password set!"
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+GETAPPACCESS s $zt="MAINERR"
+ q:CSPMgr=""
+ New appPaths,i,appPath,appPathStatus,appconfig
+ k appPaths
+ Set sc=CSPMgr.GetApplicationPaths(.appPaths)
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ k GWAPPS,appnum
+ w !!,"Application Access:"
+ For i=1:1:$LL(appPaths) {
+   s appPath=$p($LG(appPaths,i),"=",1)
+   s GWAPPS(i)=appPath
+   s appPathStatus=$p($LG(appPaths,i),"=",2)
+   w !!,i," - Application Path",?30," : ",appPath
+   w !,"Service-Status",?30," : ",appPathStatus
+   k appconfig
+   Set sc=CSPMgr.GetApplicationParams(appPath,.appconfig)
+   if ('sc) w !,$system.Status.GetOneErrorText(sc) continue
+   do ShowArray(.appconfig,30)
+ }
+ q:i<1
+ s appnum=$$OPTION("Select Application? (1-"_i_")","",i)
+ if +appnum>0,$g(GWAPPS(appnum))'="" d MANAGEAPP g GETAPPACCESS
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+MANAGEAPP s $zt="MAINERR"
+ q:CSPMgr=""
+ New apppath,appconfig,gzip,gzipminsize,gzipexft,rsn,rsnalways,keepalive,nph,cU
+ New appservicestatus,extracgi,procclass,altservers,server1,server1status,server2,server2status,server3,server3status,gzipdef
+ s apppath=$g(GWAPPS(appnum))
+ w !!,"Modify Application Path:",apppath,!
+ w !,"(enter null or """" to specify empty-string/clear the value)",!
+ k appconfig
+ Set sc=CSPMgr.GetApplicationParams(apppath,.appconfig)
+ if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+ s appservicestatus=$$OPTION("Service Status",$g(appconfig("Application_Status"),"Enabled"),,1)
+ q:appservicestatus<0
+ s extracgi=$$OPTION("Extra CGI Environment Variables",$g(appconfig("Extra_CGI_Env_Variables"),""),,1)
+ q:extracgi<0
+ s procclass=$$OPTION("Process with this class",$g(appconfig("Proc_Class"),""),,1)
+ q:procclass<0
+ //CMT1112 - Change the default setting for the 'GZIP Compression' parameter so that GZIP compression is 'Enabled' for all Application Paths. Build nnn.1353
+ s gzipdef="Enabled" if +$g(gwid),$d(GW(gwid)) s gzipdef=$s(+$p($p($p(GW(gwid),"~",2),"b",2),".",2)>=1353:"Enabled",1:"Disabled")
+ s gzip=$$OPTION("GZIP Compression",$g(appconfig("GZIP_Compression"),gzipdef),,1)
+ q:gzip<0
+ s gzipminsize=$$OPTION("GZIP Minimum File Size",$g(appconfig("GZIP_Minimum_File_Size"),500),,1)
+ q:gzipminsize<0
+ s gzipexft=$$OPTION("GZIP Exclude File Types",$g(appconfig("GZIP_Exclude_File_Types"),"jpeg gif ico png gz zip mp3 mp4"),,1)
+ q:gzipexft<0
+ w !,"(Chunked Transfer Encoding and Content Length (default),",!," Chunked Transfer Encoding,",!," Content Length)"
+ s rsn=$$OPTION("Response Size Notification",$g(appconfig("Response_Size_Notification"),"Chunked Transfer Encoding and Content Length"),,1)
+ q:rsn<0
+ s rsnalways=$$OPTION("Generate a response size notification for all requests",$g(appconfig("Response_Size_Notification_Always"),"Disabled"),,1)
+ q:rsnalways<0
+ w !,"(No Action (default), Enabled, Disabled)"
+ s keepalive=$$OPTION("KeepAlive",$g(appconfig("KeepAlive"),"No Action"),,1)
+ q:keepalive<0
+ s nph=$$OPTION("Non-Parsed Headers",$g(appconfig("Non_Parsed_Headers"),"Enabled"),,1)
+ q:nph<0
+ //"FailOver" = Fail-Over, "LoadBalancing" = Load-Balancing and Fail-Over
+ s altservers=$$OPTION("Use Alternative Servers For",$g(appconfig("Alternative_Servers"),"FailOver"),,1)
+ q:altservers<0
+ s server1=$$OPTION("Server 1",$g(appconfig("Alternative_Server_0"),$get(appconfig("Default_Server"))),,1)
+ q:server1<0
+ s server1status=$$OPTION("Server 1 Status",$g(appconfig("Alternative_Server_0_Status"),"Enabled"),,1)
+ q:server1status<0
+ s server2=$$OPTION("Server 2",$g(appconfig("Alternative_Server_1"),""),,1)
+ q:server2<0
+ s server2status=$$OPTION("Server 2 Status",$g(appconfig("Alternative_Server_1_Status"),"Disabled"),,1)
+ q:server2status<0
+ s server3=$$OPTION("Server 3",$g(appconfig("Alternative_Server_2"),""),,1)
+ q:server3<0
+ s server3status=$$OPTION("Server 3 Status",$g(appconfig("Alternative_Server_2_Status"),"Disabled"),,1)
+ q:server3status<0
+ k cU
+ //only update params which really changed
+ s:$g(appconfig("Application_Status"),"Enabled")'=appservicestatus cU("Application_Status")=appservicestatus
+ s:$g(appconfig("GZIP_Compression"))'=gzip cU("GZIP_Compression")=gzip
+ s:$g(appconfig("GZIP_Minimum_File_Size"))'=gzipminsize cU("GZIP_Minimum_File_Size")=gzipminsize
+ s:$g(appconfig("GZIP_Exclude_File_Types"))'=gzipexft cU("GZIP_Exclude_File_Types")=gzipexft
+ s:$g(appconfig("Response_Size_Notification"))'=rsn cU("Response_Size_Notification")=rsn
+ s:$g(appconfig("Response_Size_Notification_Always"),"Disabled")'=rsnalways cU("Response_Size_Notification_Always")=rsnalways
+ s:$g(appconfig("KeepAlive"))'=keepalive cU("KeepAlive")=keepalive
+ s:$g(appconfig("Non_Parsed_Headers"))'=nph cU("Non_Parsed_Headers")=nph
+ s:$g(appconfig("Extra_CGI_Env_Variables"))'=extracgi cU("Extra_CGI_Env_Variables")=extracgi
+ s:$g(appconfig("Proc_Class"))'=procclass cU("Proc_Class")=procclass
+ s:$g(appconfig("Alternative_Servers"),"FailOver")'=altservers cU("Alternative_Servers")=altservers
+ s:$g(appconfig("Alternative_Server_0"))'=server1 cU("Alternative_Server_0")=server1
+ s:$g(appconfig("Alternative_Server_0_Status"),"Enabled")'=server1status cU("Alternative_Server_0_Status")=server1status
+ s:$g(appconfig("Alternative_Server_1"))'=server2 cU("Alternative_Server_1")=server2
+ s:$g(appconfig("Alternative_Server_1_Status"),"Disabled")'=server2status cU("Alternative_Server_1_Status")=server2status
+ s:$g(appconfig("Alternative_Server_2"))'=server3 cU("Alternative_Server_2")=server3
+ s:$g(appconfig("Alternative_Server_2_Status"),"Disabled")'=server2status cU("Alternative_Server_2_Status")=server3status
+ w !
+ if '$d(cU) w !,"No Changes!" s Option=$$OPTION("<CR> to continue","","") q
+ //k cU("Alternative_Server_0_Status")
+ if 0 w !,"***",! zw cU w "***",!
+ if $$YN("Apply Changes","Y")="Y" {
+   Set sc=CSPMgr.SetApplicationParams(apppath,.cU)
+   if ('sc) w !,$system.Status.GetOneErrorText(sc) q
+   w !,"Updated!"
+ }
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+ShowArray(A,px) ;
+ New k
+ s k="" s:+$g(px)=0 px=35
+ For  {
+	Set k=$order(A(k))
+	q:k=""
+	w !,k,?px," : ",A(k)	 
+ }
+ q
+GetSelectedGW() ;
+ q:+$g(gwid)<1
+ Set CSPMgr=CSPMgrs.GetAt(gwid)
+ q:CSPMgr=""
+ w "[GW "_gwid_" - "_CSPMgr.IPAddress_":"_CSPMgr.Port_"] " //_" "_$s(CSPMgr.State="i":"no ",1:"")_" live connection"_" "_$zd(CSPMgr.LastConnectTime,3)
+ //selected server 
+ q:+$g(srvnum)<1
+ q:$g(GWSRVS(srvnum))=""
+ w "[SRV "_srvnum_" - "_GWSRVS(srvnum)_"] "
+ //selected application path
+ q:+$g(appnum)<1
+ q:$g(GWAPPS(appnum))=""
+ w "[APP "_appnum_" - "_GWAPPS(appnum)_"] "
+ q
+GetGWS(GW) ;
+ New info,CSPRegs,count,mgrid,webserverport
+ //w !,"***GetGatewayMgrs from GatewayRegistry***",!
+ Set webserverport=$$GetConfig("WebServerPort") 
+ Set CSPRegs=$system.CSP.GetGatewayRegistry()
+ Set CSPMgrs=CSPRegs.GetGatewayMgrs()
+ Set count=CSPMgrs.Count()
+ For mgrid=1:1:count {
+	 set CSPMgr=CSPMgrs.GetAt(mgrid)
+	 q:CSPMgr=""
+	 set GW(mgrid)=CSPMgr.Server_":"_CSPMgr.Port
+ 	 Set sc=CSPMgr.GetInfo(.info)
+ 	 if sc {
+	 	 Set GW(mgrid)=GW(mgrid)_"~v"_info.Version_" b"_$p(info.Build," ",1)_"~"_info.ActiveInterface_"~"_info.WebServerName_"~"_info.WebServerSoftware_"~"_$s(CSPMgr.Port=webserverport:1,1:0)
+	 	 if +$System.Version.GetNumber()>=2015.1 {  //CMT1293 2015.1+
+	 	   Set GW(mgrid)=GW(mgrid)_"~"_info.Configuration
+	 	 }
+ 	 }
+ }
+ q count
+GetConfig(name) ;
+ New result,currNsp,CPFProperties,Properties
+ s currNsp=$namespace
+ Try {
+   if currNsp'="%SYS" ZNspace "%SYS"
+   set CPFProperties = ##class(Config.Startup).Get(.Properties)
+   set result=$g(Properties(name))
+ }
+ Catch { }
+ if $namespace'=currNsp ZNspace currNsp
+ Quit $g(result)
+ENAISCLOG s $zt="MAINERR"
+ New loglevel
+ w !!,"*** Attention: Enabling will delete all currently availabel log-data ***"
+ s loglevel=$$OPTION("What loglevel? (1,2,3)",3,3)
+ q:+loglevel<1
+ s maxlogentries=$$OPTION("MaxLogEntries",1000000,9999999)
+ q:+maxlogentries<1
+ s errordetail=$$OPTION^CSPGWMGR("ErrorDetail",1,2)
+ q:+errordetail<1
+ do EnableISCLOG(loglevel,maxlogentries,errordetail)
+ w !,"enabled!"
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+DISISCLOG s $zt="MAINERR"
+ do DisableISCLOG()
+ w !,"disabled!"
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+EXPISCLOG s $zt="MAINERR"
+ New mode,file,ok
+ s mode=$$OPTION("Export mode? (1 = xml, 2 = txt)",1,2)
+ q:+mode<1
+ w !!,"Filename? <"_$System.Util.ManagerDirectory()_"isclog."_$select(mode=2:"txt",1:"xml")_"> : " r file
+ s:file="" file=$System.Util.ManagerDirectory()_"isclog."_$select(mode=2:"txt",1:"xml")
+ if $zconvert(file,"L")="e"!($zconvert(file,"L")="q") q
+ if $$YN("Export now","Y")="Y" {
+	 Set ok=$$ExportISCLOG(file, $s(mode=2:1,1:""))
+	 if 'ok w !,"Could not export! File could not be created. Please check path of given filename." q
+	 w !,file," Exported!"
+ 	 s Option=$$OPTION("<CR> to continue","","")
+ }
+ q
+EnableISCLOG(loglevel, maxlogentries, errordetail) //
+	Set:$get(loglevel)="" loglevel=3
+	Set:$get(maxlogentries)="" maxlogentries=1000000
+	Set:$get(errordetail)="" errordetail=1
+	Kill:loglevel>0 ^%ISCLOG
+	Set ^%ISCLOG=loglevel
+	if loglevel>0 {
+		Set ^%ISCLOG("MaxLogEntries")=maxlogentries  //only the last 10000 by default, this is not enough :(
+		Set ^%ISCLOG("ErrorDetail")=errordetail  //0 - Just log the message and the value of $ZE and $ZU(56,5), 1 (default) - Log the message, the value of $ZE and $ZU(56,5) and the call stack, 2 - Log the local symbol table $ZE, $ZU(56,5) and the call stack
+	}
+	Quit
+DisableISCLOG() //
+	do EnableISCLOG(0)
+	Quit
+	// Export ^%ISCLOG (default xml mode)
+ExportISCLOG(file, plaintext)
+	//plaintext is often more convenient for analysing in editors
+	New a,io
+	if $get(file)="" Set file=$System.Util.ManagerDirectory()_"isclog."_$select(+$get(plaintext):"txt",1:"xml") Write "Export to Filename? <"_file_"> : " Read a Set:a'="" file=a
+	if +$get(plaintext) {
+	  new io
+ 	  set io=$IO
+ 	  open file:"WNS":2
+ 	  if '$T Quit 0
+ 	  use file
+ 	  zwrite ^%ISCLOG
+ 	  close file
+ 	  use io
+	}
+	else  {	
+	  do $System.OBJ.Export("%ISCLOG.GBL",file)
+	}
+	Quit 1
+ISCLOGSTATE() ;
+ New x,res,xd
+ s x=+$g(^%ISCLOG)
+ s res=$s(x=0:"disabled!",1:"enabled! ["_x_"]")
+ if $d(^%ISCLOG("Data"))>1 s xd=+$g(^%ISCLOG("Data")) s res=res_" Log Data available"_$s(xd>0:" ["_xd_" entrys]",1:"")
+ q res
+ //^%ISCLOG("Data")=count
+ENAISCSOAP s $zt="MAINERR"
+ New what,logfile,Nsp,currNsp,NSPS
+ k NSPS
+ASKNSPE //
+ s currNsp=$namespace
+ do GetNSPS^CSPGWMGR(.NSPS,0)
+ w !!,"Enable SOAPLog in Namespace? <"_currNsp_"> (? to list namespaces) : " r Nsp
+ if Nsp="" s Nsp=currNsp
+ if $zconvert(Nsp,"L")="e"!($zconvert(Nsp,"L")="q") q
+ if Nsp="?" {
+	 w !,"List of defined namespaces:"
+	 s Nsp="" For  s Nsp=$o(NSPS(Nsp)) q:Nsp=""  w !,Nsp
+	 g ASKNSPE
+ }
+ w !!,"log mode? (i,o,s,h,v) <ios> : " r what
+ s what=$zconvert(what,"L")
+ if what="" s what="ios"
+ q:'(what["i")&&('(what["o"))&&('(what["s"))&&('(what["h"))&&('(what["v"))
+ w !!,"logfile? <"_$g(^ISCSOAP("LogFile"),$System.Util.ManagerDirectory()_"iscsoap_"_$zconvert(Nsp,"L")_".txt")_"> : " r logfile
+ s:logfile="" logfile=$g(^ISCSOAP("LogFile"),$System.Util.ManagerDirectory()_"iscsoap_"_$zconvert(Nsp,"L")_".txt")
+ if $zconvert(logfile,"L")="e"!($zconvert(logfile,"L")="q") q
+ Try {
+   ZNspace Nsp
+   do EnableSOAPLog(what, logfile)
+ }
+ Catch {
+   //
+ }
+ ZNspace currNsp
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+DISISCSOAP s $zt="MAINERR"
+ New currNsp,Nsp,NSPS
+ k NSPS
+ASKNSPD //
+ s currNsp=$namespace
+ do GetNSPS^CSPGWMGR(.NSPS,0)
+ w !!,"Disable SOAPLog in Namespace? <"_currNsp_"> (? to list namespaces, * = All) : " r Nsp
+ if Nsp="" s Nsp=currNsp
+ if $zconvert(Nsp,"L")="e"!($zconvert(Nsp,"L")="q") q
+ if Nsp="?" {
+	 w !,"List of defined namespaces:"
+	 s Nsp="" For  s Nsp=$o(NSPS(Nsp)) q:Nsp=""  w !,Nsp
+	 g ASKNSPD
+ }
+ if Nsp="*",$d(NSPS) {
+   s Nsp=""
+   For  {
+	 s Nsp=$o(NSPS(Nsp))
+	 q:Nsp=""
+	 Try {
+       ZNspace Nsp
+       do DisableSOAPLog()
+       w !,"SOAPLog disabled in Nsp. "_$namespace_"!"
+     }
+     Catch {
+       //
+     }
+   }   
+ }
+ else  { 
+   Try {
+     ZNspace Nsp
+     do DisableSOAPLog()
+     w !,"SOAPLog disabled in Nsp. "_$namespace_"!"
+   }
+   Catch {
+     //
+   }
+ }
+ ZNspace currNsp
+ s Option=$$OPTION("<CR> to continue","","")
+ q
+EnableSOAPLog(what, logfile)
+ s:$g(what)="" what="ios"
+ s:$g(logfile)="" logfile=$System.Util.ManagerDirectory()_"iscsoap.txt"
+ s ^ISCSOAP("Log")=what //i=Input, o=Output, s=security, v=verbose
+ s ^ISCSOAP("LogFile")=logfile
+ w !,"SOAPLog to "_logfile_" enabled in Nsp. "_$namespace_"!"
+ Quit
+DisableSOAPLog()
+ k ^ISCSOAP("Log")
+ k ^ISCSOAP("LogFile")
+ Quit
+ISCSOAPSTATES() ;
+ New NSPS,Nsp
+ k NSPS
+ do GetNSPS(.NSPS,1)
+ s Nsp=""
+ For  {
+   s Nsp=$O(NSPS(Nsp))
+   Quit:Nsp=""
+   w !,?3,Nsp," : ",NSPS(Nsp)  	 
+ }
+ Quit ""
+ISCSOAPSTATE() ;
+ New what,logfile
+ s what=$g(^ISCSOAP("Log"))
+ q:what="" "disabled!"
+ s logfile=$g(^ISCSOAP("LogFile"))
+ q "enabled! ["""_what_"""] "_logfile
+GetNSPS(NSPS,iscsoapstate) ;
+ New i,currNsp,rsNsp,Nsp
+ Set currNsp=$namespace
+ Set rsNsp=##class(%Library.ResultSet).%New("%SYS.Namespace:List")
+ Do rsNsp.Execute()
+ While rsNsp.Next() {
+   Set Nsp=rsNsp.Data("Nsp")
+   If Nsp["DOCBOOK" Continue
+   Set NSPS(Nsp)=""
+   if $g(iscsoapstate)=1 {
+     Try {
+       ZNspace Nsp
+     }
+     Catch {
+       ZNspace currNsp
+       Continue
+     }
+     Set NSPS(Nsp)=$$ISCSOAPSTATE()
+   }
+ }
+ Do rsNsp.Close()
+ ZNspace currNsp
+ Quit
+CSPSERVERLOG ;
+ New LN,N,HEAD,TEXT,currNsp,rsNsp,Nsp
+ Set LN=0
+ If $data(^%cspServer("LOG")) {
+   W !,"^%cspServer(""LOG"") - Namespace "_$namespace_":"
+   Set N="" For  Set N=$O(^%cspServer("LOG",N)) Quit:N=""  Set LN=LN+1,HEAD=$get(^(N,0)),TEXT=$get(^(1)) Do DISPLIN(HEAD,TEXT)
+ }
+ Set currNsp=$namespace
+ Set rsNsp=##class(%Library.ResultSet).%New("%SYS.Namespace:List")
+ Do rsNsp.Execute()
+ While rsNsp.Next() {
+   Set Nsp=rsNsp.Data("Nsp")
+   If Nsp["DOCBOOK" Continue
+   Try {
+     ZNspace Nsp
+   }
+   Catch {
+     ZNspace currNsp
+     Continue
+   }
+   If $data(^cspServer("LOG")) {
+     Write !!,"^cspServer(""LOG"") - Namespace "_Nsp_":"
+     Set N="" For  Set N=$order(^cspServer("LOG",N)) Quit:N=""  Set LN=LN+1,HEAD=$get(^(N,0)),TEXT=$get(^(1)) Do DISPLIN(HEAD,TEXT)
+   }
+ }
+ Do rsNsp.Close()
+ ZNspace currNsp
+ If 'LN { Write !,"The cspServer-Error-Log is empty!",! }
+ s Option=$$OPTION("<CR> to continue","","")
+ Quit
+DISPLIN(HEAD,TEXT) Write !!,">>> ",$piece(HEAD,"~"),", NameSpace: ",$piece(HEAD,"~",2),!,TEXT
+ Quit
+OPTION(prompt,default,max,nogw)
+ New in
+ s $zt="RERR"
+OPTION1 ; 
+ w !
+ if +$g(nogw)=0 w ! do GetSelectedGW()
+ w prompt w:default'="" " <"_default_">" w " : "
+ r in if default'="",in="" q default
+ q:in=""&(default="") ""
+ if in=""""""!(in=" ")!($zconvert(in,"L")="null") q ""
+ if $zconvert(in,"L")="e"!($zconvert(in,"L")="q") q -1
+ if +$g(max)>0,'(in?1.2N)!(in<1)!(in>max) w !!,"Please enter a number between 1 and "_max,! g OPTION1
+ q in
+YN(P,D,t)
+ New R,X
+ s $zt="RERR"
+ s P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ s D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ For  {
+   w !,P_"? "_D
+   Read:t R:t
+   Read:'t R
+   s X=R,R=$TR($E(R_D_"?"),"ynqe","YNQE")
+   if "^YNQE"'[R w "  enter Yes or No, please"
+   e  q  ;timed or non-timed read
+ }
+ w $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3)
+ q R
+RERR s $zt=""
+ if $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q 0
+ //call CSPButtons
+CSPButtons //
+ s $zt="MAINERR"
+ do ^CSPButtons
+ Quit
+RegPWS() ;
+ //do a request to initialize and make the PWS Gateway registered if it is currently not.
+ New sc
+ s sc=$$CheckPWSState()
+ Quit:'sc sc
+ New page,httprequest,server 
+ //-> http://localhost:<port>/csp/sys/%25CSP.Portal.Home.zen?CacheLogout=end
+ Set page="/csp/sys/%25CSP.Portal.Home.zen?CacheLogout=end"
+ Set httprequest=##class(%Net.HttpRequest).%New()
+ Set server=$$GetConfig("WebServerName")
+ Set:server="" server="127.0.0.1"
+ Set httprequest.Server=server
+ Set httprequest.Port=$$GetConfig("WebServerPort")
+ Set httprequest.Timeout=10
+ Set sc=httprequest.Get(page)
+ Quit:'sc sc
+ if 0=1 {
+   w !,"url/page:http://",server,":",httprequest.Port_page
+   w !,"StatusCode:",httprequest.HttpResponse.StatusCode,!
+   do httprequest.HttpResponse.Data.OutputToDevice()
+ }
+ if httprequest.HttpResponse.StatusCode=200 Quit 1
+ Quit 0
+CheckPWSState() ;
+ New sc
+ s $zt="CheckPWSStateError"
+ //this method is not available in Config.Startup for older versions
+ s sc=##Class(Config.Startup).CheckWebServerStatus()  //-> http://localhost:<port>/csp/sys/gateway_status.cxw => SUCCESS
+ Quit sc
+CheckPWSStateError ;
+ s $zt=""
+ if 0=1 w !,"CheckPWSStateError:",$ZE
+ Quit 1
+StopPWS() ;
+ Quit:$zconvert($System.Version.GetBuildOS(),"U")["VMS" 0
+ New sc
+ Set sc=##Class(Config.Startup).StopWebServer(1)  //is doing a Hang 5
+ if sc {
+   s sc=$$CheckPWSState() //is doing a request with Timeout=10 sec.
+   //if stopped => ERROR #6059: Can't open TCP/IP-Socket for Server 127.0.0.1:<port>
+   if 'sc set sc=1  //OK!!!
+ }
+ Quit sc
+StartPWS(wsport) public {
+ Quit:$zconvert($System.Version.GetBuildOS(),"U")["VMS" 0
+ Set:$g(wsport)="" wsport=$$GetConfig("WebServerPort")
+ Set wsaddress=$$GetConfig("WebServerName")
+ Set address=$s(wsaddress="":wsport,1:wasaddress_":"_wsport)
+ Set dir=##class(%Library.File).SubDirectoryName($system.Util.InstallDirectory(),"httpd")
+ Set log=##class(%Library.File).SubDirectoryName(##class(%Library.File).SubDirectoryName(dir,"logs"),"httpderr")
+ Set cmd=##class(%Library.File).SubDirectoryName(##class(%Library.File).SubDirectoryName(##class(%Library.File).SubDirectoryName($system.Util.InstallDirectory(),"httpd"),"bin"),"httpd")
+ If $system.Version.GetOS()="Windows" {
+  Set args($I(args))="-k"
+  Set args($I(args))="start"
+  Set args($I(args))="-n"
+  Set args($I(args))=$p($zu(86),"*",2)_"httpd"
+ } ElseIf $system.Version.GetOS()="UNIX" {
+  Set args($I(args))="-d"
+  Set args($I(args))=dir
+ } Else {
+  Quit $$Error^%apiOBJ(5003)
+ }
+ Set args($I(args))="-c"
+ Set args($I(args))="Listen "_address
+ Set x=$ZF(-100,"/STDOUT="""_log_"""/STDERR="""_log_"""",cmd,.args)
+ Set sc=$$CheckPWSState()
+ Quit sc
+ }
+RestartPWS(wsport) ;
+ Quit:$zconvert($System.Version.GetBuildOS(),"U")["VMS" 0
+ New ok
+ Set ok=$$StopPWS()
+ if ok {
+   set ok=$$StartPWS($g(wsport))
+ }
+ Quit ok

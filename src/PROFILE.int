@@ -1,0 +1,1154 @@
+ROUTINE PROFILE [Type=INT]
+PROFILE ; Routine profiler for Cache code ; RFD911  06/09/13
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+	/* clean up stack to the Execute or Shell and start chained prog */
+	/* clean up stack to the Execute or Shell and resume caller shell */
+	/* like stop but invoke ON.ABORT */
+	/* clean up stack and exit MV shell  */
+	/* clean up stack and halt cache process */
+ ;
+ ; display definitions - Percentages or Totals
+ ; 
+ ; piece definitions for Routine display in ^||%Profile.Display(line)
+ ; first 'n' pieces are stats
+ ; routine name
+ ; database system
+ ; database directory
+ ; routine selected flag
+ ; routine source name
+ ;
+ ; fetch pieces for Detail list in ^||%Profile.Routine(RoutineIndex)
+ ; RoutineName ^ System ^ Directory ^ SourceName ^ DatabaseName
+ ;  
+ ; default for number of routines to monitor
+ ; 
+ ;
+ d Start q
+Start() private {
+ i '($e($roles,1,$l("%All"))="%All") w !,"Insufficient privilege for operation" q
+ s status=$$Status()
+ i status="MONLBL" {
+	 w !,"The Line-by-line Monitor (%SYS.MONLBL) is already enabled."
+	 w !,"This must be stopped before ^PROFILE can be used.",!
+	 q
+ }
+ i status="PERFMON" {
+	 w !,"A performance monitoring session (^PERFMON) is already running."
+	 w !,"This must be stopped before ^PROFILE can be used.",!
+	 q
+ }
+ i status="STOPPED" {
+	 s status=$$STARTROU()
+	 i status'=1 {
+		 w !!,"Error starting profiler: ",$p(status,",",2),!
+		 s status=$$pause()
+		 q
+	 }
+	 s status=$$Status()
+	 i status="ROUTINE" {
+		 w !!,"Waiting for initial data collection " f i=1:1:3 h 1 w "."
+	 }
+ }
+ i status="ROUTINE" {
+	 d DISPLAY()
+	 s status=$$STARTDET() ; start a detail collection?
+	 i status'=1 {
+		 w !!,"Error collecting profiler detail: ",$p(status,",",2),!
+		 s status=$$pause()
+	 }
+	 s status=$$Status()
+ }
+ i status="DETAIL" {
+	 d DISPLAYD()
+ }
+ i status'="STOPPED" {
+ 	 d STOP()
+ }
+ k ^||%Profile.Sort,^||%Profile.Display,^||%Profile.Detail,^||%Profile.Routine
+ q
+ }	 
+ ; 
+ ; Start a routine level run
+ ; Returns '1' for success, or a negative number followed by a "," and message
+ ;
+STARTROU() {
+ w !!,"WARNING: This routine will start a system-wide collection of"
+ w !,"data on routine activity and then display the results. There"
+ w !,"may be some overhead associated with the initial collection, "
+ w !,"and it could significantly affect a busy system.",!
+ w !,"The second phase of collecting line level detail activity"
+ w !,"has high overhead and should ONLY BE RUN ON A TEST SYSTEM!",!
+ s mask=8+4
+ s prompt="Are you ready to start the collection? ",response=1
+ s status=##class(%Library.Prompt).GetYesNo(prompt,.response,"",mask)
+ i +response=0 {
+	 w !!,"No collection started.",! q 1
+ }
+ ; If there's a user default, see if we can start it
+ s num=+$g(^SYS("MONITOR","PROFILE","ROUTINES"))
+ i num {
+	 s required=$zu(84,0,4,0,0,num,0,0),avail=$zu(84,0,5)
+	 i required<avail s status=$$StartRou(num) i +status'=-3 q status
+ }
+ ; Otherwise, see if our default uses too much memory
+ s num=5000,required=$zu(84,0,4,0,0,num,0,0),avail=$zu(84,0,5)
+ i required>(avail*.75) {
+	 f n=num:-500:500 {
+		 i $zu(84,0,4,0,0,n,0,0)<($zu(84,0,5)*.75) q
+	 }
+	 s num=n
+ }
+ s status=$$StartRou(num)
+ i +status=1,num<5000 {
+	 s required=$zu(84,0,4,0,0,5000,0,0),avail=$zu(84,0,5)
+	 w !!,"The Profile collection has been started for a maximum of ",num
+	 w !,"routines, which is less than the normal default. This is because"
+	 w !,"there was a limited amount of shared memory available. You may"
+	 w !,"need to increase the GenericHeapSize parameter in the system"
+	 w !,"configuration. To collect for the default of ",5000," routines"
+	 w !,"requires ",required," pages (of 64kb each) and there are currently"
+	 w !,"only ",avail," pages available.",!
+	 s n=$$pause()
+ }
+ q status
+}
+ ; 
+ ; Start a detail level run
+ ; Returns '1' for success, or a negative number followed by a "," and message
+ ;
+STARTDET() {
+ ;
+ ; see if any routines were selected
+ s i="",n=0 f  s i=$o(^||%Profile.Display(i)) q:i=""  i $p(^(i),",",6+4)=1 s n=n+1
+ i n=0 q 1
+ w #,!!,"There are ",n," routines selected for detailed profiling. You may now"
+ w !,"end the routine level collection and start a detailed profiler collection."
+ w !
+ w !,"WARNING !!",!
+ w !,"This will have each process on the system gather subroutine level and line"
+ w !,"level activity on these routines. Note that this part of the collection may"
+ w !,"have a significant effect on performance and should only be run in a test"
+ w !,"or development instance of Cache.",!
+ s mask=8+4
+ s prompt="Are you ready to start the detailed collection? ",response=1
+ s status=##class(%Library.Prompt).GetYesNo(prompt,.response,"",mask)
+ i +response=0 q 1
+ w !!,"Stopping the routine level Profile collection ..."
+ s status=$$Stop()
+ i status'=1 q status
+ s status=$$StartDet()
+ i status=1 w !!,"Detail level Profile collection started." h 1
+ q status
+ ;
+}
+ ; 
+ ; Display routine results
+ ;
+DISPLAY() {
+ s mask=8+4
+ s PAGEWIDTH=$System.Device.GetRightMargin() s:PAGEWIDTH=0 PAGEWIDTH=80
+ s PAGELEN=24 d ##class(%Library.Device).GetCurrent(,.PAGELEN)
+ s PAGECNT=(PAGELEN-2)\2 ; calculate how many routines per page
+ u 0:PAGEWIDTH
+ i $zu(84,3,3)=0 {
+	w !!,"No routines collected yet.",!
+	s status=$$pause()
+	q
+ }
+ d GetMetrics(.metrics) ; get list of routine metrics
+ ; get a list of database names
+ s rset=##class(%Library.ResultSet).%New("Config.Databases:LocalDatabaseList")
+ d rset.Execute()
+ while (rset.Next()) {
+	 s dbase(rset.Data("Directory"))=rset.Data("Name")
+ }
+ ; create help text
+ s opthelp(1)=""
+ s opthelp(2)="You may page through the sorted profile display, or select "
+ s opthelp(3)="routine(s) from this page that you would like to monitor at"
+ s opthelp(4)="a detail level. Enter a comma separated list of numbers, or a"
+ s opthelp(5)="number range, or a combination, e.g. '1,2-6,10'. Selected"
+ s opthelp(6)="routines will be marked with an '*' next to the routine name"
+ s opthelp(7)=""
+ s opthelp(8)="Routines selected on one page are remembered and any routines"
+ s opthelp(9)="selected on subsequent pages are added to the list."
+ s opthelp(10)=""
+ s opthelp(11)=""
+ s opthelp(12)="Other options are:"
+ s opthelp(13)=""
+ s opthelp(14)="    'Q' to exit this list (and use selected routines for detail profile)."
+ s opthelp(15)="    'N' to move to the next page."
+ s opthelp(16)="    'B' to move back a page."
+ s opthelp(17)="    'O' to change the display/sort options."
+ s opthelp(18)="    'R' to refresh the display with the most recent metrics."
+ s opthelp(19)="    'E' to export the current collection of metrics."
+ s opthelp(20)="    'X' to clear the list of routines and start over."
+ s opthelp(21)=""
+ ;
+ s display=1 ; default is percentages
+ s sort=1 ; default is lines excuted
+ s timeout=0 ; refresh rate
+ ;
+RouSort ; fetch a new sampling of metrics
+ k ^||%Profile.Sort,^||%Profile.Display
+ s ^||%Profile.Display=sort_","_display
+ ; build header lines
+ s hdr="      "_$p(metrics(sort),",",2),csvhdr=$p($p(metrics(sort),",",2)," ")
+ f i=1:1:6 i sort'=i s hdr=hdr_$p(metrics(i),",",2),csvhdr=csvhdr_","_$p($p(metrics(i),",",2)," ")
+ s csvhdr=csvhdr_",RoutineName,Database"
+ ; keep totals for percentages
+ f j=1:1:6 s totals(j)=0
+ ; sort data
+ k stats s stats=0 d GetStat(.stats) 
+ f i=1:1:stats {
+	s rstat="",nm=stats(i,"Name"),dir=$p(nm,","),sys=$p(nm,",",4),nm=$p(nm,",",3)
+	s:dir="" dir=" " s:sys="" sys=" " s stat=stats(i,"Stat")
+	f j=1:1:6 {
+		s pc=$p(metrics(j),",",3)
+		s val=$p(stat,",",pc) s:(pc=52)!(pc=53) val=$fnumber(val/100000,"ON",5)
+		s rstat=rstat_val_","
+		s totals(j)=totals(j)+val
+	}
+	s ^||%Profile.Sort(+$p(rstat,",",sort),nm,sys,dir)=rstat
+ }
+ s response="",NextDispLine=1,status=1
+ ; display the first page
+ s sortnext="^||%Profile.Sort("""")",LastSortLine=0
+ d ROUPAGE,ROUOUT
+RouPrompt ; ask for options
+ s mask=8+4
+ s prompt="Select routine(s) or '?' for more options ",response="N" s:timeout>0 response="R"
+ s status=##class(%Library.Prompt).GetString(prompt,.response,0,,.opthelp,mask,timeout)
+ i (+status=0)||(status=3) q
+ ;
+ ; select routines
+ i $e(response)?1.N {
+	; validate routine selection
+	s pc=$l(response,","),sel="",err=0
+	f i=1:1:pc {
+		s sel=$p(response,",",i)
+		i sel?.N {
+			if sel<NextDispLine,sel>=(NextDispLine-PAGECNT) {
+				i $p(^||%Profile.Display(sel),",",6+1)="Other" s err=1 q
+				s $p(^||%Profile.Display(sel),",",6+4)=1
+			} else {
+				s err=1 q
+			}
+		}
+		i sel?.N1"-".N {
+			s n1=$p(sel,"-"),n2=$p(sel,"-",2)
+			if n1>=(NextDispLine-PAGECNT),(n2<NextDispLine),n1<n2 {
+				f n=n1:1:n2 {
+					i $p(^||%Profile.Display(n),",",6+1)="Other" s sel=n,err=1 q
+					s $p(^||%Profile.Display(n),",",6+4)=1
+				}
+			} else {
+				s err=1 q
+			}
+		}
+	}
+	i err {
+		w !!,"Error in routine selection - ",sel,!
+		s status=$$pause
+	}
+	s NextDispLine=NextDispLine-PAGECNT
+	d ROUOUT g RouPrompt
+ }
+ ; change sort and/or display
+ i "Oo"[response {
+ 	w #,!!,"Sort by: " k Menu
+ 	; build Menu
+ 	f i=1:1:6 s Menu(i)=$p(metrics(i),",",1)
+ 	s val=1,mask=128+8+4
+ 	s status=##class(%Library.Prompt).GetMenu("Option?",.val,.Menu,,mask)
+ 	i (+status=0)||(status=2)||(status=3)||(val="") g RouPrompt
+ 	s sort=val
+ 	; ask for percent vs totals
+ 	w !!,"Compare routines as: "
+ 	s list(1)="Percentages"
+ 	s list(2)="Counter Totals"
+ 	s val=list(1),mask=8+32+128+4
+ 	s status=##Class(%Library.Prompt).GetArray("Option?",.val,.list,,,,8+32+128)
+ 	i (+status=0)||(status=2)||(status=3)||(val="") g RouPrompt
+ 	s display=$s(val=list(1):1,1:2)
+ 	w ! s prompt="Refresh rate for fetching current data?",response=timeout
+ 	s tohelp(1)="Enter the number of seconds in which the screen should"
+ 	s tohelp(2)="automatically refresh. The latest metrics will be gathered,"
+ 	s tohelp(3)="any routines selected will be cleared, and the display will"
+ 	s tohelp(4)="return to the first page. A '0' will disable auto-refresh."
+ 	s status=##Class(%Library.Prompt).GetNumber(prompt,.response,0,,.tohelp,mask)
+ 	i (+status=0)||(status=2)||(status=3)||(response="") g RouPrompt
+ 	s timeout=response
+ 	g RouSort
+ }
+ ; collect current stats
+ i "Rr"[response!(response="") {
+	 g RouSort
+ }
+ ; next page
+ i "Nn"[response {
+	 i sortnext'="" d ROUPAGE 
+	 i NextDispLine+PAGECNT>LastSortLine s NextDispLine=LastSortLine-PAGECNT+1
+	 d ROUOUT g RouPrompt
+ }
+ ; back one page
+ i "Bb"[response!(status=2) {
+	 s:NextDispLine>1 NextDispLine=NextDispLine-(PAGECNT*2)
+	 s:NextDispLine<1 NextDispLine=1
+	 ; w "Backing up to ",NextDispLine s status=$$pause()
+	 d ROUOUT g RouPrompt
+ }
+ i "xX"[response {
+	 f i=1:1:LastSortLine s $p(^||%Profile.Display(i),",",6+4)=0
+	 s NextDispLine=NextDispLine-PAGECNT
+	 d ROUOUT g RouPrompt
+ }
+  ; export results to a file
+ i "eE"[response {
+	 w #,!!,"Save current data in ...",!!
+	 s dev=0,mask=128+8+4,IOFlag=4,(IOSL,IOM,IOT)=""
+	 s status=##Class(%Library.Device).Get("Device:",.dev,,mask,,IOFlag,.IOSL,.IOM,"","","",.IOT)
+	 i (status=0)||(status=3)||(status=2) {
+		  s NextDispLine=NextDispLine-PAGECNT
+		  d ROUOUT g RouPrompt
+	 }
+	 u 0 w !!,"Output in: " k Menu
+	 s Menu(1)="Display format"
+	 s Menu(2)="CSV format"
+	 s response=1,status=##class(%Library.Prompt).GetMenu("Option?",.response,.Menu,,mask)
+	 i (+status=0)||(status=2)||(status=3)||(response="") c dev g RouPrompt
+	 ; fetch all sorted results
+	 while sortnext'="" {
+		 d ROUPAGE
+	 }
+	 ; display format
+	 if response=1 {
+		 u dev w hdr
+		 f line=1:1:LastSortLine d ROULINE(line)
+		 c dev s format="display"
+	 }
+	 ; CSV format 
+	 else {
+		 u dev w csvhdr,!
+		 f line=1:1:LastSortLine {
+			 s stat=^||%Profile.Display(line)
+			 s val=$p(stat,",",sort),nm=$p(stat,",",6+1),sys=$p(stat,",",6+2),dir=$p(stat,",",6+3)
+			 i display=1 s out=$s(totals(sort):$fnumber(val/totals(sort)*100,"ON",2),1:0)
+			 e  s out=val
+			 f pc=1:1:6 {
+				 i pc'=sort {
+					 s count=$p(stat,",",pc),out=out_","
+					 i display=1 s out=out_$s(totals(pc):$fnumber(count/totals(pc)*100,"ON",2),1:0)
+					 e  s out=out_count
+				 }
+			 }
+			 ; check for source
+			 s src="",ns="^"_$s(sys=" ":"",1:sys)_"^"_dir
+			 i nm'="Other" zn ns s src=##Class(%Library.RoutineMgr).GetOther(nm,"INT",-1) zn "%SYS"
+			 i dir]"",$d(dbase(dir)) s dir=dbase(dir) ; get database name
+			 s out=out_","_$s(src]"":src,nm="Other":nm,1:nm_".INT")_","_dir
+			 w out,!
+		 }
+		 c dev s format="CSV"
+	 }
+	 u 0 w !!,"Data saved in ",format," format to ",dev,!
+	 s response=$$pause()
+	 s NextDispLine=NextDispLine-PAGECNT
+	 d ROUOUT g RouPrompt
+ }
+ w !!,"Error in selection, type '?' at selection prompt for options.",! s status=$$pause()
+ ; redisplay same page
+ s NextDispLine=NextDispLine-PAGECNT
+ d ROUOUT
+ g RouPrompt
+ ;
+ROUPAGE ; Put the next page of entries into the display global
+ ;
+ s line=LastSortLine
+ f  {
+	s sortnext=$q(@sortnext,-1) q:sortnext=""
+	s val=$qs(sortnext,1),nm=$qs(sortnext,2)
+	s sys=$qs(sortnext,3) s:sys=" " sys=""
+	s dir=$qs(sortnext,4) s:dir=" " dir=""
+	s stats=@sortnext s line=line+1
+	s ^||%Profile.Display(line)=stats_nm_","_sys_","_dir
+	; check for source
+	s src="",ns="^"_$s(sys=" ":"",1:sys)_"^"_dir
+	if nm="Other" {
+		s src="Other"
+	} else {
+		s type=$select(+$get(^[ns]ROUTINE(nm,"LANG"))<9:"INT",1:$case(+$get(^[ns]ROUTINE(nm,"LANG")),9:"BAS",10:"INT",11:"MVI",12:"PROC"))
+		i type="INT" {
+			zn ns s src=##Class(%Library.RoutineMgr).GetOther(nm,"INT",-1) zn "%SYS"
+			i src="" s src=nm_".INT"
+		}
+		i type="MVI" s src=$p($g(^[ns]rMAP(nm,"MVI","MVB")),"~",2)_".MVB"
+		i type="BAS" s src=nm_".BAS"
+	}
+	s $p(^||%Profile.Display(line),",",6+5)=src
+	q:line-LastSortLine=PAGECNT
+ }
+ s LastSortLine=line
+ q
+ROUOUT ; display the current page from the display global
+ w #,hdr
+ i NextDispLine<1 s NextDispLine=1
+ f line=NextDispLine:1:NextDispLine+PAGECNT-1 {
+	 q:line>LastSortLine
+	 d ROULINE(line)
+ }
+ s NextDispLine=NextDispLine+PAGECNT
+ q
+ROULINE(line) ; write display format for current line from sort global
+ s stat=^||%Profile.Display(line)
+ s val=$p(stat,",",sort),nm=$p(stat,",",6+1),dir=$p(stat,",",6+3)
+ w !,line,". " s col=1
+ i display=1 w ?6,$s(totals(sort):$fnumber(val/totals(sort)*100,"ON",2),1:0),"%"
+ e  w ?6,val
+ f pc=1:1:6 {
+	i pc'=sort {
+		w ?(6+(12*col)) s count=$p(stat,",",pc),col=col+1
+		i display=1 w $s(totals(pc):$fnumber(count/totals(pc)*100,"ON",2),1:0),"%"
+		e  w count
+	}
+ }
+ w ! i $p(^||%Profile.Display(line),",",6+4)=1 w "    *" 
+ i dir]"",$d(dbase(dir)) s dir=dbase(dir) ; get database name
+ w ?6,$p(^||%Profile.Display(line),",",6+5) w:dir]"" " (",dir,")"
+ q
+ ;
+ERROR s $zt=""
+ i $ze["<INTERRUPT>" q
+ ztrap $ze
+}
+ ; 
+ ; Display detail results
+ ;
+DISPLAYD() {
+ s mask=128+8+4
+ s PAGEWIDTH=$System.Device.GetRightMargin() s:PAGEWIDTH=0 PAGEWIDTH=80
+ s PAGELEN=24 d ##class(%Library.Device).GetCurrent(,.PAGELEN)
+ s PAGECNT=PAGELEN-3 ; calculate how many lines per page
+ u $IO:PAGEWIDTH
+ k ^||%Profile.Routine,^||%Profile.Display
+ ; get a list of database names
+ s rset=##class(%Library.ResultSet).%New("Config.Databases:LocalDatabaseList")
+ d rset.Execute()
+ while (rset.Next()) {
+	 s dbase(rset.Data("Directory"))=rset.Data("Name")
+ }
+ ; get routine list
+ s RoutineCount=$zu(84,16)
+ f rnum=1:1:RoutineCount {
+	s nm=$zu(84,16,2,rnum),dir=$zu(84,16,6,rnum),sys=$p(dir,",",2),dir=$p(dir,",")
+	s src="",dbase="",ns="^"_sys_"^"_dir
+	s type=$select(+$get(^[ns]ROUTINE(nm,"LANG"))<9:"INT",1:$case(+$get(^[ns]ROUTINE(nm,"LANG")),9:"BAS",10:"INT",11:"MVI",12:"PROC"))
+	i type="INT" {
+		zn ns s src=##Class(%Library.RoutineMgr).GetOther(nm,"INT",-1) zn "%SYS"
+		i src="" s src=nm_".INT"
+	}
+	i type="MVI" s src=$p($g(^[ns]rMAP(nm,"MVI","MVB")),"~",2)_".MVB"
+	i type="BAS" s src=nm_".BAS"
+	i dir]"",$d(dbase(dir)) s dbase=dbase(dir) ; get database name
+	i src="" s src=nm_".INT"
+	; ^||%Profile.Routine(rnum) = RoutineName ^ System ^ Directory ^ SourceName ^ DatabaseName
+	s ^||%Profile.Routine(rnum)=nm_"^"_sys_"^"_dir_"^"_src_"^"_dbase
+ }
+ s metrics(1)="Lines of code executed,RtnLine     ,33"
+ s metrics(2)="Time of execution,Time        ,50"
+ s metrics(3)="Global references,GloRef      ,0"
+ ; create help text
+ k opthelp
+ s opthelp(1)=""
+ s opthelp(2)="This lists the routines selected for the detail collection"
+ s opthelp(3)="sorted by routine level activity."
+ s opthelp(4)="" 
+ s opthelp(5)="Select a routine, using the number list on the left to see"
+ s opthelp(6)="detail activity for the routine. You will be able to view either"
+ s opthelp(7)="Subroutine or Line level details. You will be returned to this"
+ s opthelp(8)="list when you quit from the details display."
+ s opthelp(9)=""
+ s opthelp(10)=""
+ s opthelp(11)="Other options are:"
+ s opthelp(12)=""
+ s opthelp(13)="    'Q' to exit the display screens."
+ s opthelp(14)="    'N' to move to the next page."
+ s opthelp(15)="    'B' to move back a page."
+ s opthelp(16)="    'O' to change the display/sort options."
+ s opthelp(17)="    'R' to refresh the display with the most recent metrics."
+ s opthelp(18)=""
+ s opthelp(19)=""
+ s sort=1 ; init sort as RtnLine
+ s display=1 ; display percent
+ s CodeType="INT" ; start with INT code
+GetSummary
+ k ^||%Profile.Sort,^||%Profile.Display
+ ; find sort metric
+ f metric=0:1:($zu(84,13)-1) {
+	 s n=$zu(84,13,11,metric)
+	 i n=$p(metrics(sort),",",3) s SortMetric=metric q
+ }
+ ; get routine metrics for each routine and sort
+ s SortTotal=0
+ f rnum=1:1:RoutineCount {
+	s val=0 i $zu(84,16,1,rnum) s val=$zu(84,16,5,SortMetric)
+	s ^||%Profile.Sort(val,rnum)=rnum
+	s SortTotal=SortTotal+val
+ }
+ ; build display list
+ s sortnext="^||%Profile.Sort("""")",line=0
+ f  {
+	s sortnext=$q(@sortnext,-1) q:sortnext=""
+	s val=$qs(sortnext,1),rnum=$qs(sortnext,2)
+	s line=line+1 s ^||%Profile.Display(line)=val_","_rnum
+ }
+ s NextDispLine=1
+DispRouList
+ w #,?4,$p(metrics(sort),",",2),?14,"Routine Name  (Database)"
+ i NextDispLine<1 s NextDispLine=1
+ f line=NextDispLine:1:NextDispLine+PAGECNT-1 {
+	 q:line>RoutineCount
+	 s stat=^||%Profile.Display(line),val=$p(stat,","),rnum=$p(stat,",",2)
+	 s src=$p(^||%Profile.Routine(rnum),"^",4),dbase=$p(^||%Profile.Routine(rnum),"^",5)
+	 i dbase="" s dbase="^"_$p(^||%Profile.Routine(rnum),"^",2)_"^"_$p(^||%Profile.Routine(rnum),"^",3) ; remote
+	 w !,line,". ",?4
+	 i display=1 w $s(SortTotal:$fnumber(val/SortTotal*100,"ON",2),1:0),"%"
+	 e  s:sort=2 val=$s(val=0:"0"_$j("",sp-4),1:$fnumber(val/10000,"ON",4)) w val
+	 w ?16,src," (",dbase,")"
+ }
+ s NextDispLine=NextDispLine+PAGECNT
+ s mask=8+4
+ s prompt="Select routine to see details or '?' for more options "
+ s response="N" s:NextDispLine>RoutineCount response="R"
+ w ! s status=##class(%Library.Prompt).GetString(prompt,.response,0,,.opthelp,mask,0)
+ i (+status=0)||(status=3) q
+ ; routine selected, display detail
+ i +response>(NextDispLine-PAGECNT-1),+response<NextDispLine {
+	 s rtn=$p(^||%Profile.Display(+response),",",2)
+	 d DETAIL(rtn)
+	 s NextDispLine=1
+	 g DispRouList
+ }
+ ; next page
+ i "Nn"[response {
+	 i NextDispLine+PAGECNT>RoutineCount s NextDispLine=RoutineCount-PAGECNT
+	 g DispRouList
+ }
+ ; refresh page
+ i "Rr"[response {
+	 g GetSummary
+ }
+ ; back one page
+ i "Bb"[response!(status=2) {
+	 s:NextDispLine>1 NextDispLine=NextDispLine-(PAGECNT*2)
+	 s:NextDispLine<1 NextDispLine=1
+	 g DispRouList
+ }
+ ; change sort metric
+ i "Oo"[response {
+ 	w #,!!,"Sort by: " k Menu
+ 	; build Menu
+ 	f i=1:1:3 s Menu(i)=$p(metrics(i),",",1)
+ 	s val=1,mask=128+8+4
+ 	s status=##class(%Library.Prompt).GetMenu("Option?",.val,.Menu,,mask)
+ 	i (+status=0)||(status=2)||(status=3)||(val="") g GetSummary
+ 	s sort=val
+ 	; ask for percent vs totals
+ 	w !!,"Compare routines as: "
+ 	s list(1)="Percentages"
+ 	s list(2)="Counter Totals"
+ 	s val=list(1),mask=8+32+128+4
+ 	s status=##Class(%Library.Prompt).GetArray("Option?",.val,.list,,,,8+32+128)
+ 	i (+status=0)||(status=2)||(status=3)||(val="") g GetSummary
+ 	s display=$s(val=list(1):1,1:2)
+ 	g GetSummary
+ }
+ w !!,"Error in selection, type '?' at selection prompt for options.",! s status=$$pause()
+ ; redisplay same page
+ s NextDispLine=NextDispLine-PAGECNT
+ g DispRouList
+ ;
+ ; Display details list
+ ;	'rtn' = routine number in internal list
+ ; 
+DETAIL(rtn,line)
+ s type="S"
+ s nm=$p(^||%Profile.Routine(rtn),"^",1),sys=$p(^||%Profile.Routine(rtn),"^",2),dir=$p(^||%Profile.Routine(rtn),"^",3)
+ s source=$p(^||%Profile.Routine(rtn),"^",4),dbase=$p(^||%Profile.Routine(rtn),"^",5)
+ s ns="^"_sys_"^"_dir,sp=11
+ ; get routine code
+ k routine s (routine,err)="",LineDetail=1
+ s load=nm i $p(nm,".",$l(nm,"."))'="INT" s load=nm_".INT"
+ i '$$ROUTINE^%R(load,.routine,.err,"LI",,,ns) {
+	 s text=$$FMTERR^%R(err)
+	 i text["<NOSOURCE>" w !!,"No source found for routine ",nm," in ",$s(dbase]"":dbase,1:ns)
+	 e  w !!,"Error loading routine ",nm," in ",dir," - ",text
+	 w !! s status=$$pause()
+	 q
+ }
+ ;
+ ; Subroutine level display
+ ;
+GetSubDetail
+ k ^||%Profile.Detail
+ s sel=$zu(84,16,1,rtn) ; select routine
+ ; Get a tag-line list, first piece is number of tags, others are line numbers for each tag
+ ; Routine must be ZLOADed so $zu() can access source code
+ s tags=0,hdr="Tag#    RtnLine    GloRef     Time        Label"
+ s com="(tags) zl "_nm_" s tags=$zu(84,16,4,0)"
+ ; use $zu(39) so we can find any mapped %-routines
+ zn ns d $zu(39,"^^") x (com,.tags) zn "%SYS" s ntags=+tags
+ f tag=1:1:ntags {
+	 s line=$p(tags,",",tag+1),data=""
+	 s tagname=$s(tag=1:nm,line="":"*Unknown*",1:$p(routine(line)," "))
+	 i $l(tagname)>38 s tagname=$e(tagname,1,35)_"..."
+	 ; get first 3 metrics (Lines, GloRef, Time ... no TotalTime)
+	 for metric=0:1:2 {
+		 s out=$zu(84,16,4,tag,metric)
+		 ; Convert clock to seconds
+		 i (metric=2) s out=$s(out=0:"0"_$j("",sp-4),1:$fnumber(out/100000,"ON",5))
+		 s data=data_out_"^"
+	 }
+	 s ^||%Profile.Detail(tag)=tagname_"^"_data
+ }
+ s RoutinePrompt=$p(^||%Profile.Routine(rtn),"^",1)_" in "_$s(dbase]"":dbase,1:ns)
+ s NextDispLine=1,LastLine=ntags
+DispSubDetail
+ w #,hdr
+ i NextDispLine<1 s NextDispLine=1
+ f line=NextDispLine:1:NextDispLine+PAGECNT-1 {
+	 q:line>LastLine
+	 w !,line,"." s stat=^||%Profile.Detail(line)
+	 w ?8,$p(stat,"^",2),?19,$p(stat,"^",3),?30,$p(stat,"^",4),?42,$p(stat,"^",1)
+ }
+ s NextDispLine=NextDispLine+PAGECNT
+ ; create help text
+ k opthelp
+ s opthelp(1)=""
+ s opthelp(2)=""
+ s opthelp(3)="This screen displays a list of subroutine labels and the metrics"
+ s opthelp(4)="counted for each label. You may switch to a Line Level display"
+ s opthelp(5)="of the same routine by entering 'L', or by selecting a label number"
+ s opthelp(6)="to jump to that line of the routine."
+ s opthelp(7)=""
+ s opthelp(8)="Other options are:"
+ s opthelp(9)="    'Q' to exit back to the list of routines."
+ s opthelp(10)="    'N' to move to the next page."
+ s opthelp(11)="    'B' to move back a page."
+ s opthelp(12)="    'R' to refresh the display with the most recent metrics."
+ s opthelp(13)=""
+ s opthelp(14)=""
+ s opthelp(15)="" 
+ s mask=8+4
+ s prompt="Routine "_RoutinePrompt_" - '?' for options ",response="N"
+ w ! s status=##class(%Library.Prompt).GetString(prompt,.response,0,,.opthelp,mask,0)
+ i (+status=0)||(status=3) q
+ ; select label and switch to line level
+ i response?1.N,response>0,response<(LastLine+1) {
+	 s NextDispLine=$p(tags,",",response+1)
+	 g DoLineDetail
+ }
+ ; next page
+ i "Nn"[response {
+	 i NextDispLine+PAGECNT>LastLine s NextDispLine=LastLine-PAGECNT
+	 g DispSubDetail
+ }
+ ; refresh page
+ i "Rr"[response {
+	 g GetSubDetail
+ }
+ ; back one page
+ i "Bb"[response!(status=2) {
+	 s:NextDispLine>1 NextDispLine=NextDispLine-(PAGECNT*2)
+	 s:NextDispLine<1 NextDispLine=1
+	 g DispSubDetail
+ }
+ ; Line level display
+ i "Ll"[response {
+	 s NextDispLine=1
+	 g DoLineDetail
+ }
+ w !!,"Error in selection, type '?' at selection prompt for options.",! s status=$$pause()
+ ; redisplay same page
+ s NextDispLine=NextDispLine-PAGECNT
+ g DispSubDetail
+ ;
+ ; Line level display
+ ;(NOTE: NextDispLine is set by selection in Subroutine Level)
+ ;
+DoLineDetail
+ k ^||%Profile.Detail,INTroutine,SRCroutine
+ s hdr1=$s(LineDetail=1:"RtnLine",LineDetail=2:"GloRef",LineDetail=3:"Time",1:"TotalTime")
+ s nm=$p(^||%Profile.Routine(rtn),"^",1),dbase=$p(^||%Profile.Routine(rtn),"^",5)
+ s sys=$p(^||%Profile.Routine(rtn),"^",2),dir=$p(^||%Profile.Routine(rtn),"^",3),ns="^"_sys_"^"_dir
+ s load=nm i $p(nm,".",$l(nm,"."))'="INT" s load=nm_".INT"
+ i '$$ROUTINE^%R(load,.INTroutine,.err,"LI",,,ns) q
+ s sel=$zu(84,16,1,rtn) ; select routine
+ f line=1:1:INTroutine(0) {
+	 s data=""
+	 ; get first metrics (Lines, GloRef, Time, TotalTime)
+	 for metric=0:1:3 {
+		 s out=$zu(84,16,3,line-1,metric)
+		 ; Convert clock to seconds
+		 i (metric=2)!(metric=3) s out=$s(out=0:"0"_$j("",sp-4),1:$fnumber(out/100000,"ON",5))
+		 s data=data_out_"^"
+	 }
+	 s ^||%Profile.Detail("INT",line)=data
+ }
+ s RoutinePrompt=$p(^||%Profile.Routine(rtn),"^",1)_" in "_$s(dbase]"":dbase,1:ns)
+ s LastLine=INTroutine(0)
+ i CodeType="SRC" {
+	 s ok=$$GetSrcDetail(rtn,.SRCroutine,.INTroutine)
+	 if ok {
+		 s LastLine=SRCroutine(0)
+		 s RoutinePrompt=$p(^||%Profile.Routine(rtn),"^",4)_" in "_$s(dbase]"":dbase,1:ns)
+	 } 
+	 else {
+		 s CodeType="INT"
+		 s RoutinePrompt=$p(^||%Profile.Routine(rtn),"^",1)_" in "_$s(dbase]"":dbase,1:ns)
+	 }
+ }
+ ;	 
+DispLineDetail
+ w #,"Line  ",hdr1,?30,"Code"
+ i NextDispLine<1 s NextDispLine=1
+ f line=NextDispLine:1:NextDispLine+PAGECNT-1 {
+	 q:line>LastLine
+	 w !,line,"." s stat=^||%Profile.Detail(CodeType,line)
+	 s rline=$s(CodeType="SRC":SRCroutine(line),1:INTroutine(line))
+	 s rline=$replace(rline,$c(9),"    ")
+	 w ?6,$p(stat,"^",LineDetail),?16,$e(rline,1,PAGEWIDTH-16)
+ }
+ s NextDispLine=NextDispLine+PAGECNT
+ ; create help text
+ k opthelp
+ s opthelp(1)=""
+ s opthelp(2)=""
+ s opthelp(3)="This screen displays a list of all lines for this routine and a"
+ s opthelp(4)="selected metric counted for each line. You may switch back to a"
+ s opthelp(5)="Subroutine Level display of the same routine by entering 'S'."
+ s opthelp(6)=""
+ s opthelp(7)="You may enter a line number to jump to that line of the routine."
+ s opthelp(8)=""
+ s opthelp(9)=""
+ s opthelp(10)="Other options are:"
+ s opthelp(11)=""
+ s opthelp(12)="    'Q' to exit back to the list of routines."
+ s opthelp(13)="    'N' to move to the next page."
+ s opthelp(14)="    'B' to move back a page."
+ s opthelp(15)="    'O' to change the display/metric options"
+ s opthelp(16)="    'C' to switch Code display (source vs. INT/MVI)"
+ s opthelp(17)="    'M' to change the page margin and length"
+ s opthelp(18)="    'R' to refresh the display with the most recent metrics."
+ s opthelp(19)=""
+ s opthelp(20)="" 
+ s opthelp(21)="" 
+ s mask=8+4
+ s prompt="Routine "_RoutinePrompt_" - '?' for options ",response="N"
+ w ! s status=##class(%Library.Prompt).GetString(prompt,.response,0,,.opthelp,mask,0)
+ i (+status=0)||(status=3) q
+ ; select line to display
+ i response?1.N,response>0,response<(LastLine+1) {
+	 s NextDispLine=response
+	 g DoLineDetail
+ }
+ ; next page
+ i "Nn"[response {
+	 i NextDispLine+PAGECNT>LastLine s NextDispLine=LastLine-PAGECNT
+	 g DispLineDetail
+ }
+ ; refresh page
+ i "Rr"[response {
+	 s NextDispLine=NextDispLine-PAGECNT s:NextDispLine<1 NextDispLine=1
+	 g DoLineDetail
+ }
+ ; back one page
+ i "Bb"[response!(status=2) {
+	 s:NextDispLine>1 NextDispLine=NextDispLine-(PAGECNT*2)
+	 s:NextDispLine<1 NextDispLine=1
+	 g DispLineDetail
+ }
+ ; subroutine level display
+ i "Ss"[response {
+	 g GetSubDetail
+ }
+ ; change display metric
+ i "Oo"[response {
+ 	w #,!!,"Select metric to display: " k Menu
+ 	; build Menu
+ 	s Menu(1)="Lines of code executed"
+ 	s Menu(2)="Global references"
+ 	s Menu(3)="Time of execution"
+ 	s Menu(4)="Total Time (including subroutine calls)"
+ 	s val=1,mask=128+8+4
+ 	s status=##class(%Library.Prompt).GetMenu("Option?",.val,.Menu,,mask)
+	s NextDispLine=NextDispLine-PAGECNT
+ 	i (+status=0)||(status=2)||(status=3)||(val="") {
+	 	 g DispLineDetail
+ 	}
+ 	s LineDetail=val
+ 	g DoLineDetail
+ }
+ ; change page length/width
+ i "Mm"[response {
+ 	w ! s status=$$page(.PAGELEN,.PAGEWIDTH)
+ 	s NextDispLine=NextDispLine-PAGECNT
+ 	s PAGECNT=PAGELEN-3 u $IO:PAGEWIDTH
+ 	g DispLineDetail
+ }
+ ; change code selection INT/source
+ i "Cc"[response {
+	 s dbase=$p(^||%Profile.Routine(rtn),"^",5)
+	 i dbase="" s dbase="^"_$p(^||%Profile.Routine(rtn),"^",2)_"^"_$p(^||%Profile.Routine(rtn),"^",3) ; remote
+	 if CodeType="INT" {
+		 i '$d(^||%Profile.Detail("SRC")) {
+			 s ok=$$GetSrcDetail(rtn,.SRCroutine,.INTroutine)
+			 i 'ok {
+				 w !!,"No source code available.",! s status=$$pause()
+			 	 s NextDispLine=NextDispLine-PAGECNT
+			 	 g DispLineDetail
+			 }
+		 }
+		 s CodeType="SRC",LastLine=SRCroutine(0),NextDispLine=1
+		 s RoutinePrompt=$p(^||%Profile.Routine(rtn),"^",4)_" in "_dbase
+	 }
+	 else {
+		 s CodeType="INT",LastLine=INTroutine(0),NextDispLine=1
+		 s RoutinePrompt=$p(^||%Profile.Routine(rtn),"^",1)_" in "_dbase
+	 }
+	 g DispLineDetail
+ }
+ w !!,"Error in selection, type '?' at selection prompt for options.",! s status=$$pause()
+ ; redisplay same page
+ s NextDispLine=NextDispLine-PAGECNT
+ g DispLineDetail
+}
+ ;
+ ; Get Source lines and map metrics from INT
+ ; 'rtn' = routine number in internal list
+ ; return 1 if loaded or 0 if not
+ ;
+ ; Use this global for stats:
+ ; ^||%Profile.Detail("INT",line)=Lines ^ GloRef ^ Time ^ TotalTime
+ ;
+ ; Fill in this global with accumulated stats:
+ ; ^||%Profile.Detail("SRC",line)=Lines ^ GloRef ^ Time ^ TotalTime
+ ;
+ ; Source code lines are in SRCroutine()
+ ;
+GetSrcDetail(rtn,SRCroutine,INTroutine) {
+ s nm=$p(^||%Profile.Routine(rtn),"^",1),sys=$p(^||%Profile.Routine(rtn),"^",2),dir=$p(^||%Profile.Routine(rtn),"^",3),ns="^"_sys_"^"_dir
+ s dbase=$p(^||%Profile.Routine(rtn),"^",5),src=$p(^||%Profile.Routine(rtn),"^",4),type=$p(src,".",$l(src,".")),return=0
+ ;
+ i ",MAC,MVB,"[type {
+	 ; get source code
+	 s (SRCroutine,err)=""
+	 i type="MAC",'$$ROUTINE^%R(src,.SRCroutine,.err,"LI",,,ns) q 0
+	 i type="MVB" {
+		 s mvbName=$g(^[ns]rMAP(nm,"MVI","MVB")) i mvbName="" q 0
+		 i mvbName["~" s file=$p(mvbName,"~",1),mvbName=$p(mvbName,"~",2)
+		 e  s file="BP"
+		 ; Find "account" (i.e. namespace). Note this isn't exactly right, as
+		 ; we just look for the first namespace that uses the MVI directory for
+		 ; routines. We really need to add the account to the rMAP global.
+		 s account="",nspace=""
+		 s rset=##class(%Library.ResultSet).%New("Config.Namespaces:List") d rset.Execute()
+		 while (rset.Next()) {
+			  i rset.Data("Routines")=dbase s nspace=rset.Data("Namespace") q
+		 }
+		 if nspace'="" set account=$G(^%MV.SYS("N",nspace))
+		 i account="" q 0
+		 w "(",account,",",file,")"
+		 Set fobj=$zu(24,0),rc=$zu(24,4,fobj,account,file,0) i rc q 0
+		 Set code=$zu(24,5,fobj,mvbName,0,0),rc=$zu(24) i rc q 0
+		 s SRCroutine(0)=$l(code,$c(254))
+		 f line=1:1:SRCroutine(0) s SRCroutine(line)=$p(code,$c(254),line)
+	 }
+	 s return=1
+	 f line=1:1:SRCroutine(0) s ^||%Profile.Detail("SRC",line)="0^0^0^0"
+	 ; map INT code to source lines
+	 f intline=1:1:INTroutine(0) {
+		 k map s srcline=0 
+		 s stat=##class(%Studio.Debugger).SourceLine(nm,intline,1,intline,1,ns,.map)
+		 if $d(map) {
+			 ; map("MAC",1) = $list( source, "", label_offset, line_offset )
+			 s sc=$g(map(type,1)) i sc]"" s srcline=$list(sc,3)
+		 }
+		 ; add metrics to this source line
+		 i srcline {
+			 f m=1:1:4 {
+				 s v1=$p(^||%Profile.Detail("SRC",srcline),"^",m)
+				 s v2=$p(^||%Profile.Detail("INT",intline),"^",m)
+				 s $p(^||%Profile.Detail("SRC",srcline),"^",m)=v1+v2
+			 }
+		 }
+	 }
+ }
+ i type="CLS" {
+	 ; find all methods in this INT routine
+	 k methods
+	 for intline=1:1:INTroutine(0) {
+	 	 ; see if any source code for this line, temporarily store in methods() array
+		 k map s method="",srcline=0
+		 ;SourceLine(intName As %String, startLine As %Integer, startPos As %Integer, endLine As %Integer, endPos As %Integer, Namespace As %String, ByRef map As %String) As %Status
+		 s stat=##class(%Studio.Debugger).SourceLine(nm,intline,1,intline,1,ns,.map)
+		 if $d(map) {
+			 ; map("CLS",1) = $list( source, method, label_offset, line_offset )
+			 s sc=$g(map("CLS",1)),method=""
+			 i sc]"" s class=$list(sc,1),method=$list(sc,2),srcline=$list(sc,3)
+		 }
+		 ; set up method source lines the first time we see it
+		 i method]"",'$d(methods(method)) {
+			 s ref=##class(%Dictionary.MethodDefinition).%OpenId(class_"||"_method)
+			 i ref="" {
+				 s method="",srcline=0
+			 } else {
+				 f l=1:1 {
+					 s methods(method,l)=ref.Implementation.ReadLine()
+					 s methods(method,l,"stat")=""
+					 q:ref.Implementation.AtEnd
+				 }
+			 }
+		 }
+		 ; add metrics to this source line
+		 i method]"",srcline {
+			 f m=1:1:4 {
+				 s v1=$p(methods(method,srcline,"stat"),"^",m)
+				 s v2=$p(^||%Profile.Detail("INT",intline),"^",m)
+				 s $p(methods(method,srcline,"stat"),"^",m)=v1+v2
+			 }
+		 }
+	 }
+	 ; did we find anything?
+	 i $o(methods(""))="" q 0
+	 ; create display from methods() array
+	 s method="",srcline="",displine=1,return=1
+	 f  {
+	 	s method=$o(methods(method)) q:method=""
+	 	s SRCroutine(displine)="",^||%Profile.Detail("SRC",displine)=""
+	 	s SRCroutine(displine+1)="** Method "_method_" **",^||%Profile.Detail("SRC",displine+1)=""
+	 	s SRCroutine(displine+2)="",^||%Profile.Detail("SRC",displine+2)=""
+	 	s displine=displine+3
+	 	f  {
+		 	s srcline=$o(methods(method,srcline)) q:srcline=""
+		 	s SRCroutine(displine)=methods(method,srcline)
+		 	s ^||%Profile.Detail("SRC",displine)=methods(method,srcline,"stat")
+		 	s displine=displine+1
+	 	}
+	 }
+	 s SRCroutine(0)=displine-1
+ }
+ q return
+}
+ ; 
+ ; Stop Profile
+ ;
+STOP() {
+ s mask=8+128+4
+STP1
+ s prompt="Do you want to stop the Profile collection (collected data will be deleted)? ",response=0
+ s help(1)="Enter 'Y' to stop the current Profile collection."
+ s help(2)="Note that all data in memory will be deleted."
+ s help(3)="It should be saved to file if you wish to keep it."
+ w ! s status=##class(%Library.Prompt).GetYesNo(prompt,.response,.help) k help
+ i response {
+	s status=$$Stop()
+	if status'=1 {
+		w !!,"Error stopping Profile collection: ",status,!!
+	} else {
+		w !!,"Profile collection stopped.",!!
+	}
+ } 
+ q
+}
+ ;
+ ; Get status of profiler, returns one of the following strings:
+ ;
+ ; "MONLBL" = %SYS.MONLBL session is running
+ ; "PERFMON" = PERFMON session is running
+ ; "STOPPED" = Stopped - no profiling collection is active
+ ; "ROUTINE" = Routine-level collection active
+ ; "DETAIL" = Detail-level (subroutine/line) collection active
+ ;
+Status() PUBLIC {
+ s status="STOPPED"
+ ; check for PERFMON or MONLBL
+ i $zu(84,8)=1,$zu(84,1,4)=0 s status=$s($zu(84,16)=-1:"PERFMON",1:"MONLBL") q status
+ ; check for active and ROUTINE vs. DETAIL
+ i $zu(84,8)=1 s status="DETAIL" i $zu(84,16)<1 s status="ROUTINE"
+ q status
+}
+ ;
+ ; Startup a routine-level run
+ ;
+ ; 'rou' = number of routines to allocate space for.
+ ; The default is to allocate space for 1000 routines.
+ ;
+ ; Returns '1' for success, or a negative number followed by a "," and message
+ ; 
+StartRou(rou) PUBLIC {
+ i '$g(rou,0) s rou=1000
+ s (proc,glo,net,dbase)=0
+ s status=1,err="",$ZT="funcerr",$ZE=""
+ L +^SYS("MON-HOLD"):3
+ e  s status="-1,Somebody else is using Monitor" g funcex
+ i $zu(84,8)=1 s status="-2,Monitor is already running" g funcex
+ d $zu(84,12,0) ; clear any leftover routine lists
+ i $zu(84,0,1,proc,glo,rou,net,dbase)'=1 s status="-3,Memory allocation failed" g funcex
+ i $zu(84,1,1)'=1 s status="-4,Couldn't enable profile collection" g funcex
+ i $zu(84,1,4,1)=1  ; enable Time collection for routines"
+ s ^SYS("MONITOR","START")=$h
+ k ^SYS("MONITOR","PAUSE"),^SYS("MONITOR","PAUSE-TIME"),^SYS("MONITOR","SAMPLE")
+ L -^SYS("MON-HOLD")
+ q status
+funcerr s status="0, Unexpected Profiler error, "_$ze
+funcex L -^SYS("MON-HOLD")
+ q status
+}
+ ;
+ ; Startup a detail-level run
+ ;
+ ; Get list of routines from ^||%Profile.Display(line)
+ ;
+ ; Returns '1' for success, or a negative number followed by a "," and message
+ ; 
+StartDet() PUBLIC {
+ L +^SYS("MON-HOLD"):3
+ e  s status="-1,Somebody else is using Monitor" g runexit
+ s $zt="runexit",err="",status=1
+ d $zu(84,12,0) ; clear internal routine list
+ i $zu(84,8)=1 s status="-2,Monitor is already running" g runexit
+ ; Loop through selected routines
+ s line="" w !
+ f  {
+	s line=$o(^||%Profile.Display(line)) q:line=""
+	i $p(^(line),",",6+4)=1 {
+		s rou=$p(^(line),",",6+1)
+		s dir=$p(^(line),",",6+3)
+		s sys=$p(^(line),",",6+2)
+		s ns="^"_sys_"^"_dir
+		s com="zl "_rou_" s ok=$zu(84,12,1)"
+		w !,"Loading ^",rou," in ",ns
+		; use $zu(39) so we can find any mapped %-routines
+		zn ns d $zu(39,"^^") x com zn "%SYS"
+	}
+ }
+ ; select metrics
+ d $zu(84,13,0)
+ d $zu(84,13,1,33) ; M commands
+ d $zu(84,13,1,0) ; global refs
+ d $zu(84,13,1,50) ; clock time
+ d $zu(84,13,1,51) ; total time
+ ;
+ ; allocate memory and enable main monitor flag
+ i $zu(84,0,1,0,0,0,0,0)'=1 {
+	w !!,$zu(84,0,4,0,0,0,0,0)," page(s) of memory required."
+	w !,$zu(84,0,5)," page(s) of memory available."
+	w !!,"The GenericHeapSize parameter probably needs to be increased."
+	w !,"Pages are each 64kb of memory."
+	s status=-3,err="Memory allocation failed"
+	g runexit
+ }
+ ; enable collection for all PIDs
+ i $zu(84,1,1)'=1 set status=-4,err="Couldn't enable stats collection" goto runexit
+ ; enable LBL monitoring
+ d $zu(84,15)
+ ; flag PROFILE run
+ d $zu(84,1,4,1) 
+ s ^SYS("MONITOR","START")=$h
+ k ^SYS("MONITOR","PAUSE"),^SYS("MONITOR","PAUSE-TIME")
+runexit if $ze]"" set status=0,err="Error trap - "_$ze
+ L -^SYS("MON-HOLD")
+ i err]"" {
+	set status=status_","_err
+	quit status
+ }
+ q status
+}
+ ;
+ ; Stop Profile collection
+ ;
+ ; Returns '1' for success, or a negative number followed by a "," and message
+ ;
+Stop() PUBLIC {
+ set $ZE="",$ZT="funcerr",status=1
+ L +^SYS("MON-HOLD"):3
+ else  set status="-1,Somebody else is using Monitor." goto funcex
+ if $zu(84,8)=0 set status="-2,Monitor is not running." goto funcex
+ set zu84=$zu(84,1,0) ; disable stats...
+ set zu84=$zu(84,0,0) ; end collection
+ kill ^SYS("MONITOR","START")
+ kill ^SYS("MONITOR","PAUSE"),^SYS("MONITOR","PAUSE-TIME")
+ L -^SYS("MON-HOLD")
+ quit status
+funcerr s status="0, Unexpected Profiler error, "_$ze
+funcex L -^SYS("MON-HOLD")
+ q status
+}
+ ; 
+ ;
+GetStat(out)  ; Retrieve stats for report
+ ;
+ ; out  = is an array name (by reference)
+ ; 
+ n j,name
+ s $zt="Gsterr"
+ s out=$zu(84,3,3) ; number of routines collected
+ f j=0:1:out {
+	s name=$zu(84,4,3,j) s:name=0 name=",,Other"
+	s out(j+1,"Name")=name,out(j+1,"Stat")=$tr($zu(84,5,3,j),"^ ",",,")
+ }
+ s out=out+1 ; add 1 for 0 ("other") category
+ q
+Gsterr ;
+ ; Trap a FUNCTION error for the last entry + 1 
+ i $ze["<FUNCTION>",j=out s $ze="",$zt="" q
+ q
+ ;
+ ; Build a list of metrics for routine profile
+ ; Pass array 'metrics' byref, return list
+ ; Uses $$$PRFMETRICS defined at top
+ ;
+ ; Done to keep defintions in one place
+ ;
+GetMetrics(metrics)
+ ; array of sort and data field options - pieces are: menu,hdr_name,$p_of_stat,LBL_stat_num
+ s metrics=6
+ s metrics(1)="Lines of code executed,RtnLine     ,35,33"
+ s metrics(2)="Time of execution,Time        ,52,50"
+ s metrics(3)="CPU Time,CPU         ,53,51"
+ s metrics(4)="Routine Loaded,RtnLoad     ,36,34"
+ s metrics(5)="Global references,GloRef      ,1,0"
+ s metrics(6)="Global sets,GloSet      ,2,1"
+ q
+ ;
+ ; get page length and width - (pass by ref)
+ ;
+page(length,width)
+ s mask=8+4
+ s status=##Class(%Library.Prompt).GetNumber("Right margin:",.width,0,511,,mask)
+ i (+status=0)||(status=3) q status
+ s status=##Class(%Library.Prompt).GetNumber("Page length:",.length,0,,,mask)
+ q status
+ ;
+ ; function to say "press enter to continue"
+ ;
+pause() ;
+ s mask=8+4
+ s status=##class(%Library.Prompt).GetString("Press ENTER to continue",,0,1,"",mask)
+ q status

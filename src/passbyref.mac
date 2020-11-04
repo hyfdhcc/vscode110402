@@ -1,0 +1,31 @@
+ROUTINE passbyref
+passbyref ; passing parameters by value and reference
+ ; pass by value
+ read !, "Enter a number: ", num
+ set dblnum = $$dblbyval( num )
+ write !, num, " doubled is: ", dblnum
+ 
+ ; num passed IN and OUT by reference
+ write !, num
+ do dblbyref1( .num )
+ write " doubled is: ", num
+ 
+ ; num passed IN by value
+ ; result passed OUT by reference
+ do dblbyref2(num, .result)
+ write !, num, " doubled again is: ", result
+ quit
+ 
+dblbyval(anynum) PUBLIC
+ { quit anynum * 2 }
+ 
+dblbyref1(anynum) PUBLIC
+ { set anynum = anynum * 2
+ quit }
+ 
+dblbyref2(anynum, double) PUBLIC
+ { set double = anynum * 2
+ quit }
+ 
+ 
+ 

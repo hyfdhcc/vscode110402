@@ -1,0 +1,256 @@
+ROUTINE TERCAP [Type=INT]
+TERCAP ; Terminal DB for charwindows ; JLC961 01/11/07
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ k ops s ops=3
+ s ops(1)="edit;Edit/create terminal description"
+ s ops(2)="border;Edit/create border map"
+ s ops(3)="del;Delete terminal description"
+option r !!,"Option: ",op q:op=""
+ i op="?" w ! d  g option
+ . f i=1:1:ops w !,?5,i," - ",$p(ops(i),";",2)
+ i '$d(ops(op)) w *7," <???>" g option
+ s op=ops(op) w " - ",$p(op,";",2) g @$p(op,";",1)
+ ;----------------------------------------------------------------
+ ;
+ ; Edit/create terminal description
+ ;
+edit r !!,"Terminal type: ",tt g option:tt=""  i tt="?" d types g edit
+ i '$d(^%SYS("tercap",tt)) r " new ? [y] ",r i r'="",r'="y",r'="Y" g edit
+ i '$d(^%SYS("tercap",tt)) d copy(tt)
+ i '$d(^%SYS("tercap",tt,"names")) s ^("names")=tt
+ i '$d(^("lins")) s ^("lins")=24
+ i '$d(^("cols")) s ^("cols")=80
+names s old=^%SYS("tercap",tt,"names") w !,"Names: ",old r " // ",new
+ i new'="",new'=old s ^("names")=new
+lins s old=^%SYS("tercap",tt,"lins") w !,"Lines: ",old r " // ",new
+ i new'="",new'=old s ^("lins")=new
+cols s old=^%SYS("tercap",tt,"cols") w !,"Colunms: ",old r " // ",new
+ i new'="",new'=old s ^("cols")=new
+flags s old=$g(^%SYS("tercap",tt,"flags")) w !,"Flags: ",old d bits(old)
+ r !,"  New: ",new i new=""!(new=old) g mnemo
+ i new="?" d bits(65535) g flags
+ d bits(new) r " Ok ? [y] ",ok i ok'="",ok'="y",ok'="Y" g flags
+ s ^("flags")=new
+mnemo r !,"Mnemonic: ",mn g edit:mn=""
+ i mn="?" s mn="" f  s mn=$o(^%SYS("tercap",tt,"src",mn)) g mnemo:mn="" w !,?10,mn
+ i '$d(^%SYS("tercap",tt,"src",mn)) r " new ? [y] ",r i r'="",r'="y",r'="Y" g mnemo
+src s old=$g(^%SYS("tercap",tt,"src",mn)) w !,?3,"Old: ",old r !,?3,"New: ",new
+ i new="*D" d  w "deleted" g mnemo
+ . r "ELETE ? [n] ",r i r'="y",r'="Y" w " NOT " q
+ . k ^%SYS("tercap",tt,"src",mn),^%SYS("tercap",tt,"bin",mn) q 
+ i new=""!(new=old) g mnemo
+ s bin=$$tic(new)
+ i er'="" w "  ",$p(er,";",2,999),!,?7+er,"^" g src
+ s ^%SYS("tercap",tt,"src",mn)=new,^%SYS("tercap",tt,"bin",mn)=bin g mnemo
+ ;------------------------------------------------------------------
+ ;
+ ; Edit/create border map
+ ;
+border s bs(1)="Single line",bs(2)="Double line",bs(3)="Bold line"
+ s bs(4)="Blocks",bs(5)="Light dots",bs(6)="Dark dots"
+ s bs(7)="Light bar",bs(8)="Medium bar",bs(9)="Heavy bar"
+ s bc8="   UL   UR   LL   LR   TO   BO   LE   RI"
+ s un8="  ---  ---  ---  ---  ---  ---  ---  ---"
+ s bc4="   LE   RI   TO   BO"
+ s un4="  ---  ---  ---  ---"
+bordtt r !!,"Terminal type: ",tt g option:tt="" i tt="?" d types g border
+ i '$d(^%SYS("tercap",tt)) w *7," <Unknown terminal>" g bordtt
+ s old=$g(^%SYS("tercap",tt,"src","bormap"))
+ i old="" s $p(old,"0,",62)="",old=old_0
+ s new=old
+bstyle r !!,"Border style: ",bs
+ i bs="" s:new'=old ^%SYS("tercap",tt,"src","bormap")=new,@("^%SYS(""tercap"",tt,""bin"",""bormap"")=$c("_new_")") g bordtt
+ i bs="?" d bstyles g bstyle
+ i bs'?1n!(bs=0) w *7," <1 to 9>" g bstyle
+ w "  ",bs(bs) d @("bstyle"_bs) g bstyle
+ ;
+bstyle1 s ocs=$p(new,",",1) d cset
+ i ncs'="",ncs'=ocs f i=1:2:15 s $p(new,",",i*2-1)=ncs
+ w !,!,?10,bc8,!,?10,un8,!,?10 f i=1:2:9,13,11,15 d fmt(i)
+ w !,?10 f i=1:2:9,13,11,15 d charr(i)
+ q
+bstyle2 s ocs=$p(new,",",3) d cset
+ i ncs'="",ncs'=ocs f i=2:2:16 s $p(new,",",i*2-1)=ncs
+ w !,!,?10,bc8,!,?10,un8,!,?10 f i=2:2:10,14,12,16 d fmt(i)
+ w !,?10 f i=2:2:10,14,12,16 d charr(i)
+ q
+bstyle3 w *7," Same as style 1 (Single line) with bold attribute" q
+bstyle4 s ocs=$p(new,",",61) d cset
+ i ncs'="",ncs'=ocs s $p(new,",",61)=ncs
+ d char1(31) q
+bstyle5 s ocs=$p(new,",",59) d cset
+ i ncs'="",ncs'=ocs s $p(new,",",59)=ncs
+ d char1(30) q
+bstyle6 s ocs=$p(new,",",57) d cset
+ i ncs'="",ncs'=ocs s $p(new,",",57)=ncs
+ d char1(29) q
+bstyle7 s ocs=$p(new,",",33) d cset
+ i ncs'="",ncs'=ocs f i=17:1:24 s $p(new,",",i*2-1)=ncs
+ w !,!,?10,bc8,!,?10,un8,!,?10 f i=17:1:24 d fmt(i)
+ w !,?10 f i=17:1:24 d charr(i)
+ q
+bstyle8 w *7," Same as style 7 (Light bar)" q
+bstyle9 s ocs=$p(new,",",49) d cset
+ i ncs'="",ncs'=ocs f i=25:1:28 s $p(new,",",i*2-1)=ncs
+ w !,!,?10,bc4,!,?10,un4,!,?10 f i=25:1:28 d fmt(i)
+ w !,?10 f i=25:1:28 d charr(i)
+ q
+ ;
+cset w !,!,"Charset: ",ocs r " // ",ncs
+ i ncs'="",ncs'="0",ncs'="1",ncs'="2" w *7," <0, 1 or 2>" g cset
+ q
+ ;
+char1(i) w !,!,?10,"All Chars",!,?10,"----------",!,?11
+ d fmt(i) w !,?11 d charr(i) q
+ ;
+charr(i) n dx,j w ?$x+2 s dx=$x
+chrrd r ch#4
+ i ch="" w $j($p(new,",",i*2),3) q
+ f j=1:1:$l(ch) w *8," ",*8
+ s $x=dx
+ i ch'?1.3n!(ch>255) w *7 g chrrd
+ w $j(ch,3) s $p(new,",",i*2)=ch q
+ ;
+bstyles n i w !
+ w !,?7,"Styles",?25,"Charset",?33,bc8
+ w !,?7,"---------------",?25,"-------",?33,un8
+ w !,?7,"1 - ",bs(1),?28,$p(new,",",1),?33 f i=1:2:9,13,11,15 d fmt(i)
+ w !,?7,"2 - ",bs(2),?28,$p(new,",",3),?33 f i=2:2:10,14,12,16 d fmt(i)
+ w !,?7,"3 - ",bs(3),?28,$p(new,",",1),?33 f i=1:2:15 d fmt(i)
+ w !,?7,"4 - ",bs(4),?28,$p(new,",",61),?33 f i=1:1:8 d fmt(31)
+ w !,?7,"5 - ",bs(5),?28,$p(new,",",59),?33 f i=1:1:8 d fmt(30)
+ w !,?7,"6 - ",bs(6),?28,$p(new,",",57),?33 f i=1:1:8 d fmt(29)
+ w !,?7,"7 - ",bs(7),?28,$p(new,",",33),?33 f i=17:1:24 d fmt(i)
+ w !,?7,"8 - ",bs(8),?28,$p(new,",",33),?33 f i=17:1:24 d fmt(i)
+ w !,?7,"9 - ",bs(9),?28,$p(new,",",49),?33 f i=25,26,25,26,27,28,25,26 d fmt(i)
+ q
+fmt(n) w $j($p(new,",",n*2),5) q
+ ;
+ ;------------------------------------------------------------------
+ ;
+ ; Delete a terminal description
+ ;
+del r !!,"Terminal type: ",tt g option:tt="" i tt="?" d types g del
+ i '$d(^%SYS("tercap",tt)) w *7," <Unknown terminal>" g del
+ w !,"Delete terminal description for ",tt r " OK? [n] ",r
+ i r'="y",r'="Y" w " NOT"
+ e  k ^%SYS("tercap",tt)
+ w " deleted" g del
+ ;
+copy(to) r !,"Copy from another terminal? [y] ",r i r'="",r'="y",r'="Y" q
+from r !,"Copy from: ",from q:from=""  i from="?" d types g from
+ i '$d(^%SYS("tercap",from)) w " <???>" g from
+ w " Copying..." m ^%SYS("tercap",to)=^%SYS("tercap",from) w " done" q
+ ;
+types n ty s ty="" w ! f  s ty=$o(^%SYS("tercap",ty)) q:ty=""  w !,?10,ty
+ q
+ ;    
+bits(n) i n#2 w !,?10," 1 = hascolor "
+ s n=n\2 i n#2 w !,?10," 2 = firmware"
+ s n=n\2 i n#2 w !,?10," 4 = auto-margin"
+ s n=n\2 i n#2 w !,?10," 8 = pc-attributes"
+ s n=n\2 i n#2 w !,?10,"16 = erase resets attributes"
+ s n=n\2 i n#2 w !,?10,"32 = disable border mapping"
+ q
+ ;-------------------------------------------------------------------
+ ;
+comp ; Compile all mnemonics of all terminals
+ ;
+ n ty,mn s ty="",ne=0
+ f  s ty=$o(^%SYS("tercap",ty)) q:ty=""  k ^%SYS("tercap",ty,"bin") d
+ . w ty," " s mn="" f  s mn=$o(^%SYS("tercap",ty,"src",mn)) q:mn=""  d
+ . . i mn="bormap" s @("bin=$c("_^(mn)_")"),er=""
+ . . e  s bin=$$tic(^(mn))
+ . . i er'="" s ne=ne+1 w !,mn,"  ",^(mn) q
+ . . s ^%SYS("tercap",ty,"bin",mn)=bin q
+ i ne=0 q
+ i ne=1 w "There was 1 error!" q
+ w "There were ",ne,"errors" q
+ ;------------------------------------------------------------------
+ ;
+export ; Export ^%tercap as ^mtercap without binary nodes
+ ;
+ n x,type s x=$ZU(68,28,0),type="" k ^mtercap s x=$ZU(68,28,x) m ^mtercap=^%SYS("tercap")
+ f  s type=$o(^mtercap(type)) q:type=""  k ^mtercap(type,"bin")
+ q
+ ;
+INSTALL ; Install ^%SYS("tercap") from ^mtercap
+ ;
+ ; Preserve user definitions from ^%tercap
+ i $d(^%tercap) m ^%SYS("tercap")=^%tercap
+ i $d(^mtercap) m ^%SYS("tercap")=^mtercap
+ n x
+ s x=$ZU(68,28,0) k ^mtercap,^%tercap s x=$ZU(68,28,x)
+ d comp q
+ ;
+tic(src) n ind,bin,lit,c s ind=0,bin="",c="",er="",lit=src'["%1"
+parse d next,item
+ i er'="" q ""
+ i c="," g parse
+ i c="" d end q bin
+ d syntax q ""
+ ;
+end i lit s bin=$c($l(bin))_bin
+ e  s bin=$c(0)_bin_$c(255)
+ q
+item i c="" q
+ i c="""" d lit q
+ i c="$"  d fun q
+ i c="%"  d exp q
+ d syntax q
+ ;
+syntax s er=ind_";Unexpected character: "_c q
+lit d next
+ i c="""",$e(src,ind+1)="""" d emit(0,34),next g lit
+ i c="""" d next q
+ i c="" s er=ind_";Expected """ q
+ d emit(0,$a(c)) g lit
+fun n fun d next s fun=$s(c="a":"A",c="c":"C",1:c)
+ d next i c'="(" d syntax q
+ d next,@$s(fun="A":"ascii",fun="C":"char",1:"erfun")
+ q:er'=""  i c'=")" s er=ind_";Expected )" q
+ d next q
+ ;
+erfun s er=ind-2_";Unknown function: $"_fun q
+ ;
+ascii d exp q:er'=""
+ n l s l=$l(bin)-1,$e(bin,l)=$c($a($e(bin,l))+128)
+ q
+ ;
+char n ch
+ f  s ch=$$dec q:er'=""  d  q:er'=""!(c'=",")  d next
+ . i ch>255 s er=ind-$l(ch)_";Invalid char code: "_ch q
+ . d emit(0,ch)
+ q
+exp n par,sig,off d next s par=$$dec,sig="+",off=0
+ i par=0!(par>127) s er=ind-$l(par)_";Invalid parameter: %"_par q
+ i c="+"!(c="-") s sig=c d next s off=$$dec
+ i sig="+",off>127 s er=ind-$l(off)_";Offset too big: "_off q
+ i sig="-",off>128 s er=ind-$l(off)_";Offset too small: "_off q
+ i sig="-" s off=256-off
+ d emit(par,off) q
+dec() i c'?1n s er=ind_";Expected a digit: "_c q ""
+ n dec s dec=""
+ f  q:c'?1n  s dec=dec_c d next
+ q dec
+ ;
+emit(f,d) i lit,f=0 s bin=bin_$c(d)
+ e  s bin=bin_$c(f)_$c(d)
+ q
+ ;
+next s ind=ind+1,c=$e(src,ind) q

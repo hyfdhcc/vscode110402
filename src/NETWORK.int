@@ -1,0 +1,329 @@
+ROUTINE NETWORK [Type=INT]
+NETWORK ; RJW2032 07/12/12
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+Start() Public {
+ s $zt="Error"
+ d $zu(9,"","Activating Network",0,0  /* Informational message */)
+ D APPLY^SETQUOTA("NETDAEMON")  ;Set quotas for network daemons (VMS only)
+ s ConfigName=$p($zu(86),"*",2)
+ i '$d(^NET(2,$p($zu(86),"*",2),"CO")) g ECPSTART
+ I '$D(^NET(0,"INIT")) {
+	i ($zversion(1)=1) J ^RECEIVE:(:3::"NL:")
+	i ($zversion(1)=3)  J ^RECEIVE:(:2:"/dev/null")
+	i ($zversion(1)=2) J ^RECEIVE:(:2:"//./nul")
+	S ^NET(0,"INIT")=ConfigName_"\"_$H
+ } 
+ F SUB="CPNU","DELCP","DELDV","DELNU","DELPO","DVPO","NACP","NUCP","PODV","PORTJOB" {
+	 k ^NET(2,ConfigName,SUB)
+	 Merge ^NET(2,ConfigName,SUB)=^NET(1,"ACTIVE",SUB) 
+ }
+ n %ConfigName s %ConfigName=ConfigName
+ D RECOMP("^NET(1,""ACTIVE"")","^NET(2,%ConfigName)",.CP,1)
+ D RECMPDV(.DV) ;COMPARE DEVICES FROM ACTIVE TO NEW CONFIGURATION.
+ D PORT(.DV)
+ d DVDOWN(.DV)
+ s Status=$$CP(.CP)
+ i '(''Status) q Status
+ d DVUP(.DV)
+ d NHASH()
+ S ^NET(2,ConfigName,"DAC")=$H ;DATE ACTIVATED
+ K ^NET(1) Merge ^NET(1,"ACTIVE")=^NET(2,ConfigName)
+ S ^NET(1)=ConfigName
+ECPSTART
+ If $System.ECP.SetProperty("ReconnectInterval",$g(^NET(0,"ClientReconnectInterval"),5))
+ If $System.ECP.SetProperty("ReconnectDuration",$g(^NET(0,"ClientReconnectDuration"),1200))
+ If $System.ECP.SetProperty("ServTrblDuration",$g(^NET(0,"ServerTroubleDuration"),60))
+ If $d(^NET(0,"EnableServer")),$$Server^ECPClient()
+ D DEFAULT^SETQUOTA("PROCESS")  ;Reset to defaults (VMS only)
+ Q 1
+Error s $zt=""
+ q $$Error^%apiOBJ(5002,$ze)
+}
+RECMPDV(DV) Private { 
+ K DV
+ s ConfigName=$p($zu(86),"*",2)
+ n %C
+ D ACTIVE1^RECPRI("%C(1)"),ACTIVE2^RECPRI(ConfigName,"%C(2)") ;SET %C(1,NA)=DV\TO FOR ACTIVE CONFIG, %C(2,NA)=DV\TO FOR NEW CONFIG
+ F A=1,2 S NA="" F J=0:0 S NA=$O(%C(A,NA)) Q:NA=""  S D(A,$P(%C(A,NA),"\",1),NA)=$P(%C(A,NA),"\",2) ;SET D(1,DV,NA)=TO FOR ACTIVE CONFIG'S ACTIVE ROUTES, D(2,DV,NA)=TO FOR NEW CONFIG'S ACTIVE ROUTES
+ S DV="" F J=0:0 S DV=$O(D(1,DV)) Q:DV=""  D DV
+ S DV="" F J=0:0 S DV=$O(D(2,DV)) Q:DV=""  I '$D(D(1,DV)) S DV("ADD",DV)=""
+ Q
+DV I '$D(D(2,DV)) S DV("DEL",DV)="" q
+ S A="" F J=0:0 S A=$O(^NET(1,"ACTIVE","DV",DV,A)) Q:A=""  S X1=$S($D(^(A))#10:^(A),1:"\\\"),X2=$S($D(^NET(2,ConfigName,"DV",DV,A))#10:^(A),1:"\\\") I X1'=X2 S DV("EDIT",DV)="" G DV2
+DV2 S NA="" F J=0:0 S NA=$O(D(1,DV,NA)) Q:NA=""  I $D(D(2,DV,NA)) S TO1=D(1,DV,NA),TO2=D(2,DV,NA) S A="" F J=0:0 S A=$O(^NET(1,"ACTIVE","DV",DV,"TO",TO1,A)) Q:A=""  S X1=$S($D(^(A))#10:^(A),1:"\\\"),X2=$S($D(^NET(2,ConfigName,"DV",DV,"TO",TO2,A))#10:^(A),1:"\\\") I X1'=X2 S CP("EDIT",NA)="" Q  ;SOMETHING ABOUT THIS REMOTE COMPUTER MUST BE EDITED.
+ S JOB=$P($G(^NET(1,"ACTIVE","PORTJOB",DV)),"\")
+ S $ZT="Down"
+ I JOB'="" {
+	s PGM=$P($V(-1,JOB),"^",6)
+	I PGM="DMNNET"!(PGM="DMNET") Q ; Job is up
+ }
+Down S DV("ADD",DV)="",$ze=""
+ Q
+}
+PORT(DV) Private {
+ s ConfigName=$p($zu(86),"*",2)
+ s DV=""
+ f  {
+	s DV=$O(DV("DEL",DV)) q:DV=""
+	S PO=^NET(2,ConfigName,"DVPO",DV) ;GET PO=port#
+	S ^NET(2,ConfigName,"DELDV",DV)=PO,^NET(2,ConfigName,"DELPO",PO)=DV ;RECORD DELETES SO CAN RECOVER
+	K ^NET(2,ConfigName,"DVPO",DV),^NET(2,ConfigName,"PODV",PO) ;DELETE FROM ACTIVE STATUS
+	S NEWLYDEL(PO)=""
+ }
+ s DV=""
+ f  {
+	s DV=$O(DV("ADD",DV)) q:DV=""
+	if (DV["ECPNET") {
+    	S ^NET(2,ConfigName,"DVPO",DV)=0,^NET(2,ConfigName,"PODV",0)=DV
+    	K ^NET(2,ConfigName,"DELDV",DV),^NET(2,ConfigName,"DELPO",0)
+    	Continue
+ 	}
+	I $D(^NET(2,ConfigName,"DELDV",DV)) S PO=^(DV) G PORTADD2
+	S POMAX=64
+	F PO=1:1:POMAX I '$D(^NET(2,ConfigName,"PODV",PO)),'$D(^NET(2,ConfigName,"DELPO",PO)) G PORTADD2 ;SEARCH FOR AN UNUSED PORT#
+	F PO=1:1:POMAX I '$D(^NET(2,ConfigName,"PODV",PO)),'$D(NEWLYDEL(PO)) G PORTADD2 ;SEARCH FOR UNUSED PORT# WHICH WAS NOT JUST DELETED
+	F PO=1:1:POMAX I '$D(^NET(2,ConfigName,"PODV",PO)) G PORTADD2 ;IF NO UNUSED AND NOT-JUST-DELETED PORT#'S, PICK 1ST DELETED ONE
+	K DV("ADD",DV) s ^NET("ERR",$o(^NET("ERR",""),-1)+1)="DEVICE """_DV_""" NOT USED FOR NETWORKING - NOT ENOUGH PORT#'S AVAILABLE" Continue  ;ALL IN USE.
+PORTADD2 ;GET HERE WITH PO=port#, DV=device name. PUT INTO DVPO/PODV
+	S ^NET(2,ConfigName,"DVPO",DV)=PO,^NET(2,ConfigName,"PODV",PO)=DV ;PUT INTO DVPO/PODV SUBFILES.
+	K ^NET(2,ConfigName,"DELDV",DV),^NET(2,ConfigName,"DELPO",PO) ;DELETE FROM DELETE-SUBFILES (IN CASE THEY WERE THERE)
+ }
+}
+CP(CP) Private {
+ s Status=1
+ Set CP="" 
+ For {
+	Set CP=$O(CP("DEL",CP)) Quit:CP=""
+	If $$isECP(CP,$name(^NET(1,"ACTIVE","DV"))) {
+		Do ECPDEL(CP)
+	}
+ }
+ f {
+	Set CP=$O(CP("EDIT",CP)) Quit:CP=""  
+	s Status=$$ECPEDIT(CP)
+ }
+ f {
+	Set CP=$O(CP("ADD",CP)) Quit:CP=""
+	If $$isECP(CP) {
+		s Status=$$ECPADD(CP)
+	}
+ }
+ For {
+	Set CP=$O(^%SYS("SERVICE","ECPCLU",CP)) Quit:CP=""
+	If '($$isECP(CP)) Kill ^%SYS("SERVICE","ECPCLU",CP)
+ }
+ For {
+	Set CP=$O(^%SYS("SERVICE","ECPMIRc",CP)) Quit:CP=""
+	If '($$isECP(CP)) {
+		Kill ^%SYS("SERVICE","ECPMIRc",CP)
+        if (($zb(+$System.ECP.Debug(),+$zh("2000"),1))) { d $ZU(9,"","NETWORK: "_"Deleted old mirror session for "_CP) }
+	}
+ }
+ Quit Status
+}
+isECP(CP,glb) Private {
+ Set ConfigName=$p($zu(86),"*",2),RET=0,DV="",STOP=0
+ If '$d(glb) Set glb=$name(^NET(2,ConfigName,"DV"))
+ For {
+	Set DV=$o(@glb@(DV)) Quit:DV=""
+	Set TO=$g(@glb@(DV,"TO",0))
+ 	For i=1:1:TO {
+	 	Set NAME=$g(@glb@(DV,"TO",i,"CP"))
+ 		If NAME=CP Set STOP=1,RET=$s(DV?1"ECPNET".E:1,1:0) Quit
+ 	}
+	Quit:STOP
+ }
+ Quit RET
+} 
+ECPDEL(CP) Private {
+ Set SysNo=$System.ECP.GetClientIndex(CP)
+ i SysNo=-1 q
+ Set x=$System.ECP.SetClientState(SysNo,2,1)
+ Set x=$System.ECP.SetClientState(SysNo,4,1)
+ Quit
+}
+ECPEDIT(CP) Private {
+ s Status=1
+ If $$isECP(CP,$name(^NET(1,"ACTIVE","DV"))) { Do ECPDEL(CP) }
+ If $$isECP(CP) { 
+ 	s Status=$$ECPADD(CP) 
+ }
+ Quit Status
+}
+ECPADD(CP) Private {
+ s Status=1
+ Set ConfigName=$p($zu(86),"*",2),RET=0,DV="",STOP=0
+ For  {
+	Set DV=$o(^NET(2,ConfigName,"DV",DV)) Quit:DV=""  
+	If DV?1"ECPNET".E {
+ 		Set TO=$g(^NET(2,ConfigName,"DV",DV,"TO",0))
+		For i=1:1:TO {
+			Set Name=$g(^NET(2,ConfigName,"DV",DV,"TO",i,"CP")) 
+ 			If Name=CP {
+	 			Set STOP=1,RemoteAddr=$g(^("RE")),RemotePort=$g(^("RP")),MirrorCon=$g(^("MIR"))
+	 			Quit
+ 			}
+		}
+	}
+	q:STOP
+ }
+ If '$S($zbitget($zversion(0)_$c(0,0,0,0),42):$SYSTEM.INetInfo.TextAddrToBinary(RemoteAddr)'="",1:(RemoteAddr?1.3N1"."1.3N1"."1.3N1"."1.3N)),$s($zbitget($zversion(0)_$c(0,0,0,0),42):$SYSTEM.INetInfo.HostNameToAddr(RemoteAddr),1:$p($zu(54,13,RemoteAddr),","))="" d $zu(9,"","ECP connection "_Name_" - "_RemoteAddr_":"_RemotePort_" is unreachable",1 /* broadcast and log message*/,1  /* Warning */)
+ If '$$Init^ECPClient(RemoteAddr,RemotePort,Name,1200,300,MirrorCon) {
+	 d $zu(9,"","ECP connection "_Name_" - "_RemoteAddr_":"_RemotePort_" failed",1 /* broadcast and log message*/,1  /* Warning */)
+	 s Status=$$Error^%apiOBJ(456,+$G(^CONFIG("config","MaxServers"))+1)
+ }
+ Quit Status
+}
+DVDOWN(DV) Private { 
+ S DV="" F  {S DV=$O(DV("DEL",DV)) Q:DV=""  D DVSTOP(DV)}
+ S DV="" F  {S DV=$O(DV("EDIT",DV)) Q:DV=""  D DVSTOP(DV)}
+ I $D(DV("DEL"))!$D(DV("EDIT")) H 3 ;WAIT LONG ENOUGH FOR JOBS TO DIE.
+ Q
+}
+ ;         
+DVUP(DV) Private {
+ S DV="" F  {S DV=$O(DV("EDIT",DV)) Q:DV=""  D DVSTART(DV)}
+ S DV="" F  {S DV=$O(DV("ADD",DV)) Q:DV=""  D DVSTART(DV)}
+ Q
+}
+NHASH() Private {
+ s ConfigName=$p($zu(86),"*",2)
+ K ^NET(2,ConfigName,"NACP") S CP=""
+ F  {
+	S CP=$O(^NET(2,ConfigName,"CO",CP)) Q:CP=""
+	S NA="" 
+	F  {
+		S NA=$O(^NET(2,ConfigName,"CO",CP,"NA",NA)) Q:NA=""
+		S ^NET(2,ConfigName,"NACP",NA)=CP
+	}
+ }
+ D RECOMP("^NET(1,""ACTIVE"",""NACP"")","^NET(2,%ConfigName,""NACP"")",.NACP,0)
+ I '$D(NACP) q
+ S NA="" F  S NA=$O(NACP("DEL",NA)) Q:NA=""  d $ZU(63,1,NA,255)  
+ F  {
+	S NA=$O(NACP("EDIT",NA)) Q:NA=""
+	S SYSNUM=$$SYSNUM(^NET(2,ConfigName,"NACP",NA)) i SYSNUM="" continue
+	D NHASHPUT(NA,SYSNUM)
+ }
+ F  {
+	S NA=$O(NACP("ADD",NA)) Q:NA=""
+	S SYSNUM=$$SYSNUM(^NET(2,ConfigName,"NACP",NA)) i SYSNUM="" continue
+	D NHASHPUT(NA,SYSNUM)
+ }
+ Q
+}
+SYSNUM(CP) Private { Q $S(CP=$S($D(^NET(0,"THISCO")):^NET(0,"THISCO"),1:""):0,1:$G(^NET(2,$p($zu(86),"*",2),"CPNU",CP)))}
+NHASHPUT(NA,SYSNUM) Private {
+ S $ZT="Error"
+ d $ZU(63,1,NA,SYSNUM)
+ QUIT
+Error s $zt=""
+ d $zu(9,"","Error: "_"Network Hash Table full: Directory Set Name '"_NA_"' not added",1 /* broadcast and log message*/,2  /* Severe error */),BACK^%ETN
+ q
+}
+NETNODE(CP) Private {
+ s ConfigName=$p($zu(86),"*",2)
+ S THISCO=$G(^NET(0,"THISCO"))
+ n %CPDV
+ I '$D(%CPDV) D ACTIVE2^RECPRI(ConfigName,"%CPDV") ;BUILD COMPUTER-TO-DV LIST
+ S NU=$S(CP=THISCO:0,1:^NET(2,ConfigName,"CPNU",CP)) Q:'NU  ; NU=remote sysnum
+ S DV=$P(%CPDV(CP),"\"),TO=$P(%CPDV(CP),"\",2) ;GET DV=device name,TO
+ S PO=^NET(2,ConfigName,"DVPO",DV) ;GET PO=internal port#
+ S TY=^NET(2,ConfigName,"DV",DV,"TY"),EA=^("TO",TO,"RE"),RP=$G(^("RP"))
+ I EA="" {
+	S NODEREQB=$$NODEREQB("T")
+ } else {
+	S NODEREQB=$$NODEREQB("E")
+ }
+ S ETHADDR=$$ENCUDP(EA,RP)
+ S NR=NODEREQB
+ S RV=$G(^NET(2,ConfigName,"DV",DV,"TO",TO,"REQVERSION"))
+ S DV=$G(^("DEFVERSION"))
+ S DF=$G(^("DEFFLAGS"))
+ S DT=$G(^("DEFFLAGS"))
+ S NP=$G(^("NOTPEER"))
+ S PW=$G(^("PW"))
+ S RET=$ZU(129,2,NU,RP,TY,ETHADDR,NR,PO-1,RV,DV,DF,DT,NP,PW,CP)
+ I $zu(63,1,CP,NU) ; Add the name to nethash[] with correct sys #.
+ Q
+} 
+NODEREQB(TY) Private {
+ IF "^E^W^U^DSM^O^"[("^"_TY_"^") Q:$D(^NET(0,"NODEREQB"))#2 ^NET(0,"NODEREQB") Q 127
+ Q $S(TY="T":3,TY="D":127)
+} 
+RECOMP(%OLD,%NEW,DIFF,COonly=0) Private {
+ N %J,%Q,%SUB1,%SUB2
+ if COonly {
+	n %old,%new
+ 	s %old=%OLD,%new=%NEW,%OLD=$name(@%old@("CO")),%NEW=$name(@%new@("CO"))
+ }
+GO S %SUB1=""
+ F %J=0:0 S %SUB1=$O(@%OLD@(%SUB1)) Q:%SUB1=""  D OLDSUB1
+ F %J=0:0 S %SUB1=$O(@%NEW@(%SUB1)) Q:%SUB1=""  D NEWSUB1
+ i COonly d compcfg ;%old and %new are used here only
+ Q
+OLDSUB1 I '$D(@%NEW@(%SUB1)) S DIFF("DEL",%SUB1)="" Q
+ I $D(@%OLD@(%SUB1))#10,$D(@%NEW@(%SUB1))#10,@%OLD@(%SUB1)'=@%NEW@(%SUB1) S DIFF("EDIT",%SUB1)="" Q
+ S %SUB2="",%Q=0
+ F %J=0:0 S %SUB2=$O(@%OLD@(%SUB1,%SUB2)) Q:%SUB2=""  D OLDSUB2 Q:%Q
+ Q
+OLDSUB2 Q:$D(@%OLD@(%SUB1,%SUB2))#10=0
+ I $D(@%NEW@(%SUB1,%SUB2))#10,@%OLD@(%SUB1,%SUB2)=@%NEW@(%SUB1,%SUB2) Q
+ S DIFF("EDIT",%SUB1)="",%Q=1 Q
+NEWSUB1 I '$D(@%OLD@(%SUB1)) S DIFF("ADD",%SUB1)="" Q
+ S %SUB2="",%Q=0
+ F %J=0:0 S %SUB2=$O(@%NEW@(%SUB1,%SUB2)) Q:%SUB2=""  D NEWSUB2 Q:%Q
+ Q
+NEWSUB2 Q:'$D(@%NEW@(%SUB1,%SUB2))#10=0  ;POINTER ONLY.
+ Q:$D(@%OLD@(%SUB1,%SUB2))#10  ;MUST BE SAME VALUE IF BOTH DEFINED.
+ S DIFF("EDIT",%SUB1)="",%Q=1 Q
+ ;
+compcfg ;
+ s %SUB1="" f  s %SUB1=$o(@%OLD@(%SUB1)) q:%SUB1=""  d:$d(@%NEW@(%SUB1))
+ . s oldcfg=$$getcfg(%old,%SUB1),newcfg=$$getcfg(%new,%SUB1)
+ . i oldcfg'=newcfg s DIFF("EDIT",%SUB1)=""
+ q
+getcfg(g,cp) ;
+ s (dev,idx)=""
+ f  s dev=$o(@g@("DV",dev)) q:dev=""  d  q:+idx
+ . s x=$name(@g@("DV",dev,"TO")) s idx=$$findcp(x,cp)
+ i 'idx q ""  ;cp is not found? it shouldn't happen.
+ q $$packcfg($name(@x@(idx)))
+findcp(g,cp)  
+ s idx1=0 f  s idx1=$o(@g@(idx1)) q:idx1=""  q:@g@(idx1,"CP")=cp
+ q +idx1
+packcfg(g) 
+ s (a,ret)="" f  s a=$o(@g@(a)) q:a=""  s ret=ret_@g@(a)_";"
+ q ret
+}
+DVSTOP(DV) Public {
+ S DEMONJOB=$S($D(^NET(1,"ACTIVE","PORTJOB",DV)):+^(DV),1:0)
+ I DEMONJOB,'$$INT^RESJOB(DEMONJOB) s ^NET("ERR",$o(^NET("ERR",""),-1)+1)="NETWORK DEMON FOR DEVICE "_DV_" NOT STOPPED.  ASSUMING WAS ALREADY DOWN."
+ K ^NET(2,$p($zu(86),"*",2),"PORTJOB",DV)
+ Q
+}
+DVSTART(DV) Public {
+ s ConfigName=$p($zu(86),"*",2)
+ S PO=^NET(2,ConfigName,"DVPO",DV),TY=^NET(2,ConfigName,"DV",DV,"TY"),NON=^("NON")
+ I TY="ECP" Q
+} 
+ENCUDP(ADDR,PORTWORD) Public {
+ S UDPADDR=$s($zbitget($zversion(0)_$c(0,0,0,0),42):$SYSTEM.INetInfo.TextAddrToBinary(ADDR),1:$ZU(54,1,ADDR))
+ S UDPADDR=UDPADDR_$C(PORTWORD\256)_$C(PORTWORD#256)
+ Q UDPADDR
+}

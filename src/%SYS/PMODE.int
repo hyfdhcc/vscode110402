@@ -1,0 +1,21 @@
+ROUTINE %SYS.PMODE [Type=INT]
+%SYSPMODE ;ENTER PROGRAMMER MODE.  ; JO2062, 8/2/06
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ i $zu(67,10,1,$J)
+ V:'($ZJ#2) 0:-1:$ZU(40,0,1):$V(0,-1,$ZU(40,0,1))+1
+ Q

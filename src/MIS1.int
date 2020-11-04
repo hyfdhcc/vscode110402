@@ -1,0 +1,96 @@
+ROUTINE MIS1 [Type=INT]
+MIS1 ;(FLH,PK) ADD/EDIT device to ^%IS ; 10 Dec 92  5:42 PM
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+A W ?36,"Prompt",?46,"Other OPEN",?58,"Alt",!
+ W "MNE",?11,"Dev",?22,"Type",?28,"Subtype",?37,"code"
+ W ?46,"parameters",?58,"dev",?64,"Location",!!
+B ;
+ R MNE Q:MNE=""  G:MNE="?" HELP F I=1:1:7 S Z(I)=""
+ I $D(^%IS(MNE,1)) S A=MNE D LOOK S A=^(1) F I=1:1:7 S Z(I)=$P(A,"^",I)
+ ;I MNE?.N S DEV=+MNE,MNE=DEV G DEVCHK
+ I MNE="DELETE"!(MNE="DEL") D DELETE G B
+ G DEV:MNE'["?" S A=$P(MNE,"?",1)
+ D LOOK W:X="" " [no such device on record]",! G B
+DEV ;
+ R ?11,DEV S:DEV="" DEV=Z(1) S:DEV="" DEV=MNE ;I DEV'?1N.N W " ???",! G B
+DEVCHK ;
+ ;I DEV>143!($V(DT+DEV)#256=255)!'DEV W " ???",! G B
+TYPE ;
+ R ?22,TYPE S:TYPE="" TYPE=Z(2)
+ F I=1:1:6 G SUB:$P("TRM^MT^BT^SPL^IPC^OTH","^",I)=TYPE
+ W !,"    [""TRM"", ""MT"", ""BT"", ""SPL"", ""IPC"", or ""OTH""]",!
+ G TYPE 
+SUB ;
+ S (SUB,PROMPT,SEC,OTH,ALT)=""
+ G PROMPT:TYPE'="TRM"&(TYPE'="SPL")&(TYPE'="MT")&(TYPE'="BT")&(TYPE'="IPC")
+ R ?28,SUB S:SUB="" SUB=Z(3) G PROMPT:SUB="" I '$D(^%IS(0,"SUB",SUB)) W " [must be a defined subtype (or press RETURN)]",! G SUB
+PROMPT ;
+ R ?37,PROMPT S PROMPT=$S(PROMPT="":Z(4),PROMPT=0!(PROMPT="DEL"):"",1:PROMPT)
+ I PROMPT'="",PROMPT'=1,PROMPT'=2 W " [0, 1 or 2 (or press RETURN)]",! G PROMPT
+ G OTH:TYPE'="TRM"
+SEC ;
+ ;R ?46,SEC S SEC=$S(SEC="":Z(5),SEC="DEL":"",1:SEC) G ALT:SEC=""
+ ;I '$D(^%IS(0,"SEC",SEC)) W " [must be a defined security code (or press RETURN)]",! G SEC
+ALT ;
+ R ?58,ALT I ALT="" S ALT=Z(7) G LOC
+ I ALT="DEL" S ALT="" G LOC
+ I '$D(^%IS(ALT,0)) W " [invalid alternate device]",! G ALT
+ G LOC
+OTH ;
+ R ?46,OTH S OTH=$S(OTH="":Z(6),OTH="DEL":"",1:OTH)
+ I OTH[":",OTH'?1"(".E1")" W " [must surround with () if there is a "":""]",! G OTH
+LOC ;
+ R ?64,LOC,! I LOC="",$D(^%IS(MNE,0)) S LOC=^(0)
+ I LOC="DEL"!(LOC="DELETE") S LOC=""
+SET ;
+ S ^%IS(MNE,0)=LOC,X=DEV_"^"_TYPE_"^"_SUB_"^"_PROMPT_"^"_SEC_"^"_OTH_"^"_ALT
+ S ^(1)=X I MNE'=DEV,'$D(^%IS(DEV)) S ^(DEV,0)=LOC,^(1)=X
+ G B
+ Q
+DELETE ;
+ R "  Delete device: ",A G B:A="" D LOOK W:X="" " [no such device on record]" w ! G:X="" B
+ w "Is this the device to be deleted?" d NY w ! q:'$t
+ K ^%IS(A) S MNE=A D DELALT I +A=A S B=0 F I=1:1 S B=$N(^%IS(B)) Q:B<0  I B'=+B,$D(^(B,1)) S C=^(1) I +C=A K ^%IS(B) S MNE=B D DELALT
+ Q
+DELALT ;
+ S D=0 F K=1:1 S D=$N(^%IS(D)) Q:D<0  I $D(^(D,1)),$P(^(1),"^",7)=MNE S ^(1)=$P(^(1),"^",1,6)_"^"
+ Q
+LOOK ;
+ S X="" I A]"",$D(^%IS(A,1)) S X=^(1) w !,A F J=1,2,3,4,6,7,8 W ?$P("11^22^28^37^^46^58^64","^",J)-1," ",$P(X,"^",J) W:J=8 $G(^(0)),!
+ Q
+ ;
+NY n X,A s X=$X
+NYQ r "  No=> ",A s A=$f("NnYy",$e(A)) i 'A w !?X g NYQ
+ i A'<4
+ q
+HELP ;
+ W !,"This utility is used to add or edit the %IS parameters for devices.",!
+ W "Specify the device # or mnemonic for device; ""TRM"", ""MT"", ""BT"", ""SPL"",or ""OTH""",!
+ W "for type; device subtype for terminals or spool.",!
+ W "You may leave the prompt code empty or select one of the following codes:",!
+ W ?5,"1   When %IS is called and this device is your current device, the",!
+ W ?11,"device question is suppressed and your current device is selected.",!
+ W ?5,"2   When %IS is called and this device is selected, the ""Right margin""",!
+ W ?11,"or ""Parameter"" question is suppressed.",!
+ W "You can specify additional open parameters for non-terminal devices.",!!
+ W "To examine a device, put a ? at the end of the device name, e.g., ""TT?"".",!
+ W "To delete a device, type ""DEL"" in the ""MNE"" field, and the computer will",!
+ W "ask what device should be deleted.",!!
+ W "When editing a device, unanswered questions retain their previous values.",!
+ W "To delete a value, type ""DEL"".",!!
+ G A

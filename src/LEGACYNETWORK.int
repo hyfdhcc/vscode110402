@@ -1,0 +1,390 @@
+ROUTINE LEGACYNETWORK [Type=INT]
+LEGACYNETWORK ;Legacy Network configuration manager ; STC1706 11/25/2009
+ /*
+---------------------Maintenance------------------------------------
+SML1413 12/05/11 Simon Li, Fix wrong choice accepted in the 'FlowControl' option of ^LEGACYNETWORK. 
+STC1706 11/25/09 Steve Clay, Process config file setting for Cache Windows LAT daemon 
+SML1095 12/22/08 Simon Li, Create utility to configure legacy network. 
+-------------------End Maintenance----------------------------------
+ */
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ New
+MENU s $zt="MENUE"
+ w !
+ w !,"1) COM Port Setup"
+ w !,"2) Exit"
+ w !
+ s Option=$$OPTION("Option? ",2,2)
+ i Option=1 d COMSETUP() g MENU
+ q
+MENUE s $zt=""
+ i $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q
+COMSETUP() PRIVATE {
+ I '($zversion(1)=2) w !,"Only support for Windows platform." q
+TOP
+ s $zt="COMSETUPE"
+ w !
+ w !,"1) List COM Ports"
+ w !,"2) Add COM Ports"
+ w !,"3) Edit COM Ports"
+ w !,"4) Remove COM Ports"
+ w !,"5) Exit"
+ w !
+ s Option=$$OPTION("Option? ",5,5)
+ i Option=1 d COMLIST() g TOP
+ i Option=2 d COMADD() g TOP
+ i Option=3 d COMEDIT() g TOP
+ i Option=4 d COMREMOVE() g TOP
+ q
+COMSETUPE s $zt=""
+ i $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q
+}
+COMLIST() PRIVATE {
+ s $zt="COMLISTE"
+ Set Rset = ##class(%Library.ResultSet).%New("Config.ComPorts:List")
+ i '(''Rset) d $SYSTEM.Status.DisplayError(%objlasterror) q
+ d Rset.Execute()
+ w !,Rset.GetColumnName(1)
+ w ?7,"ModemCtrl"
+ w ?17,Rset.GetColumnName(3)
+ w ?26,Rset.GetColumnName(4)
+ w ?34,Rset.GetColumnName(5)
+ w ?43,"FlowCtrl"
+ w ?52,Rset.GetColumnName(7)
+ w ?60,Rset.GetColumnName(8)
+ w ?68,Rset.GetColumnName(9)
+ w !,$$UL(Rset.GetColumnName(1))
+ w ?7,$$UL("ModemCtrl")
+ w ?17,$$UL(Rset.GetColumnName(3))
+ w ?26,$$UL(Rset.GetColumnName(4))
+ w ?34,$$UL(Rset.GetColumnName(5))
+ w ?43,$$UL("FlowCtrl")
+ w ?52,$$UL(Rset.GetColumnName(7))
+ w ?60,$$UL(Rset.GetColumnName(8))
+ w ?68,$$UL(Rset.GetColumnName(9))
+ While Rset.Next() {
+	w !,Rset.Data("Name")
+	s d=Rset.Data("ModemControl")
+	w:$x>7 ! w ?7,$case(d," ":"Windows",1:"Enabled",:"Disabled")
+	s d=Rset.Data("DataBits")
+	w:$x>17 ! w ?17,$s(d=" ":"Windows",1:d)
+	s d=Rset.Data("Parity")
+	w:$x>26 ! w ?26,$case(d," ":"Windows","0":"No","1":"Odd","2":"Even","3":"Mark","4":"Space",:"Unknown")
+	s d=Rset.Data("StopBits")
+	w:$x>34 ! w ?34,$case(d," ":"Windows","1":"1","2":"2","3":"1.5",:"Unknown")
+	s d=Rset.Data("FlowControl")
+	w:$x>43 ! w ?43,$case(d," ":"Windows","X":"Xon-Xoff","C":"CTS-RTS","D":"DSR-DTR",:"Unknown")
+	s d=Rset.Data("DTR")
+	w:$x>52 ! w ?52,$case(d," ":"Windows",1:"Enabled",:"Disabled")
+	s d=Rset.Data("ZAError")
+	w:$x>60 ! w ?60,$case(d," ":"Windows",1:"Enabled",:"Disabled")
+	w:$x>68 ! w ?68,Rset.Data("BaudRate")
+ }
+ q
+COMLISTE s $zt=""
+ i $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q
+}
+COMADD() PRIVATE {
+ s property("BaudRate")=19200
+ s property("DTR")=" "
+ s property("DataBits")="8"
+ s property("FlowControl")=" "
+ s property("ModemControl")=" "
+ s property("Parity")=" "
+ s property("StopBits")=" "
+ s property("ZAError")=" "
+TOP w !
+ s $zt="COMADDE",POP=0
+ s Name=$$STRINGOPTION("Enter Name to be created","",1)
+ If Name="?" D COMLIST() g TOP
+ I Name="" Quit
+ I Name'?1"COM".N1":" w "  Name should start with ""COM"" and end with "":""" g TOP
+ i ##Class(Config.ComPorts).Exists(Name,.Obj) w " COM Port "_Name_" already exist." k Obj g TOP
+BaudRate
+ s property("BaudRate")=$$NUMOPTION("Baud Rate",property("BaudRate"),110,256000,.POP)
+ I property("BaudRate")=-1 q
+ I POP s property("BaudRate")=19200 g TOP
+ I ",110,300,600,1200,2400,4800,9600,14400,19200,38400,56000,57600,115200,128000,256000,"'[(","_property("BaudRate")_",") w !,"Valid Baud Rates are",!,$e(",110,300,600,1200,2400,4800,9600,14400,19200,38400,56000,57600,115200,128000,256000,",2,*-1) s property("BaudRate")=19200 g TOP 
+DTR
+ s d=$TR(property("DTR")," ","2")
+ w !!,"0) Disabled"
+ w !,"1) Enabled"
+ w !,"2) Windows Setting"
+ s d=$$NUMOPTION("Enter DTR",d,0,2,.POP)
+ I d=-1 q
+ I POP s POP=0 s property("DTR")=" " g BaudRate
+ s property("DTR")=$TR(d,"2"," ")
+DataBits
+ s d=$TR(property("DataBits")," ","9")
+ w !!,"5) 5 Data Bits"
+ w !,"6) 6 Data Bits"
+ w !,"7) 7 Data Bits"
+ w !,"8) 8 Data Bits"
+ w !,"9) Windows Setting"
+ s d=$$NUMOPTION("Enter Data Bits",d,5,9,.POP)
+ I d=-1 q
+ I POP s POP=0 s property("DataBits")=" " g DTR
+ s property("DataBits")=$TR(d,"9"," ")
+FlowControl
+ s d=$TR(property("FlowControl")," ","W")
+ w !!,"X) Xon-Xoff"
+ w !,"C) CTS-RTS"
+ w !,"D) DSR-DTR"
+ w !,"W) Windows Setting"
+ s d=$$STRINGOPTION("Enter Flow Control",d,0,.POP)
+ I d=-1 q
+ I POP s POP=0 s property("FlowControl")=" " g DataBits
+ s d=$zconvert(d,"U")
+ I ",X,C,D,W,"'[(","_d_",") w "  bad value, please enter X, C, D or W" s property("FlowControl")=" " g FlowControl
+ s property("FlowControl")=$TR(d,"W"," ")
+ModemControl
+ s d=$TR(property("ModemControl")," ","2")
+ w !!,"0) Disabled"
+ w !,"1) Enabled"
+ w !,"2) Windows Setting"
+ s d=$$NUMOPTION("Enter ModemControl",d,0,2,.POP)
+ I d=-1 q
+ I POP s POP=0 s property("ModemControl")=" " g FlowControl
+ s property("ModemControl")=$TR(d,"2"," ")
+Parity
+ s d=$TR(property("Parity")," ","5")
+ w !!,"0) No Parity"
+ w !,"1) Odd Parity"
+ w !,"2) Even Parity"
+ w !,"3) Mark Parity"
+ w !,"4) Space Parity"
+ w !,"5) Windows Setting"
+ s d=$$NUMOPTION("Enter Data Bits",d,0,5,.POP)
+ I d=-1 q
+ I POP s POP=0 s property("Parity")=" " g ModemControl
+ s property("Parity")=$TR(d,"5"," ")
+StopBits
+ s d=$TR(property("StopBits")," ","4")
+ w !!,"1) 1 Stop Bit"
+ w !,"2) 2 Stop Bits"
+ w !,"3) 1.5 Stop Bits"
+ w !,"4) Windows Setting"
+ s d=$$NUMOPTION("Enter Data Bits",d,1,4,.POP)
+ I d=-1 q
+ I POP s POP=0 s property("StopBits")=" " g Parity
+ s property("StopBits")=$TR(d,"4"," ")
+ZAError
+ s d=$TR(property("ZAError")," ","2")
+ w !!,"0) Disabled"
+ w !,"1) Enabled"
+ w !,"2) Windows Setting"
+ s d=$$NUMOPTION("Enter ZAError",d,0,2,.POP)
+ I d=-1 q
+ I POP s POP=0 s property("ZAError")=" " g FlowControl
+ s property("ZAError")=$TR(d,"2"," ")
+ s ans=$$YNOPTION("Confirm to Create COM Port "_Name,1,.POP)
+ I POP s POP=0 g ZAError
+ I ans<1 q
+ s Status=##Class(Config.ComPorts).Create(Name,.property)
+ i '(''Status) d $SYSTEM.Status.DisplayError(Status) q
+ w !,"COM Port "_Name_" Created."
+ q
+COMADDE s $zt=""
+ i $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q
+}
+COMEDIT() PRIVATE {
+TOP w !
+ s $zt="COMEDITE",POP=0
+ s Name=$$STRINGOPTION("Enter Name to be edited","",1)
+ If Name="?" D COMLIST() g TOP
+ I Name="" Quit
+ I Name'?1"COM".N1":" w "  Name should start with ""COM"" and end with "":""" g TOP
+ i '##Class(Config.ComPorts).Exists(Name,.Obj) w " COM Port "_Name_" does not exist." g TOP
+BaudRate
+ s property("BaudRate")=$$NUMOPTION("Baud Rate",$g(property("BaudRate"),Obj.BaudRate),110,256000,.POP)
+ I property("BaudRate")=-1 q
+ I POP k property("BaudRate") g TOP
+ I ",110,300,600,1200,2400,4800,9600,14400,19200,38400,56000,57600,115200,128000,256000,"'[(","_property("BaudRate")_",") w !,"Valid Baud Rates are",!,$e(",110,300,600,1200,2400,4800,9600,14400,19200,38400,56000,57600,115200,128000,256000,",2,*-1) k property("BaudRate") g TOP 
+ I property("BaudRate")=Obj.BaudRate k property("BaudRate")
+DTR
+ s d=$TR($g(property("DTR"),Obj.DTR)," ","2")
+ w !!,"0) Disabled"
+ w !,"1) Enabled"
+ w !,"2) Windows Setting"
+ s d=$$NUMOPTION("Enter DTR",d,0,2,.POP)
+ I d=-1 q
+ I POP s POP=0 k property("DTR") g BaudRate
+ s property("DTR")=$TR(d,"2"," ")
+ I property("DTR")=Obj.DTR k property("DTR")
+DataBits
+ s d=$TR($g(property("DataBits"),Obj.DataBits)," ","9")
+ w !!,"5) 5 Data Bits"
+ w !,"6) 6 Data Bits"
+ w !,"7) 7 Data Bits"
+ w !,"8) 8 Data Bits"
+ w !,"9) Windows Setting"
+ s d=$$NUMOPTION("Enter Data Bits",d,5,9,.POP)
+ I d=-1 q
+ I POP s POP=0 k property("DataBits") g DTR
+ s property("DataBits")=$TR(d,"9"," ")
+ I property("DataBits")=Obj.DataBits k property("DataBits")
+FlowControl
+ s d=$TR($g(property("FlowControl"),Obj.FlowControl)," ","W")
+ w !!,"X) Xon-Xoff"
+ w !,"C) CTS-RTS"
+ w !,"D) DSR-DTR"
+ w !,"W) Windows Setting"
+ s d=$$STRINGOPTION("Enter Flow Control",d,0,.POP)
+ I d=-1 q
+ I POP s POP=0 k property("FlowControl") g DataBits
+ s d=$zconvert(d,"U")
+ I ",X,C,D,W,"'[(","_d_",") w "  bad value, please enter X, C, D or W" k property("FlowControl") g FlowControl
+ s property("FlowControl")=$TR(d,"W"," ")
+ I property("FlowControl")=Obj.FlowControl k property("FlowControl")
+ModemControl
+ s d=$TR($g(property("ModemControl"),Obj.ModemControl)," ","2")
+ w !!,"0) Disabled"
+ w !,"1) Enabled"
+ w !,"2) Windows Setting"
+ s d=$$NUMOPTION("Enter ModemControl",d,0,2,.POP)
+ I d=-1 q
+ I POP s POP=0 k property("ModemControl") g FlowControl
+ s property("ModemControl")=$TR(d,"2"," ")
+ I property("ModemControl")=Obj.ModemControl k property("ModemControl")
+Parity
+ s d=$TR($g(property("Parity"),Obj.Parity)," ","5")
+ w !!,"0) No Parity"
+ w !,"1) Odd Parity"
+ w !,"2) Even Parity"
+ w !,"3) Mark Parity"
+ w !,"4) Space Parity"
+ w !,"5) Windows Setting"
+ s d=$$NUMOPTION("Enter Data Bits",d,0,5,.POP)
+ I d=-1 q
+ I POP s POP=0 k property("Parity") g ModemControl
+ s property("Parity")=$TR(d,"5"," ")
+ I property("Parity")=Obj.Parity k property("Parity")
+StopBits
+ s d=$TR($g(property("StopBits"),Obj.StopBits)," ","4")
+ w !!,"1) 1 Stop Bit"
+ w !,"2) 2 Stop Bits"
+ w !,"3) 1.5 Stop Bits"
+ w !,"4) Windows Setting"
+ s d=$$NUMOPTION("Enter Data Bits",d,1,4,.POP)
+ I d=-1 q
+ I POP s POP=0 k property("StopBits") g Parity
+ s property("StopBits")=$TR(d,"4"," ")
+ I property("StopBits")=Obj.StopBits k property("StopBits")
+ZAError
+ s d=$TR($g(property("ZAError"),Obj.ZAError)," ","2")
+ w !!,"0) Disabled"
+ w !,"1) Enabled"
+ w !,"2) Windows Setting"
+ s d=$$NUMOPTION("Enter ZAError",d,0,2,.POP)
+ I d=-1 q
+ I POP s POP=0 k property("ZAError") g FlowControl
+ s property("ZAError")=$TR(d,"2"," ")
+ I property("ZAError")=Obj.ZAError k property("ZAError")
+ if $d(property) {
+	 s ans=$$YNOPTION("Confirm to Update COM Portr "_Name,1,.POP)
+	 I POP s POP=0 g ZAError
+	 I ans<1 q
+	 s Status=##Class(Config.ComPorts).Modify(Name,.property)
+	 i '(''Status) d $SYSTEM.Status.DisplayError(Status) q
+	 w !,"COM Port "_Name_" is updated."
+ }
+ q
+COMEDITE s $zt=""
+ i $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q
+}
+COMREMOVE() PRIVATE {
+TOP w !
+ s $zt="COMREMOVEE",POP=0
+ s Name=$$STRINGOPTION("Enter Name to be removed","",1)
+ I Name="?" D COMLIST() g TOP
+ I Name="" Quit
+ i '##Class(Config.ComPorts).Exists(Name,.Obj) w " COM Port "_Name_" does not exist." g TOP
+ s ans=$$YNOPTION("Confirm to Remove COMPort "_Name,0,.POP)
+ I POP s POP=0 k Obj g TOP
+ I ans>0 {
+	 s Status=##Class(Config.ComPorts).Delete(Name)
+	 i '(''Status) d $SYSTEM.Status.DisplayError(Status) q
+	 w !,"COM Port "_Name_" is removed"
+ }
+ q
+COMREMOVEE s $zt=""
+ i $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q
+}
+OPTION(prompt,default,max) [] PRIVATE {
+ s $zt="OPTIONE"
+OPTION1 w !,prompt
+ r Option i Option="" q default
+ i '(Option?1.2N)!(Option<1)!(Option>max) w !!,"Please enter a number between 1 and "_max,! g OPTION1
+ q +Option
+OPTIONE s $zt=""
+ i $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q 0
+}
+YNOPTION(prompt,default,POP) [] PRIVATE {
+ s $zt="YNOPTIONE"
+ s dstr=$s(+default:"Yes",1:"No")
+YNOPTION1 w !,prompt_"? "_dstr_" => "
+ r Option i Option="" w dstr q default
+ i Option="^" s POP=1 q 0
+ s Option=$TR($E(Option),"yn","YN")
+ i "YN"']Option w !!,"Please enter Yes or No",! g YNOPTION1
+ q Option="Y"
+YNOPTIONE s $zt=""
+ i $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q -1
+}
+NUMOPTION(prompt,default,min,max,POP) [] PRIVATE {
+ s $zt="NUMOPTIONE"
+NUMOPTION1 w !,prompt_"? "_+default_" => "
+ r Option i Option="" w default q default
+ i Option="^" s POP=1 q 0
+ i '(Option?1.10N)||(Option<min)||(max]""&&(Option>max)) w !!,"Please enter a number between "_min_" and "_$s(max]"":max,1:"10000000000"),! g NUMOPTION1
+ q +Option
+NUMOPTIONE s $zt=""
+ i $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q -1
+}
+STRINGOPTION(prompt,default,allownull,POP) [] PRIVATE {
+ s $zt="STRINGOPTIONE"
+STRINGOPTION1 w !,prompt_"? " i default'="" w default_" => "
+ r Option i Option="",(default'="") w default q default
+ i Option="",(allownull=0) w !,"Please enter a non-null value" g STRINGOPTION1 
+ i Option="^" s POP=1 q ""
+ i Option=" ",(allownull=1) s Option=""
+ q Option
+STRINGOPTIONE s $zt=""
+ i $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q -1
+}
+UL(String) PRIVATE {
+	s $P(x,"-",$l(String)+1)=""
+	q x
+}
+SECURITYCHECK() PRIVATE {
+ i '$SYSTEM.Security.Check("%Admin_Secure","USE") {
+	 w !,$$FormatMsg^%occMessages("%SECURITY.Security","OperationRequiresAccess","USE","%Admin_Secure")
+	 q 0
+ }
+ q 1
+}

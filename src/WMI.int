@@ -1,0 +1,1350 @@
+ROUTINE WMI [Type=INT]
+WMI	; Windows Management Instrumentation interface ; JLC1903  8/21/15
+ ;  
+ ;
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* MONEXT.INC */
+ ;
+ ; 
+ w !!,"This routine should not be called interactively."
+ w !,"It is only used to implement a server for the WMI DLL" q
+ ;
+ ;
+ ;
+JOB	; entry point called by SNMP upon receipt of a WMI OpenPDU request
+ ;
+ s $zt="joberr^WMI"  
+ s log=$g(^SYS("MONITOR","WMI","LOGFILE"),$zu(12)_"WMI.log")
+ o log:"NWS" u log
+ s dbg=$g(^SYS("MONITOR","WMI","DEBUG"),0)
+ i $ZU(67,10,40,$j) ; identify ourself as a WMI job
+ i dbg d log("WMI server started on port "_port_", timeout="_timeout_", Debug="_dbg)
+ ;
+ ; Fetch some constants
+ ;
+ s CONFIG=$p($zu(86),"*",2)
+ s DIRECTORY=$zu(12)
+ s CONFIGFILE=$p($zu(86),"*")
+ s STARTTIME=$zdth($zu(34,14),-2)
+ ; Create lists of resource seize stats
+ s RESNAME=$zu(162,0),RESCOL=$zu(162,1)
+ s RESNAMEL=$l(RESNAME,","),RESCOLL=$l(RESCOL,",")
+ ; Get index counts for ResSz, GloBuff, and Write Demon
+ s RSZINDEX=RESNAMEL*RESCOLL
+ s GBINDEX=$zu(190,2)
+ s WDINDEX=$zu(190,3)
+ ; Text translations for ECP Server and Client states
+ ; 2nd piece is translation to CIM standard OperationalStatus:
+ ; 0-Unknown, 1-Other, 2-OK, 3-Degraded, 4-Stressed, 5-PredictiveFailure, 6-Error, 
+ ; 7-NonRecoverableError, 8-Starting, 9-Stopping, 10-Stopped, 11-InService 
+ s ECPSTATE("S",0)="Down,1",ECPSTATE("S",1)="Normal,2",ECPSTATE("S",2)="Trouble,6"
+ s ECPSTATE("S",3)="Recovering,11",ECPSTATE("S",4)="Restart,8"
+ s ECPSTATE("C",0)="Initializing,8",ECPSTATE("C",1)="Not Connected,1"
+ s ECPSTATE("C",2)="Connection in Progress,8",ECPSTATE("C",3)="Connection Failed,6"
+ s ECPSTATE("C",4)="Disabled,10",ECPSTATE("C",5)="Normal,2"
+ s ECPSTATE("C",6)="Initializing,8",ECPSTATE("C",7)="Recovering,11"
+ ; Keep ID counter for Events
+ s EVENTCNT=1
+ ;
+listen ; Loop here listening for AgentX messages
+ ;
+ i $$%swstat^SWSET(16) g terminate
+ s imsgx=$$read()
+ i imsgx="" {
+	 ; re-check debug flag after a read timeout
+	 s dbg=$g(^SYS("MONITOR","WMI","DEBUG"),0)
+	 g listen
+ }
+ i dbg d dump("Message received",imsgx)
+ s error=$$pduval(imsgx,0,0)
+ i error d log("Error '"_error_"' in received message") g listen
+ s pdu=$a(imsgx,2) ; get message type
+ i (pdu'=254) {
+	 d log("Unsupported message - received PDU "_pdu)
+	 d response(268)
+	 g listen
+ }
+ s txID = $zla(imsgx,9) ; Use transaction ID from PDU
+ ;
+ ; Handle request from WMI for a class instance
+ ; 
+ ; get 'next' flag
+ s next=$a(imsgx,3)
+ ; Extract class and key from message
+ s byte=21
+ s len=$zla(imsgx,byte),byte=byte+4
+ s class=$e(imsgx,byte,byte+len-1),byte=byte+len
+ s len=$zla(imsgx,byte),byte=byte+4
+ s key=$e(imsgx,byte,byte+len-1),byte=byte+len
+ i dbg d log("Received Object request for "_class_", key="_key_", next="_next)
+ ;
+ ; Get data and build instance data to be returned
+ ; 
+ s instance=""
+ s more=$$WMIclass(class, key, next, .instance)
+ ; 
+ ; The answer should also indicate if this is the "last" instance by
+ ; setting res.index in the ResponsePDU to "0" ("1" indicates "more").
+ ;
+ i dbg d log("Building response ... more="_more) 
+ i more=0 d response(5)
+ e  d response(0,more-1,instance)
+ ;
+ g listen
+ ;
+ ;
+WMIclass(class, key, next, data)
+ ;
+ ; Fetch class for WMI interface
+ ;
+ ; class = name of class to get
+ ; key = key value (may be "" to indicate 'first' instance)
+ ; next = flag to indicate we want the 'next' instance
+ ; data = instance data to be returned (by ref)
+ ; 
+ ; return = 0 - error in class
+ ; 			1 - class found (but last instance, or not enumerating)
+ ; 			2 - class found and there's 'more' instances
+ ; 
+ ; The 'class' requested is a string (4 byte length + characters) of
+ ; the class name. The 'flag' indicates whether the 'key' is for the
+ ; the specific instance requested (flag=0), or whether we are
+ ; enumerating the instances and want the 'next' instance (flag=1).
+ ; In the 'next' case the key is the *previous* instance which has been 
+ ; retrieved. A NULL key indicates a request for the first (or only) 
+ ; instance.
+ ; 
+ ;
+ ; The answer is returned as byte string representing the values
+ ; of the class.
+ ; 
+ ;  - an integer or boolean is returned as 4 bytes, i.e. answer=$zlc(int)
+ ;  - a string is returned as len_string, i.e. answer=$zlc($l(str))_str 
+ ;  - a datetime is returned as a string in the format yyyymmddHHMMSS.mmmmmmsUUU
+ ; 
+ ; All properties for a class are simply concatenated together in 
+ ; the same order as they are listed in the MOF. It's IMPORTANT that the order
+ ; is maintained here and in the .H file for the DLL, so that the receiver  
+ ; knows the order and datatypes necessary to decode the string(s).
+ ;
+ ;
+ n stats,cls,cfg,max,d,gmt
+ n fspace,sizeunit,asize
+ s more=1,data=""
+ i class="Cache_DatabaseSystem" {
+	;{ L"Name", CIM_STRING },
+	s data=data_$zlc($l(CONFIG))_CONFIG
+	;{ L"EnabledState", CIM_UINT16 },
+	s data=data_$zlc(2)
+	;{ L"TimeOfLastStateChange", CIM_DATETIME },
+	s d=$zdt(STARTTIME,8,5),gmt=($e(d,19,20)*60)+$e(d,22,23),data=data_$zlc(25)_$e(d,1,8)_$e(d,10,11)_$e(d,13,14)_$e(d,16,17)_".000000"_$e(d,18)_$e("000",0,3-$l(gmt))_gmt
+	;{ L"ConfigFile", CIM_STRING },
+	s data=data_$zlc($l(CONFIGFILE))_CONFIGFILE
+	;{ L"Directory", CIM_STRING },
+	s data=data_$zlc($l(DIRECTORY))_DIRECTORY
+	;{ L"Version", CIM_STRING },
+	s data=data_$zlc($l($zv))_$zv
+	;{ L"Port", CIM_UINT32 },
+	s data=data_$zlc($p(port,"|"))
+	;{ L"CurrentUsers", CIM_UINT32 },
+	s data=data_$zlc($$pidcnt())
+	;{ L"RoutineCache", CIM_UINT32 },
+	s data=data_$zlc($System.Util.RoutineBuffers()\1024\1024)
+	;{ L"DatabaseCache", CIM_UINT32 },
+	Set n=$listtostring($System.Util.GlobalBuffers())
+	Set blksize=1 
+	For i=1:1:6 Set blksize=blksize*2,$p(n,",",i)=$p(n,",",i)*blksize\1024
+	s tot=0 f i=1:1:$l(n,",") s tot=tot+$p(n,",",i) 
+	s data=data_$zlc(tot)
+	;{ L"LicenseUsed", CIM_UINT32 },
+	s data=data_$zlc($System.License.LUConsumed())
+	;{ L"LicenseHigh", CIM_UINT32 }
+	s data=data_$zlc($System.License.LUMaxConsumed())
+	s more=1
+ }
+ i class="Cache_CommonDatabase" {
+	; Handle key, e.g. Config1_1
+	; The integer following the "_" is an index to the database
+	; If 'next' is set then we're enumerating the instances, and
+	; the key passed is the previous one we returned.
+	i key="" s index=0
+	e  s index=+$p(key,"_",2)
+	s:next index=index+1
+	i dbg d log("Database request for index "_index)
+	;
+	; fetch database instance from config
+	s rset=##class(%Library.ResultSet).%New("Config.Databases:List")
+	d rset.Execute()
+	s inst=0
+	f  {
+		i 'rset.Next() s index=0 q
+		i rset.Data("Server")="" s inst=inst+1 ; only local for right now
+		i inst=index q
+	}
+	i index=0 k rset q 0 ; no such instance
+	; lookup "Directory" and do Database:Detail query
+	s dir=##class(%Library.File).ComputeFullDBDir(rset.Data("Directory"))
+	s rset2=##class(%Library.ResultSet).%New("SYS.Database:Detail")
+	d rset2.Execute($lb(dir)),rset2.Next()
+	;
+	; Handle SizeAllocated and FreeSpace to determine SizeUnits
+	; This is typically 3-MB, but since we need integers it could be 2-KB
+	; Get FreeSpace, use directory as key, fetch latest sample
+	s fspace=0,sid=""
+	s ok=##class(Monitor.Sample).SampleDataItem("CACHE","Freespace",$lb(dir),.sid)
+	; get the instance
+	i ok s ref=##class(Monitor.Sample).%OpenId(sid) i $isobject(ref) s fspace=+ref.FreeSpace
+	s aspace=rset2.Data("Size"),sizeunit=3
+	i fspace,fspace<1 s fspace=fspace*1024 ; RFD200\1,aspace=aspace*$$$KB\1,sizeunit=2
+	;
+	;{ L"InstanceID", CIM_STRING },
+	s data=data_$zlc($l(CONFIG_"_"_index))_CONFIG_"_"_index
+	;{ L"Name", CIM_STRING },
+	s data=data_$zlc($l(rset2.Data("Directory")))_rset2.Data("Directory")
+	;{ L"ElementName", CIM_STRING },
+	s data=data_$zlc($l(rset.Data("Name")))_rset.Data("Name")
+	;{ L"DatabaseVersion", CIM_STRING },
+	s data=data_$zlc($l($System.Version.Format(4)))_$System.Version.Format(4)
+	;{ L"SizeAllocated", CIM_UINT32 },
+	s data=data_$zlc(aspace)
+	;{ L"SizeUnits", CIM_UINT32 },
+	s data=data_$zlc(sizeunit)
+	;{ L"EnabledState", CIM_UINT16 },
+	s stat=rset2.Data("Status")
+	s data=data_$zlc($s($p(stat,"/")="Mounted":2,1:3))
+	;{ L"ReadOnly", CIM_UINT16 },
+	s data=data_$zlc($s($p(stat,"/",2)="RW":0,1:1))
+	;{ L"Cluster", CIM_UINT16 },
+	s data=data_$zlc(rset2.Data("ClusterMounted"))
+	;{ L"FreeSpace", CIM_UINT32 }
+	s data=data_$zlc(fspace)
+	s more=1 
+	; see if there's 'more' instances
+	f  {
+		i 'rset.Next() q
+		i rset.Data("Server")="" s more=2 q
+	}
+	k rset,rset2
+ }
+ i class="Cache_DatabaseStatistics" {
+	s stats=$ZU(190,6,1)
+	;{ L"InstanceID", CIM_STRING },
+	s data=data_$zlc($l(CONFIG))_CONFIG
+	;{ L"Lines", CIM_UINT64 },
+	s data=data_$zlc($p(stats,",",12))
+	;{ L"RoutineLoads", CIM_UINT64 },
+	s data=data_$zlc($p(stats,",",1)+$p(stats,",",2))
+	;{ L"GlobalRefs", CIM_UINT64 },
+	s data=data_$zlc($p(stats,",",5)+$p(stats,",",6))
+	;{ L"GlobalSets", CIM_UINT64 },
+	s data=data_$zlc($p(stats,",",10)+$p(stats,",",11))
+	;{ L"GlobalKills", CIM_UINT64 },
+	s data=data_$zlc(0)
+	;{ L"DiskReads", CIM_UINT64 },
+	s data=data_$zlc($p(stats,",",8))
+	;{ L"DiskWrites", CIM_UINT64 },
+	s data=data_$zlc($p(stats,",",9))
+	;{ L"LogicalReads", CIM_UINT64 },
+	s data=data_$zlc($p(stats,",",7))
+	;{ L"JournalEntries", CIM_UINT64 },
+	s data=data_$zlc($V($ZU(40,2,94)+(4*1),-2,4)) ; MJRNENTRIES
+	s lck=$zu(40,2,52)
+	;{ L"Locks", CIM_UINT64 },
+	s data=data_$zlc($V(lck+(4*24),-2,4)) ; XLOCKCNT
+	;{ L"LocksSucceed", CIM_UINT64 },
+	s data=data_$zlc($V(lck+(4*25),-2,4)+$V(lck+(4*26),-2,4)) ; XLCKSUCC_PAR + XLCKSUCC
+	;{ L"LocksFailed", CIM_UINT64 },
+	s data=data_$zlc($V(lck+(4*27),-2,4)) ; XLCKFAIL
+	;
+	s stats=$zu(190,4) ; misc stats
+	;{ L"GloThrottleCur", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",1))
+	;{ L"GloThrottleMax", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",2))
+	;{ L"GloThrottleCnt", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",3))
+	;{ L"GloUpLock", CIM_BOOLEAN },
+	s data=data_$zlc($p(stats,",",4))
+	;{ L"GloUpCount", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",5))
+	;{ L"WDemonWake", CIM_BOOLEAN }
+	s data=data_$zlc($p(stats,",",6))
+	s more=1 
+ }
+ i class="Cache_ECPServerStatistics" {
+ 	s stats=$System.ECP.GetProperty("ServerStats")
+	;{ L"InstanceID", CIM_STRING },
+	s data=data_$zlc($l(CONFIG_"_ECP_S"))_CONFIG_"_ECP_S"
+	;{ L"MaxServerConnections", CIM_UINT32 },
+	s data=data_$zlc($System.ECP.MaxServerConnections() )
+	;{ L"ActiveServerConnections", CIM_UINT32 },
+	s data=data_$zlc($System.ECP.NumServerConnections())
+	;{ L"GlobalRefs", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",1))
+	;{ L"GlobalUpdates", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",2))
+	;{ L"RequestsReceived", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",3))
+	;{ L"RequestBuffers", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",4))
+	;{ L"BlocksSent", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",5))
+	;{ L"LocksGranted", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",6))
+	;{ L"LocksFailed", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",7))
+	;{ L"LocksQueued", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",8))
+	;{ L"LocksQueuedGranted", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",9))
+	;{ L"LocksQueuedFailed", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",10))
+	;{ L"BytesSent", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",19))
+	;{ L"BytesReceived", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",20))
+	;{ L"ServerBlockPurge", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",11))
+	;{ L"RoutinePurge", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",12))
+	;{ L"BigKill", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",14))
+	;{ L"BigString", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",21))
+	s more=1 
+ }
+ i class="Cache_ECPClientStatistics" {
+	s stats=$System.ECP.GetProperty("ClientStats")
+	; get glostat counters
+	s base=$ZU(40,2,1),gstat=""
+	f i=0:4:40 s gstat(i)=$V(i+base,-2,4)
+    ;{ L"InstanceID", CIM_STRING },
+	s data=data_$zlc($l(CONFIG_"_ECP_C"))_CONFIG_"_ECP_C"
+    ;{ L"MaxClientConnections", CIM_UINT32 },
+	s data=data_$zlc($System.ECP.MaxClientConnections() )
+    ;{ L"ActiveClientConnections", CIM_UINT32 },
+	s data=data_$zlc($System.ECP.NumClientConnections())
+    ;{ L"GlobalRefs", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",1))
+    ;{ L"BytesSent", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",19))
+    ;{ L"BytesReceived", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",20))
+    ;{ L"BlocksAdded", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",2))
+    ;{ L"BlocksBufferPurge", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",6))
+    ;{ L"BlocksServerPurge", CIM_UINT32 },
+	s data=data_$zlc($p(stats,",",7))
+    ;{ L"GlobalRefsLocal", CIM_UINT32 },
+	s data=data_$zlc(gstat(16))
+    ;{ L"GlobalRefsRemote", CIM_UINT32 },
+	s data=data_$zlc(gstat(20))
+    ;{ L"GlobalUpdatesLocal", CIM_UINT32 },
+	s data=data_$zlc(gstat(36))
+    ;{ L"GlobalUpdatesRemote", CIM_UINT32 },
+	s data=data_$zlc(gstat(40))
+    ;{ L"RoutineCallsLocal", CIM_UINT32 },
+	s data=data_$zlc(gstat(0))
+    ;{ L"RoutineCallsRemote", CIM_UINT32 },
+	s data=data_$zlc(gstat(4))
+    ;{ L"RoutineBufferLocal", CIM_UINT32 },
+	s data=data_$zlc(gstat(8))
+    ;{ L"RoutineBufferRemote", CIM_UINT32 },
+	s data=data_$zlc(gstat(12))
+    ;{ L"CacheEfficiencyLocal", CIM_UINT16 },
+    s n=gstat(28)+gstat(32)
+	s data=data_$zlc($S(n:gstat(16)\n,1:0))
+    ;{ L"CacheEfficiencyRemote", CIM_UINT16 }
+    s n=$V(0+$ZU(40,2,148),-2,4)
+	s data=data_$zlc($S(n:gstat(20)-gstat(40)\n,1:0))
+	s more=1
+ }
+ i class="Cache_WriteDemonStatistics" {
+	; Handle key, e.g. Config1_WD_1
+	; The integer following the second "_" is an index to the Write Demons
+	; If 'next' is set then we're enumerating the instances, and
+	; the key passed is the previous one we returned.
+	i key="" s index=0
+	e  s index=+$p(key,"_",3)
+	i next s index=index+1
+	i (index<1)!(index>WDINDEX) q 0 ; no such index
+	s stats=$zu(190,3,index)
+	;{ L"InstanceID", CIM_STRING },
+	s data=data_$zlc($l(CONFIG_"_WD_"_index))_CONFIG_"_WD_"_index
+	;{ L"CurrentBlocks", CIM_UINT32},
+	s data=data_$zlc($p(stats,",",1))
+	;{ L"TotalBlocks", CIM_UINT32},
+	s data=data_$zlc($p(stats,",",2))
+	;{ L"Cycles", CIM_UINT32},
+	s data=data_$zlc($p(stats,",",3))
+	;{ L"BlocksPerCycle", CIM_UINT32},
+	s data=data_$zlc($p(stats,",",4))
+	;{ L"VolumeQueue", CIM_STRING}
+	s data=data_$zlc($l($p(stats,",",5)))_$p(stats,",",5)
+	s more=$s(index<WDINDEX:2,1:1)  
+ }
+ i class="Cache_GlobalBufferStatistics" {
+	; Handle key, e.g. Config1_GB_1
+	; The integer following the second "_" is an index to the global buffers
+	; If 'next' is set then we're enumerating the instances, and
+	; the key passed is the previous one we returned.
+	i key="" s index=0
+	e  s index=+$p(key,"_",3)
+	i next s index=index+1
+	i (index<1)!(index>GBINDEX) q 0 ; no such instance
+	s stats=$zu(190,2,index)
+	;{ L"InstanceID", CIM_STRING }
+	s data=data_$zlc($l(CONFIG_"_GB_"_index))_CONFIG_"_GB_"_index
+	;{ L"Size", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",1))
+	;{ L"Number", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",2))
+	;{ L"BatchQueue", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",3))
+	;{ L"Interactive", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",4))
+	;{ L"MaxInteractive", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",5))
+	;{ L"MinRequeue", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",6))
+	;{ L"MinRequeueB", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",7))
+	;{ L"RequeueCount", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",8))
+	;{ L"RequeueCountB", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",9))
+	;{ L"WriteQueueSize", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",10))
+	;{ L"OffLruCount", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",11))
+	;{ L"WriteSize", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",12))
+	;{ L"WriteMax", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",13))
+	;{ L"Available", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",14))
+	;{ L"ClosedMin", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",15))
+	;{ L"ClosedMinB", CIM_UINT32 }
+	s data=data_$zlc($p(stats,",",16))
+	s more=$s(index=GBINDEX:1,1:2)  
+ }
+ i class="Cache_ResourceSeizeStatistics" {
+	; Handle key, e.g. Config1_RSZ_1
+	; The integer following the second "_" is an index to the global buffers
+	; If 'next' is set then we're enumerating the instances, and
+	; the key passed is the previous one we returned.
+	i key="" s index=0
+	e  s index=+$p(key,"_",3)
+	i next s index=index+1
+	i (index<1)!(index>RSZINDEX) q 0 ; no such instance
+	s r=((index-1)\RESCOLL)+1,s=((index-1)#RESCOLL)+1
+	;{ L"InstanceID", CIM_STRING }
+	s data=data_$zlc($l(CONFIG_"_RSZ_"_index))_CONFIG_"_RSZ_"_index
+	;{ L"ElementName", CIM_STRING },
+	s data=data_$zlc($l($p(RESNAME,",",r)_"-"_$p(RESCOL,",",s)))_$p(RESNAME,",",r)_"-"_$p(RESCOL,",",s)
+	;{ L"Count", CIM_UINT32 }
+	s data=data_$zlc($p($zu(162,3,r),",",s))
+	s more=$s(index=RSZINDEX:1,1:2)  
+ }
+ i class="Cache_ECPServerConnection" {
+	 ; Handle key, e.g. CONFIG1_ECPServer_1
+	 ; The integer following the second "_" is an index to the ECP Server connections.
+	 ; If 'next' is set then we're enumerating the instances, and the key passed is 
+	 ; the previous one we returned.
+	 ; 
+	 ; See if we have any active connections to enumerate
+	 i key="",$System.ECP.NumServerConnections()=0 q 1
+	 s max=$System.ECP.MaxServerConnections()
+	 i key="" s index=0
+	 e  s index=+$p(key,"_",3)
+	 i next {
+		 s index=index+1
+		 ; find next active connection
+		 f i=index:1:max s state=$system.ECP.GetServerState(i) i $l(state,"^")>1 q
+		 s index=1
+	 } else {
+		 s state=$system.ECP.GetServerState(index)
+	 }
+	 i ($l(state,"^")=1)!(index<1)!(index>max) q 0 ; no such instance
+	 s st=$p(state,"^") ; connection status code
+	 ;
+	 ;{ L"Name", CIM_STRING },
+	 s data=data_$zlc($l(CONFIG_"_ECPServer_"_index))_CONFIG_"_ECPServer_"_index
+	 ;{ L"OperationalStatus", CIM_UINT16 },
+	 s data=data_$zlc($p(ECPSTATE("S",st),",",2))
+	 ;{ L"StatusDescription", CIM_STRING },
+	 s data=data_$zlc($l("ECP Server connection status is ("_st_") '"_$p(ECPSTATE("S",st),",")_"'"))_"ECP Server connection status is ("_st_") '"_$p(ECPSTATE("S",st),",")_"'"
+	 ;{ L"ConnectionNumber", CIM_UINT32 },
+	 s data=data_$zlc($p(state,"^",2))
+	 ;{ L"SourceHostName", CIM_STRING },
+	 s data=data_$zlc($l($p(state,"^",3)))_$p(state,"^",3)
+	 ;{ L"SourceGUID", CIM_STRING },
+	 s data=data_$zlc($l($p(state,"^",4)))_$p(state,"^",4)
+	 ;{ L"SourceIPAddress", CIM_STRING },
+	 s data=data_$zlc($l($p(state,"^",5)))_$p(state,"^",5)
+	 ;{ L"SourcePortNumber", CIM_UINT32 }
+	 s data=data_$zlc($p(state,"^",6))
+	 ; see if there's any more active connections
+	 f i=index:1:max s state=$system.ECP.GetServerState(i) q:$l(state,"^")>1
+	 i $l(state,"^")=1 q 0 ; last connection is inactive, no such instance
+	 s more=1
+ }
+ i class="Cache_ECPClientConnection" {
+	 ; Handle key, e.g. CONFIG1_ECPClient_1
+	 ; The integer following the second "_" is an index to the ECP Client connections.
+	 ; If 'next' is set then we're enumerating the instances, and the key passed is 
+	 ; the previous one we returned.
+	 ; 
+	 ; See if we have any active connections to enumerate
+	 i key="",$System.ECP.NumClientConnections()=0 q 1
+	 s max=$System.ECP.MaxClientConnections()
+	 i key="" s index=0
+	 e  s index=+$p(key,"_",3)
+	 i next {
+		 s index=index+1
+		 ; find next active connection
+		 f i=index:1:max s state=$system.ECP.GetClientState(i-1) i $l(state,"^")>1 q
+		 s index=1
+	 } else {
+		 s state=$system.ECP.GetClientState(index-1)
+	 }
+	 i ($l(state,"^")=1)!(index<1)!(index>max) q 0 ; no such instance
+	 s st=$p(state,"^") ; connection status code
+	 ;
+	 ;{ L"Name", CIM_STRING },
+	 s data=data_$zlc($l(CONFIG_"_ECPClient_"_index))_CONFIG_"_ECPClient_"_index
+	 ;{ L"OperationalStatus", CIM_UINT16 },
+	 s data=data_$zlc($p(ECPSTATE("C",st),",",2))
+	 ;{ L"StatusDescription", CIM_STRING },
+	 s data=data_$zlc($l("ECP Client connection status is ("_st_") '"_$p(ECPSTATE("C",st),",")_"'"))_"ECP Client connection status is ("_st_") '"_$p(ECPSTATE("C",st),",")_"'"
+	 ;{ L"ConnectionNumber", CIM_UINT32 },
+	 s data=data_$zlc($p(state,"^",2))
+	 ;{ L"LogicalName", CIM_STRING },
+	 s data=data_$zlc($l($p(state,"^",3)))_$p(state,"^",3)
+	 ;{ L"SourceIPAddress", CIM_STRING },
+	 s data=data_$zlc($l($p(state,"^",4)))_$p(state,"^",4)
+	 ;{ L"SourcePortNumber", CIM_UINT32 },
+	 s data=data_$zlc($p(state,"^",5))
+	 ;{ L"DestinationIPAddress", CIM_STRING },
+	 s data=data_$zlc($l($p(state,"^",6)))_$p(state,"^",6)
+	 ;{ L"DestinationPortNumber", CIM_UINT32 }
+	 s data=data_$zlc($p(state,"^",7))
+	 ;{ L"DestinationHostName", CIM_STRING }
+	 s data=data_$zlc($l($p(state,"^",8)))_$p(state,"^",8)
+	 s more=1
+ }
+ i class="Cache_ECPServerConnectionStats" {
+	 ; Handle key, e.g. CONFIG1_ECPServer_1
+	 ; The integer following the second "_" is an index to the ECP Server connections.
+	 ; If 'next' is set then we're enumerating the instances, and the key passed is 
+	 ; the previous one we returned.
+	 ; 
+	 ; See if we have any active connections to enumerate
+	 i key="",$System.ECP.NumServerConnections()=0 q 1
+	 s max=$System.ECP.MaxServerConnections()
+	 i key="" s index=0
+	 e  s index=+$p(key,"_",3)
+	 i next {
+		 s index=index+1
+		 ; find next active connection
+		 f i=index:1:max s state=$system.ECP.GetServerState(i) i $l(state,"^")>1 q
+		 s index=1
+	 } else {
+		 s state=$system.ECP.GetServerState(index)
+	 }
+	 i ($l(state,"^")=1)!(index<1)!(index>max) q 0 ; no such instance
+	 s stats=$System.ECP.GetProperty("ServerStats",index)
+	 ;
+	 ;{ L"InstanceID", CIM_STRING },
+	 s data=data_$zlc($l(CONFIG_"_ECPServer_"_index))_CONFIG_"_ECPServer_"_index
+	 ;{ L"GlobalRefs", CIM_UINT32 },
+	 s data=data_$zlc($p(stats,",",1))
+	 ;{ L"GlobalUpdates", CIM_UINT32 },
+	 s data=data_$zlc($p(stats,",",2))
+	 ;{ L"RequestsReceived", CIM_UINT32 },
+	 s data=data_$zlc($p(stats,",",3))
+	 ;{ L"RequestBuffers", CIM_UINT32 },
+	 s data=data_$zlc($p(stats,",",4))
+	 ;{ L"BlocksSent", CIM_UINT32 },
+	 s data=data_$zlc($p(stats,",",5))
+	 ;{ L"LocksGranted", CIM_UINT32 },
+	 s data=data_$zlc($p(stats,",",9))
+	 ;{ L"LocksFailed", CIM_UINT32 },
+	 s data=data_$zlc($p(stats,",",7))
+	 ;{ L"LocksQueued", CIM_UINT32 },
+	 s data=data_$zlc($p(stats,",",8))
+	 ;{ L"LocksQueuedGranted", CIM_UINT32 },
+	 s data=data_$zlc($p(stats,",",9))
+	 ;{ L"LocksQueuedFailed", CIM_UINT32 },
+	 s data=data_$zlc($p(stats,",",10))
+	 ;{ L"BytesSent", CIM_UINT32 },
+	 s data=data_$zlc($p(stats,",",19))
+	 ;{ L"BytesReceived", CIM_UINT32 },
+	 s data=data_$zlc($p(stats,",",20))
+	 ;{ L"ServerBlockPurge", CIM_UINT32 },
+	 s data=data_$zlc($p(stats,",",11))
+	 ;{ L"RoutinePurge", CIM_UINT32 },
+	 s data=data_$zlc($p(stats,",",12))
+	 ;{ L"BigKill", CIM_UINT32 },
+	 s data=data_$zlc($p(stats,",",14))
+	 ;{ L"BigString", CIM_UINT32 }
+	 s data=data_$zlc($p(stats,",",21))
+	 s more=1 
+ }
+ i class="Cache_ShadowSourceConn" {
+	 ; Handle key, e.g. CONFIG1_ShadowSrc_1
+	 ; The integer following the second "_" is an index to the Shadow connections.
+	 ; If 'next' is set then we're enumerating the instances, and the key passed is 
+	 ; the previous one we returned.
+	 ; 
+	 ; See if we have any connections to enumerate
+	 s rset=##class(%Library.ResultSet).%New("SYS.Shadowing.DataSource:Connections")
+	 d rset.Execute() s fnd=rset.Next()
+	 ; Handle first instance
+	 if key="" {
+		 i ('fnd)!('next) k rset q 1
+		 e  s index=1
+	 } else {
+		 s index=+$p(key,"_",3) s:next index=index+1
+		 ; step to connection instance based on index
+		 i index>1 f i=1:1:index s fnd=rset.Next() q:'fnd
+		 i 'fnd k rset q 1 ; this really shouldn't happen, we should have signaled "no more"
+		 			; but just in case ... connections could possibly have changed.
+	 }
+	 i dbg d log("Shadow Source request for index "_index)
+	 ;{ L"InstanceID", CIM_STRING },
+	 s data=data_$zlc($l(CONFIG_"_ShadowSrc_"_index))_CONFIG_"_ShadowSrc_"_index
+	 ;{ L"Port", CIM_STRING },
+	 s data=data_$zlc($l(rset.Data("Port")))_rset.Data("Port")
+	 ;{ L"Address", CIM_STRING },
+	 s data=data_$zlc($l(rset.Data("Shadow IP")))_rset.Data("Shadow IP")
+	 ;{ L"Journal", CIM_STRING },
+	 s data=data_$zlc($l(rset.Data("Journal")))_rset.Data("Journal")
+	 ;{ L"PID", CIM_STRING },
+	 s data=data_$zlc($l(rset.Data("PID")))_rset.Data("PID")
+	 ;{ L"Latency", CIM_STRING },
+	 s data=data_$zlc($l(rset.Data("Latency")))_rset.Data("Latency")
+	 ;{ L"Rate", CIM_UINT32 }
+	 s data=data_$zlc(+rset.Data("Shadowing Rate"))
+	 s more=1 s:rset.Next() more=2
+	 k rset
+ }
+ i class="Cache_ShadowDestServer" {
+	 ; Handle key, e.g. CONFIG1_ShadowDest_1
+	 ; The integer following the second "_" is an index to the Shadow connections.
+	 ; If 'next' is set then we're enumerating the instances, and the key passed is 
+	 ; the previous one we returned.
+	 ; 
+	 ; See if we have any connections to enumerate
+	 s rset=##class(%Library.ResultSet).%New("SYS.Shadowing.Shadow:Progress")
+	 s rset.RuntimeMode=2 d rset.Execute() s fnd=rset.Next()
+	 ; Handle first instance
+	 if key="" {
+		 i ('fnd)!('next) k rset q 1
+		 e  s index=1
+	 } else {
+		 s index=+$p(key,"_",3) s:next index=index+1
+		 ; step to connection instance based on index
+		 i index>1 f i=1:1:index s fnd=rset.Next() q:'fnd
+		 i 'fnd k rset q 1 ; this really shouldn't happen, we should have signaled "no more"
+		 			; but just in case ... connections could possibly have changed.
+	 }
+	 ;{ L"InstanceID", CIM_STRING },
+	 s data=data_$zlc($l(CONFIG_"_ShadowDest_"_index))_CONFIG_"_ShadowDest_"_index
+	 ;{ L"Name", CIM_STRING },
+	 s data=data_$zlc($l(rset.Data("Name")))_rset.Data("Name")
+	 ;{ L"Status", CIM_STRING },
+	 s data=data_$zlc($l(rset.Data("Status")))_rset.Data("Status")
+	 ;{ L"Checkpoint", CIM_STRING },
+	 s data=data_$zlc($l(rset.Data("Checkpoint")))_rset.Data("Checkpoint")
+	 ;{ L"Errors", CIM_UINT32 },
+	 s data=data_$zlc(+rset.Data("Errors"))
+	 ;{ L"OpenTx", CIM_UINT32 },
+	 s data=data_$zlc(+rset.Data("Open Transactions"))
+	 ;{ L"Latency", CIM_STRING }
+	 s data=data_$zlc($l(rset.Data("Latency")))_rset.Data("Latency")
+	 s more=1 s:rset.Next() more=2
+	 k rset
+ }
+ i class="Cache_ShadowToSystem" {
+	; 
+	; Handle key, e.g. Cache_ShadowToSystem.Shadow="Config1_ShadowSrc_1"
+	; 
+	; If 'next' is set then we're enumerating the instances, and
+	; the key passed is the previous one we returned.
+	; 		 			
+	i key="",'next q 0
+	i key="" s type="Cache_ShadowSourceConn",index=0
+	e  s type=$p(key,".",1),index=+$p(key,"_",4)
+	s:next index=index+1
+	i dbg d log("type = "_type_", index= "_index)
+	if type["SourceConn" {
+		s rset=##class(%Library.ResultSet).%New("SYS.Shadowing.DataSource:Connections")
+		d rset.Execute() s fnd=rset.Next()
+	} else {
+		s rset=##class(%Library.ResultSet).%New("SYS.Shadowing.Shadow:Progress")
+		s rset.RuntimeMode=2 d rset.Execute() s fnd=rset.Next()
+	}
+	i index>1 f i=1:1:index s fnd=rset.Next() q:'fnd
+	i 'fnd {
+		; if we've been through all the sources, move to destination servers
+		if type["SourceConn",next {
+			s type="Cache_ShadowDestServer",index=1
+			s rset=##class(%Library.ResultSet).%New("SYS.Shadowing.Shadow:Progress")
+			d rset.Execute() s fnd=rset.Next()
+		} else {
+			k rset q 1
+		}
+	}
+	s q=$c(34),cfg=CONFIG
+	;{ L"Shadow", CIM_STRING },
+	s data=data_$zlc($l(type_".InstanceID="_q_cfg_$s(type["Source":"_ShadowSrc_",1:"_ShadowDest_")_index_q))_type_".InstanceID="_q_cfg_$s(type["Source":"_ShadowSrc_",1:"_ShadowDest_")_index_q
+	;{ L"Configuration", CIM_STRING }
+	s data=data_$zlc($l("Cache_DatabaseSystem.Name="_q_cfg_q))_"Cache_DatabaseSystem.Name="_q_cfg_q
+	s more=1 s:rset.Next() more=2
+	i more=1,type["SourceConn" {
+		s rset=##class(%Library.ResultSet).%New("SYS.Shadowing.Shadow:Progress")
+		d rset.Execute() i rset.Next() s more=2
+	}
+	k rset
+ } 
+ i class="Cache_ElementStatisticalData" {
+	; 
+	; Handle complex key for associations, e.g. Cache_ECPServerStatistics.InstanceID=\"C51A_ECP_S\"
+	; 
+	; If 'next' is set then we're enumerating the instances, and
+	; the key passed is the previous one we returned.
+	; 
+	; Order of keys for enumeration will be:
+	; 
+	; 		Config1				-		General Database stats
+	; 		Config1_ECP_S		-		ECP Server stats
+	; 		Config1_ECP_C		-		ECP Client stats
+	; 		Config1_WD_n		-		Write Demon stats (index 1 - 'n')
+	; 		Config1_GB_n		-		Global Buffer stats (index 1 - 'n')
+	; 		Config1_RSZ_n		-		Resource Seize stats (index 1 - 'n')
+	; 		 			
+	s q=$c(34),cfg=CONFIG
+	; list of statistical classes to be associated with this config
+	s lc=$lb("Cache_DatabaseStatistics","Cache_ECPServerStatistics","Cache_ECPClientStatistics","Cache_WriteDemonStatistics","Cache_GlobalBufferStatistics","Cache_ResourceSeizeStatistics")
+	; list of ID suffixes matching above classes
+	s ls=$lb("","_ECP_S","_ECP_C","_WD_","_GB_","_RSZ_")
+	i key="",'next q 0
+	; remove escape character ('\') from quotes
+	if key]"" s stats="" f i=1:1:$l(key-1) i $e(key,i)'="\" s stats=stats_$e(key,i)
+	s more=2
+	if next {
+		i key]"" s key=stats ; use properly quoted key
+		; find class in list, null key will be 0 from $lf()
+		s p=$lf(lc,$p(key,"."))
+		; only single instances until Write Demon stats
+		if p<4 s p=p+1,index=""
+		; handle Write Demon, Global Buffers, and Resource Seize
+		if p>3 {
+			s index=$p(key,"_",4)+1
+			i p=4,index>WDINDEX s p=p+1,index=1
+			i p=5,index>GBINDEX s p=p+1,index=1
+			i p=6,index>RSZINDEX s more=1
+		}
+		s stats=$lg(lc,p)_".InstanceID="_q_cfg_$lg(ls,p)_index_q
+	}
+	;{ L"Statistics", CIM_STRING }
+	s data=data_$zlc($l(stats))_stats
+	;{ L"Configuration", CIM_STRING },
+	s data=data_$zlc($l("Cache_DatabaseSystem.Name="_q_cfg_q))_"Cache_DatabaseSystem.Name="_q_cfg_q
+ }
+ i class="Cache_AssociatedDatabaseSystem" {
+	; 
+	; Handle database key, e.g. Cache_CommonDatabase.InstanceID=\"C51A_1\"
+	; 
+	; If 'next' is set then we're enumerating the instances, and
+	; the key passed is the previous one we returned.
+	; 		 			
+	if key="" {
+		s index=0
+	}
+	else {
+		s key=$p(key,"=",2),key=$e(key,2,$l(key)-1)
+		s index=+$p(key,"_",2)
+	}
+	s:next index=index+1
+	; check that database instance exists in config
+	s rset=##class(%Library.ResultSet).%New("Config.Databases:List")
+	d rset.Execute()
+	s inst=0
+	f  {
+		i 'rset.Next() s index=0 q
+		i rset.Data("Server")="" s inst=inst+1 ; only local for right now
+		i inst=index q
+	}
+	i index=0 k rset q 0
+	;
+	s q=$c(34),cfg=CONFIG
+	;{ L"Database", CIM_STRING }
+	s data=data_$zlc($l("Cache_CommonDatabase.InstanceID="_q_cfg_"_"_index_q))_"Cache_CommonDatabase.InstanceID="_q_cfg_"_"_index_q
+	;$$$CIMSTR(cfg_"_"_index,data)
+	;{ L"Configuration", CIM_STRING },
+	s data=data_$zlc($l("Cache_DatabaseSystem.Name="_q_cfg_q))_"Cache_DatabaseSystem.Name="_q_cfg_q
+	;$$$CIMSTR(cfg,data)
+ 	s more=1 
+	; see if there's 'more' instances
+	f  {
+		i 'rset.Next() q
+		i rset.Data("Server")="" s more=2 q
+	}
+	k rset
+ }
+ i class="Cache_ECPConnectionToSystem" {
+	; 
+	; Handle key, e.g. Cache_ECPServerConnection.Name="Config1_ECPServer_1"
+	; 
+	; If 'next' is set then we're enumerating the instances, and
+	; the key passed is the previous one we returned.
+	; 		 			
+	i key="",'next q 0
+	i key="" s type="Cache_ECPServerConnection",index=0
+	e  s type=$p(key,".",1),index=+$p(key,"_",4)
+	i dbg d log("type = "_type_", index= "_index)		
+	i next {
+		s index=index+1
+		; Find next active connection
+		i type["Server" {
+			s max=$System.ECP.MaxServerConnections()
+			if index'>max {
+				f i=index:1:max s state=$System.ECP.GetServerState(i) q:$l(state,"^")>1
+				s index=i
+			}
+			; See if we're done listing Server connections
+			i ($l(state,"^")=1)!(index>max) s type="Cache_ECPClientConnection",index=1
+		}
+		i type["Client" {
+			s max=$System.ECP.MaxClientConnections()
+			if index'>max {
+				f i=index:1:max s state=$System.ECP.GetClientState(i-1) q:$l(state,"^")>1
+				s index=i
+			}
+		}
+	} else {
+		if type["Server" {
+			s max=$System.ECP.MaxServerConnections()
+			s state=$System.ECP.GetServerState(index)
+		} else {
+			s max=$System.ECP.MaxClientConnections()
+			s state=$System.ECP.GetClientState(index-1)
+		}	
+		i dbg d log("Requested connection "_index_", state = "_state)
+	}
+	i ($l(state,"^")=1)!(index<1)!(index>max) q 0 ; no such instance
+	s more=1,q=$c(34),cfg=CONFIG
+	;{ L"ECPConnection", CIM_STRING },
+	s data=data_$zlc($l(type_".Name="_q_cfg_$s(type["Server":"_ECPServer_",1:"_ECPClient_")_index_q))_type_".Name="_q_cfg_$s(type["Server":"_ECPServer_",1:"_ECPClient_")_index_q
+	;{ L"Configuration", CIM_STRING }
+	s data=data_$zlc($l("Cache_DatabaseSystem.Name="_q_cfg_q))_"Cache_DatabaseSystem.Name="_q_cfg_q
+	; see if there's 'more' instances
+	i next {
+		i dbg d log("More connections after "_type_", index "_index)
+		s index=index+1
+		; Find next active connection
+		i type["Server" {
+			s max=$System.ECP.MaxServerConnections()
+			if index'>max {
+				f i=index:1:max s state=$System.ECP.GetServerState(i) q:$l(state,"^")>1
+				s index=i
+			}
+			; See if we're done listing Server connections
+			i ($l(state,"^")=1)!(index>max) s type="Cache_ECPClientConnection",index=1
+		}
+		i type["Client" {
+			s max=$System.ECP.MaxClientConnections()
+			if index'>max {
+				f i=index:1:max s state=$System.ECP.GetClientState(i-1) q:$l(state,"^")>1
+				s index=i
+			}
+		}
+		i index'>max,$l(state,"^")>1 s more=2
+	}
+ }
+ i class="Cache_ECPConnectionStatisticalData" {
+	; 
+	; Handle key, e.g. Cache_ECPServerConnection.Name="Config1_ECPServer_1"
+	; 
+	; If 'next' is set then we're enumerating the instances, and
+	; the key passed is the previous one we returned.
+	; 		 			
+	i key="",'next q 0
+	s index=+$p(key,"_",4)		
+	s max=$System.ECP.MaxServerConnections()
+	i next {
+		s index=index+1
+		; Find next active connection (only Servers)
+		f i=index:1:max s state=$System.ECP.GetServerState(i) q:$l(state,"^")>1
+		s index=i
+		i dbg d log("Found next Server connection index="_index_", state="_state)
+	} else {
+		s state=$System.ECP.GetServerState(index)
+		i dbg d log("Requested Server connection index="_index_", state="_state)
+	}
+	i ($l(state,"^")=1)!(index<1)!(index>max) q 0 ; no such instance
+	s more=1,q=$c(34),cfg=CONFIG
+	;{ L"ECPConnection", CIM_STRING }
+	s data=data_$zlc($l("Cache_ECPServerConnection.Name="_q_cfg_"_ECPServer_"_index_q))_"Cache_ECPServerConnection.Name="_q_cfg_"_ECPServer_"_index_q
+	;{ L"Statistics", CIM_STRING },
+	s data=data_$zlc($l("Cache_ECPServerConnectionStats.InstanceID="_q_cfg_"_ECPServer_"_index_q))_"Cache_ECPServerConnectionStats.InstanceID="_q_cfg_"_ECPServer_"_index_q
+	; see if there's 'more' instances
+	i next {
+		s index=index+1
+		s max=$System.ECP.MaxServerConnections()
+		f i=index:1:max s state=$system.ECP.GetServerState(i) q:$l(state,"^")>1
+		i i'>max,$l(state,"^")>1 s more=2
+	}
+ }
+ i class="Cache_Event" {
+	;
+	; Request for a Cache 'event' (same events as SNMP traps)
+	; Check queue and fill in Cache_Event calls
+	; 
+	; DLL is triggered by Windows event object. 'more' is always returned as '1' and
+	; DLL will call again until null instance returned
+	;
+	; always make sure WMI trap queue is enabled in case Event Provider is just starting
+	s trap=$zu(190,1,1,2)	; RFD203 
+	s ^CacheTemp.EnsembleAlerts("WMI")=1 ; enable Ensemble Event queue
+	i '+$g(^CacheTemp.CacheAlerts("WMI")) s ^CacheTemp.CacheAlerts("WMI")=1 ; enable application queue
+	s trap=$zu(190,1,2,2)
+	; No Cache events ... check application alerts
+	i trap=0 {
+		l +^CacheTemp.CacheAlerts("WMI"):1
+		if $t {
+			s index=$o(^CacheTemp.CacheAlerts("WMI",""))
+			i index]"" {
+				; right now this can only be a cacheAppAlert
+				s trap="100,"_^CacheTemp.CacheAlerts("WMI",index)
+				k ^CacheTemp.CacheAlerts("WMI",index)
+				i $o(^CacheTemp.CacheAlerts("WMI",""))="" {
+					s ^CacheTemp.CacheAlerts("WMI")=1
+			    }
+			}
+		} else {
+			d log("Unable to lock trap queue.")
+		}
+		l -^CacheTemp.CacheAlerts("WMI")
+	}
+	; ... or maybe Ensemble alerts
+	i trap=0 {
+		s eventclass="",instanceid=""
+		; Look for Ensemble Event Log messages
+		s ns="",evid=""
+		s ns=$o(^CacheTemp.EnsembleAlerts("WMI",ns))
+		i ns]"" {
+			s evid=$o(^CacheTemp.EnsembleAlerts("WMI",ns,evid)) 
+			i evid]"" {
+				s eventclass="Ensemble_LogEvent"
+				s instanceid=CONFIG_"_"_ns_"_"_evid
+				k ^CacheTemp.EnsembleAlerts("WMI",ns,evid)
+			}
+		}
+		;
+		; Found other events
+		i eventclass]"" {
+			; Reply to Cache_Event with SNMP_ID=0, the Event Class name in the 'Name' field,
+			; and the Class InstanceID in the 'AdditionalInfo' field
+			;{ L"InstanceID", CIM_STRING },
+			s data=data_$zlc($l(CONFIG_"_EVT_0"))_CONFIG_"_EVT_0"
+			;{ L"Name", CIM_STRING },
+			s data=data_$zlc($l(eventclass))_eventclass
+			;{ L"Config", CIM_STRING },
+			s data=data_$zlc($l(CONFIG))_CONFIG
+			;{ L"SNMP_ID", CIM_UINT32 },
+			s data=data_$zlc(0)
+			;{ L"Severity", CIM_UINT16 },
+			s data=data_$zlc(0)
+			;{ L"AdditionalInfo", CIM_STRING }
+			s data=data_$zlc($l(instanceid))_instanceid
+		}
+		quit 1
+	}
+	;
+	i dbg,trap d log("Found trap "_trap_" in system queue.")
+	s tn=$p(trap,",") i (tn<1)!(tn>17),tn'=100 q 1
+	s aux=$p(trap,",",2,$l(trap,",")),EVENTCNT=EVENTCNT+1
+	; Get trap name and message
+	if tn=100 {
+		; emulate 'traplist' - insert trap name and severity
+		s event=";;100;cacheAppAlert;"_$p(aux,",")
+		s msg=$p(aux,",",2,$l(aux,","))
+	} else {
+		s event=$t(traplist+tn^SNMP),msg=$p(event,";",6)
+	}
+	; add database index for some DB traps
+	i tn>2,tn<7,aux]"" {
+		s sfn=+$p(aux,",",1),index=$$dbtab^SNMP("INDEX",sfn)
+		s dbname=$p(index,",",2),index=$p(index,",")
+		s msg=msg_", database "_dbname
+		; add database read status for cacheDBStatusChange
+		i tn=5 s msg=msg_", status is "_$p($$dbtab^SNMP("Status",index),"/",2)
+		i tn=6 s msg=msg_", error is "_$zu(96,1,+$p(aux,",",2))
+  	}
+  	; add message for cconsole.log trap
+  	i tn=15 s msg=msg_" - "_$p(aux,",",1)
+  	;
+  	; Build object properties
+	;{ L"InstanceID", CIM_STRING },
+	s data=data_$zlc($l(CONFIG_"_EVT_"_EVENTCNT))_CONFIG_"_EVT_"_EVENTCNT
+    ;{ L"Name", CIM_STRING },
+	s data=data_$zlc($l($ZSTRIP($p(event,";",4),"*W")))_$ZSTRIP($p(event,";",4),"*W")
+    ;{ L"Config", CIM_STRING },
+	s data=data_$zlc($l(CONFIG))_CONFIG
+    ;{ L"SNMP_ID", CIM_UINT32 },
+	s data=data_$zlc(tn)
+    ;{ L"Severity", CIM_UINT16 },
+	s data=data_$zlc($p(event,";",5))
+    ;{ L"AdditionalInfo", CIM_STRING }
+	s data=data_$zlc($l(msg))_msg
+	quit 1
+ }
+ if class = "Ensemble_Production" {
+	; Handle key, e.g. Config1_Namespace_Production
+	;
+	; Ensemble Productions are each developed in their own namespace.
+	; There can be multiple Productions in a namespace, with only one
+	; "running" at a time.
+	; 
+	; If 'next' is set then we're enumerating the instances, and
+	; the key passed is the previous one we returned.
+	if key="" {
+	   s nspace="",prod=""
+	   s nspace=$o(^%SYS("Ensemble","InstalledNamespace",nspace))
+	} else {
+	   s nspace=$p(key,"_",2),prod=$p(key,"_",3)
+	}
+    i dbg d log("Ensemble Production request Namespace = "_nspace_", Production = "_prod)
+	i nspace="" q 1
+prodns ; go to namespace
+    i dbg d log("Changing to namespace "_nspace)
+	zn nspace
+	s rs=##class(%Library.ResultSet).%New("Ens.Config.Production:ProductionStatus")
+	d rs.Execute() s cont=1
+	i dbg d log("Find production = "_prod)
+	while (cont) {
+	   s cont=rs.Next() q:'cont
+	   if prod="" s prod=rs.Data("Production") q  ; found next
+	   if 'next,prod=rs.Data("Production") q  ; found the one we're looking for
+	   if prod=rs.Data("Production") s prod="" ; next is one we want
+	}
+	i dbg d log("Finished ID loop, production="_prod_", cont="_cont)
+	i (prod="")!(cont=0) {
+	   s nspace=$o(^%SYS("Ensemble","InstalledNamespace",nspace))
+	   i dbg d log("Moving to next namespace "_nspace)
+	   i nspace]"" g prodns
+	}
+	i nspace="" zn "%SYS" q 0
+	;{ L"InstanceID", CIM_STRING }
+	s data=data_$zlc($l(CONFIG_"_"_nspace_"_"_prod))_CONFIG_"_"_nspace_"_"_prod
+    ;{ L"Name", CIM_STRING }
+    s data=data_$zlc($l(rs.Data("Production")))_rs.Data("Production")
+    ;{ L"Status", CIM_STRING }
+    s data=data_$zlc($l(rs.Data("Status")))_rs.Data("Status")
+    ;{ L"LastStart", CIM_DATETIME }
+    s dt=$p(rs.Data("LastStartTime"),".")
+    i dt="" s data=data_$zlc(25)_"00000000000000.000000+000"
+    e  s dt=$zdatetimeh(dt,3) s d=$zdt(dt,8,5),gmt=($e(d,19,20)*60)+$e(d,22,23),data=data_$zlc(25)_$e(d,1,8)_$e(d,10,11)_$e(d,13,14)_$e(d,16,17)_".000000"_$e(d,18)_$e("000",0,3-$l(gmt))_gmt
+    ;{ L"LastStop", CIM_DATETIME }
+    s dt=$p(rs.Data("LastStopTime"),".")
+    i dt="" s data=data_$zlc(25)_"00000000000000.000000+000"
+    e  s dt=$zdatetimeh(dt,3) s d=$zdt(dt,8,5),gmt=($e(d,19,20)*60)+$e(d,22,23),data=data_$zlc(25)_$e(d,1,8)_$e(d,10,11)_$e(d,13,14)_$e(d,16,17)_".000000"_$e(d,18)_$e("000",0,3-$l(gmt))_gmt
+	;
+	; see if there's any more productions
+	s more=1
+	i rs.Next() s more=2
+	k rs
+	i more=1,$o(^%SYS("Ensemble","InstalledNamespace",nspace))]"" {
+	   s nspace=$o(^%SYS("Ensemble","InstalledNamespace",nspace))
+	   i dbg d log("Checking namespace "_nspace_" for more ...")
+	   zn nspace
+	   s rs=##class(%Library.ResultSet).%New("Ens.Config.Production:ProductionStatus")
+	   d rs.Execute() i rs.Next() s more=2
+	   k rs
+	}
+	zn "%SYS"
+	q more
+ }	 
+ if class = "Ensemble_EventLog" {
+	; Handle key, e.g. Config1_Namespace_EventID
+	;
+	; There's an Ensemble Event Log for each Ensemble-enabled namespace.
+	; 
+	; If 'next' is set then we're enumerating the instances, and
+	; the key passed is the previous one we returned.
+	if key="" {
+	   s nspace="",evid=""
+	   s nspace=$o(^%SYS("Ensemble","InstalledNamespace",nspace))
+	} else {
+	   s nspace=$p(key,"_",2),evid=$p(key,"_",3)
+	}
+	i dbg d log("Ensemble Event Log request Namespace = "_nspace_", EventID = "_evid)
+	i nspace="" q 1
+logns ; go to namespace
+    i dbg d log("Changing to namespace "_nspace)
+	zn nspace
+	s rs=##class(%Library.ResultSet).%New("Ens.Util.Log:Extent")
+	do rs.Execute() s cont=1
+	i dbg d log("Find evid = "_evid)
+	while (cont) {
+	   s cont=rs.Next() q:'cont
+	   i evid="" s evid=rs.Data("ID") q
+	   i 'next,evid=rs.Data("ID") q
+	   i evid=rs.Data("ID") s evid=""
+	}
+	i dbg d log("Finished ID loop, evid="_evid_", cont="_cont)
+	i (evid="")!(cont=0) {
+	   s nspace=$o(^%SYS("Ensemble","InstalledNamespace",nspace))
+	   i nspace]"" g logns
+	}
+	i nspace="" zn "%SYS" q 1
+    s logentry=##class(Ens.Util.Log).%OpenId(evid)
+	;{ L"InstanceID", CIM_STRING }
+	s data=data_$zlc($l(CONFIG_"_"_nspace_"_"_evid))_CONFIG_"_"_nspace_"_"_evid
+    ;{ L"EventID", CIM_UINT32 }
+    s data=data_$zlc(+evid)
+    ;{ L"TimeLogged", CIM_DATETIME }
+    s dt=$p(logentry.TimeLogged,".")
+    i dt="" s data=data_$zlc(25)_"00000000000000.000000+000"
+    e  s dt=$zdatetimeh(dt,3) s d=$zdt(dt,8,5),gmt=($e(d,19,20)*60)+$e(d,22,23),data=data_$zlc(25)_$e(d,1,8)_$e(d,10,11)_$e(d,13,14)_$e(d,16,17)_".000000"_$e(d,18)_$e("000",0,3-$l(gmt))_gmt
+    ;{ L"Type", CIM_STRING }
+    s tc=logentry.Type,ts=$p("Assert,Error,Warning,Info,Trace,Alert",",",tc)
+    if ts="" s ts="Unknown"
+    s data=data_$zlc($l(ts))_ts
+    ;{ L"Job", CIM_STRING }
+    s data=data_$zlc($l(logentry.Job))_logentry.Job
+    ;{ L"Session", CIM_UINT32 }
+    s data=data_$zlc(+logentry.SessionId)
+    ;{ L"Source", CIM_STRING }
+    s data=data_$zlc($l(logentry.ConfigName))_logentry.ConfigName
+    ;{ L"Method", CIM_STRING }
+    s meth=logentry.SourceClass_"."_logentry.SourceMethod
+    s data=data_$zlc($l(meth))_meth
+    ;{ L"Text", CIM_STRING }
+    s data=data_$zlc($l(logentry.Text))_logentry.Text
+	;
+	; see if there's any more Event Log entries
+	s more=1
+	i rs.Next() s more=2
+	k rs,logentry
+	i more=1,$o(^%SYS("Ensemble","InstalledNamespace",nspace))]"" {
+	   s nspace=$o(^%SYS("Ensemble","InstalledNamespace",nspace))
+	   i dbg d log("Checking namespace "_nspace_" for more ...")
+	   zn nspace
+	   s rs=##class(%Library.ResultSet).%New("Ens.Util.Log:Extent")
+	   d rs.Execute() i rs.Next() s more=2
+	   k rs
+	}
+	zn "%SYS"
+	q more
+ }
+ if class = "Ensemble_LogEvent" {
+	; Handle key, e.g. Config1_Namespace_EventID
+	;
+	; This Event is signaled through the Cache_Event class (which always gets
+	; called on the "CacheWMITrap" signal). This has already returned the 
+	; Class name and InstanceId in the previous call, so we should get
+	; a proper key here.
+	; 
+	s nspace=$p(key,"_",2),evid=$p(key,"_",3)
+	i dbg d log("Ensemble LogEvent request Namespace = "_nspace_", EventID = "_evid)
+	i nspace="" q 1
+	; go to namespace
+    i dbg d log("Changing to namespace "_nspace)
+	zn nspace
+    i dbg d log("Fetching class Ens.Util.Log with ID = "_evid)	
+    s logentry=##class(Ens.Util.Log).%OpenId(evid)
+	;{ L"InstanceID", CIM_STRING }
+	s data=data_$zlc($l(CONFIG_"_"_nspace_"_"_evid))_CONFIG_"_"_nspace_"_"_evid
+    ;{ L"EventID", CIM_UINT32 }
+    s data=data_$zlc(+evid)
+    ;{ L"TimeLogged", CIM_DATETIME }
+    s dt=$p(logentry.TimeLogged,".")
+    i dt="" s data=data_$zlc(25)_"00000000000000.000000+000"
+    e  s dt=$zdatetimeh(dt,3) s d=$zdt(dt,8,5),gmt=($e(d,19,20)*60)+$e(d,22,23),data=data_$zlc(25)_$e(d,1,8)_$e(d,10,11)_$e(d,13,14)_$e(d,16,17)_".000000"_$e(d,18)_$e("000",0,3-$l(gmt))_gmt
+    ;{ L"Type", CIM_STRING }
+    s tc=logentry.Type,ts=$p("Assert,Error,Warning,Info,Trace,Alert",",",tc)
+    if ts="" s ts="Unknown"
+    s data=data_$zlc($l(ts))_ts
+    ;{ L"Job", CIM_STRING }
+    s data=data_$zlc($l(logentry.Job))_logentry.Job
+    ;{ L"Session", CIM_UINT32 }
+    s data=data_$zlc(+logentry.SessionId)
+    ;{ L"Source", CIM_STRING }
+    s data=data_$zlc($l(logentry.ConfigName))_logentry.ConfigName
+    ;{ L"Method", CIM_STRING }
+    s meth=logentry.SourceClass_"."_logentry.SourceMethod
+    s data=data_$zlc($l(meth))_meth
+    ;{ L"Text", CIM_STRING }
+    s data=data_$zlc($l(logentry.Text))_logentry.Text
+	;
+	zn "%SYS"
+	q 1
+ }
+ ;
+ quit more
+ ;
+ ;
+ ; The following code was mostly copied from ^SNMP, just to keep it local
+ ; and avoid any confusion with ^SNMP. It follows the standard AgentX protocol
+ ; right now, but could be modified if necessary.
+ ; 
+pduval(msgx,typex,flag) ; Validate a PDU
+ ;
+ ; msgx = received message to be validated
+ ; typex = PDU type expected (if 0 validate for any valid type)
+ ; flag = flag for response to an "administrative" PDU (don't validate TX ID)
+ ;
+ ; return error (0 = no error)
+ ; 
+ i $a(msgx,1)'=1 q "-1;Invalid version number"
+ i typex,$a(msgx,2)'=typex q "-1;Invalid message type"
+ ; RFD151
+ i typex=0,$a(msgx,2)'=254 q "-1;Invalid message type" 
+ i $zla(msgx,17)'=($l(msgx)-20) q "-1;Invalid message length"
+ ; Validations for a Response PDU
+ i typex=18 {
+	 i 'flag,$zla(msgx,9)'=txID q "-1;Invalid transaction ID"
+	 i $zla(msgx,13)'=packetID q "-1;Invalid packet ID"
+ }
+ q 0
+ ;
+header(typex,flagx,msgx) ; Add a header to a message
+ ;
+ ; typex = AgentX PDU type
+ ; flagx = special bitmask flags
+ ;         bit 0               INSTANCE_REGISTRATION
+ ;         bit 1               NEW_INDEX
+ ;         bit 2               ANY_INDEX
+ ;         bit 3               NON_DEFAULT_CONTEXT
+ ;         bit 4               NETWORK_BYTE_ORDER
+ ;         bit 5-7             (reserved)
+ ; msgx = message to be sent (by ref)
+ ; 
+ ;   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ ;   | h.version (1) |  h.type (1)   |    h.flags    |  <reserved>   |
+ ;   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ ;   |                          h.sessionID                          |
+ ;   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ ;   |                        h.transactionID                        |
+ ;   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ ;   |                           h.packetID                          |
+ ;   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ ;   |                        h.payload_length                       |
+ ;   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ ;   
+ ; Get packet ID from incoming message if this is a Response
+ ; (or response to Notify on Windows)
+ if (typex=18) {
+	 s pID=$zla(imsgx,13)
+ } else {
+	 s packetID=packetID+1 s:packetID>$zh("FFFFFFFF") packetID=1
+	 s pID=packetID 
+ }
+ s hd=$c(1)_$c(typex)_$c(flagx)_$c(0)
+ s hd=hd_$zlc(sessionID)_$zlc(txID)_$zlc(pID)_$zlc($l(msgx))
+ s msgx=hd_msgx
+ q
+ ;
+response(errx,more,varbind) ; send a Response
+ ;
+ ; errx = an AgentX error code
+ ; index = the 'more' flag (this is normally an index to an error in AgentX)
+ ; varbind = a VarBind list to be attached and sent
+ ; 
+ ;   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ ;   |                        res.sysUpTime                          |
+ ;   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ ;   |             res.error         |     res.index                 |
+ ;   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ ;
+ s omsgx=$zlc(0)_$zwc($g(errx,0))_$zwc($g(more,0))_$g(varbind)
+ d header(18,0,.omsgx)
+ d write(omsgx)
+ i dbg d dump("Response PDU sent",omsgx)
+ q 
+ ; 
+ ; Utility sub-routines
+ ; 
+pidcnt() ; get pid count
+ n maxpid,pid,pidcnt s maxpid=$v($zu(40,2,118),-2,4)
+ s pidcnt=0
+ f j=1:1:maxpid s pid=$View($View($ZU(40,2,47)+((j\$zu(40,0,102))*$zu(40,0,25)),-2,$zu(40,0,25))+((j#$zu(40,0,102))*$s($ZBITGET($ZVERSION(0),40):$zu(40,28,79)*2,1:4)),-2,4) d
+ . i pid s pidcnt=pidcnt+1
+ q pidcnt
+ ;
+read() ; Read data, return one PDU message, buffer anything else
+ n err,pdu,bl s data="",i=1
+ i dbg>2 u log w !,"Reading "
+ f i=1:1:timeout {
+	 u socket:(::"-S") r in:1
+	 i in="",dbg>2 u log w "."
+ 	 i in]"",dbg>2 d dump("Data packet read",in)
+	 s buff=buff_in,bl=$l(buff),pdu=0
+	 i bl>17 s pdu=$zla(buff,17)+20 ; get length of PDU
+	 ; Return 'data' if we have a complete PDU
+	 i bl,bl'<pdu s data=$e(buff,1,pdu),buff=$e(buff,pdu+1,bl) q
+     i bl,dbg>2 d dump("Buff - PDU not complete",buff)
+	 ; Check to see if we have a bogus PDU and clear the buffer
+	 i bl,($a(buff,1)'=1)!($zla(buff,5)'=sessionID) {
+			 i dbg>2 d log("Invalid PDU in buffer, clearing buffer ...")
+			 s buff="",bl=0 r in:1
+	 }
+     ; Otherwise, keep reading until timeout
+ }
+ q data
+ ;
+write(data) ; Write data to port
+ u socket:(::"+S") w data w *-3
+ q
+log(msg) ; log an error message
+ u log w !,$$dt()," - ",msg
+ q
+dt() ; return date/time stamp for logging
+ d INT^%T s DT=$ZD($H)_" "_%TIM
+ q DT
+ ;
+dump(msg,data) ; dump message to log
+ ;
+ ; msg = text message header for log entry
+ ; data = data of received PDU
+ ; 
+ u log w !,msg," :",! zzdump data w !
+ q
+ ; 
+joberr ; Error trap for JOBbed process, log and exit
+ s $zt="termerr^WMI"
+ zn "%SYS" ; for Ensemble we might be in another namespace
+ d $zu(9,"","Unexpected error in WMI server - "_$ze,(1>0),1)   
+ ;
+terminate ; Here to terminate job, disable stats and exit
+ s $ZE="",$ZT="termerr^WMI"
+ s n=$zu(190,1,0,2) ; stop trap queue for WMI
+ i dbg d log("WMI service stopping.")
+termerr ;
+ s $zt=""
+ d $zu(9,"","WMI server terminated: "_$ZE_" - "_$$dt(),(0>0),0)
+ c log
+ q
+ ;
+ ;

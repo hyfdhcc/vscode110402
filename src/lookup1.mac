@@ -1,0 +1,58 @@
+ROUTINE lookup1
+lookup1 ; display an ordered list of matches
+ ; user can enter a valid date of birth
+ 
+main ; main section
+ ; start looping
+ for  {
+     do getsubmit()  ; let user submit a string for lookup
+     quit:(submit = "")
+    }
+ quit
+ 
+getsubmit() [submit] ; ask user what to search for, and take appropriate action    
+ {
+ read !, "Lookup: ", submit
+ quit:(submit = "")  ; user entered nothing
+ ; figure out what user entered
+ if (submit = "?") {  ; display help
+     do help()
+     quit
+    }
+ if $$validDOB^datent( submit ) {  ; use validDOB^datent to verify the DOB
+     write "...finding birthday"
+     do dob()
+     quit
+    }
+ }
+ 
+help()  ; display different types of lookups
+ { write !, "You can enter:", !?10, "* date of birth", !! }
+ 
+dob() [submit]  ; perform dob lookup
+ ; no partial matches
+ {
+ set intdob = $$validDOB^datent( submit )  ; convert dob
+ ; is the date of birth in the index?
+ if '$data( ^PersonI("DOB", intdob) ) {  ; determine if there are any matches
+     write "...no matches"
+     quit
+    }
+ set loopid = ""
+ ; loop through ids, and number them
+ for count = 1 : 1 {
+     set loopid = $order( ^PersonI("DOB", intdob, loopid) )
+     quit:(loopid = "")
+     write !, count, ") "
+     do display( loopid )
+    }
+ }
+ 
+display(id) ; given an id, get data and write it
+ {
+ set rec = ^PersonD( id )
+ set name = $piece(rec, "^", 1)
+ set phone = $piece(rec, "^", 2)
+ set intdob = $piece(rec, "^", 3)
+ write name, ?20, phone, ?35, $zdate(intdob, 2)
+ }

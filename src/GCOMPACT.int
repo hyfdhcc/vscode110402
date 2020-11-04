@@ -1,0 +1,242 @@
+ROUTINE GCOMPACT [Type=INT]
+GCOMPACT ; Global Compaction Utility ; LRS1079 10/12/06
+ ; GLOBAL COMPACTION UTILITY
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ new FORCE
+ s FORCE=0
+TOP ; 
+ w !,"*** Global Database Compaction and Relocation Utility ***",!!
+ Write !,"This utility is deprecated in favor of ^DATABASE"
+ Do COMPACT^DATABASE() q  
+ n %ST,%TIM,%DAT,DEND,DIRINFO,DIRNAM,GD,NUMMAP,POP,RD
+ New ABORT,counted,msg
+ N %BatchMode
+ New %A,%ANS,%G,%JO,IO,IOBS,IOF,IOM,IOPAR,IOSL,IOST,IOT,MSYS,NSPNAM,RMSDF,g,glo,totfrom,totto,x,mtemp1
+ d ASK^%SYS.FILE q:DIRNAM=""  w !
+ s DIRNAM=$ZU(12,DIRNAM)
+ n otherglo s otherglo=0
+ n blocks,fullness,gref,otherblks,otherfull
+ ;After calling CheckGCOMPACTLimit (and it returns 1) you must exit
+ ;through END so we decrement the in use count
+ S %BatchMode=$ZU(68,25)  ; save batch process mode
+ s counted=0
+ s $ZT="errhand"
+ s x=$$CheckGCOMPACTLimit(FORCE,DIRNAM,.msg) 
+ i '+x {
+	 if ('FORCE) {
+		 w !,msg 
+		 w !,"You can force GCOMPACT to run by calling FORCE^GCOMPACT but this"
+		 w !,"   is not recommended"
+		 g END
+	 } else {
+	    do $ZU(9,"","GCOMPACT forced to run with insufficient buffers")
+	    w !,"WARNING: You are forcing GCOMPACT to run when it thinks there are"
+	    w !,"         insufficient buffers. This may trigger a write daemon panic."
+	    w !!
+	 }
+ }
+ s counted=1  ;so we decrement the count of jobs at END
+ w "Specify the names of all the globals for which recompaction of",!
+ w "the entire global should occur: ",!
+ I $ZU(5,"^^"_DIRNAM)
+ D INT^%GSET  g askmore:'%G
+    ; Specify how full the data blocks should be
+ f  d  q:fullness
+ .  r !,"How full do you want the database blocks for those globals? 90% => ",fullness,!
+ .  i fullness="" s fullness=90 q
+ .  s fullness=+fullness
+ .  i fullness<50!(fullness>100)!(fullness\1'=fullness) w " [Must choose an integer between 50 and 100]",! s fullness=0
+ n NSPNAM s NSPNAM="^^"_DIRNAM
+ I %G=+^||CacheTempUtil("GLO",0) G device
+    ; see if there's any globals for special requirements
+askmore w !,"Now specify entries that require either a starting place other",!
+ w "than the beginning of the global (in which case specify a global",!
+ w "reference for a starting point) and/or for which you don't want to",!
+ w "compact to the end of the global (in which case specify the",!
+ w "number of data blocks to compact for that global) or for which",!
+ w "you wish to specify a different fullness %.",!!
+ w "Starting global reference",?30,"# blocks to compact",?52,"% fullness"
+ f otherglo=1:1 d gref q:gref=""  d
+ .  s otherglo(otherglo)=gref
+ .  w ?30,"all=> " r x i x="" s otherblks(otherglo)=0
+ .  e  s otherblks(otherglo)=+x i x<1!(x\1'=x)!(x>10000000) w !,"[Enter null for all blocks or enter an integer between 1 and 10000000]" s otherglo=otherglo-1 q
+ .  w ?52,"90=> " r x i x="" s otherfull(otherglo)=90
+ .  e  s otherfull(otherglo)=+x i x<50!(x\1'=x)!(x>100) w !,"[Enter null for 95% or enter an integer between 50 and 100]" s otherglo=otherglo-1
+ .  q
+ s otherglo=otherglo-1
+ i 'otherglo,'%G w !,"No globals selected - Done" G END
+device ;
+ N IOMS s IOMS=$System.Device.GetRightMargin()
+ D OUT^%IS G:POP END  ; ask for output device
+ U IO D INT^%D,INT^%T W !,%DAT_" "_%TIM,!
+ w ?24,"Compressed",?42,"To",!
+ w "Global",?25,"Data Blks",?35,"Data Blks",?45,"End Time",?55,"Last Node",!
+ s totfrom=0,totto=0
+ do $ZU(68,25,1)  ;set batch process mode
+ l +^|"^^"_DIRNAM|GCOMPACT:10
+ i '$t w !,"Compaction already being run on database" g END
+ set ABORT=0
+    ; process complete globals
+ s gref="" f  s gref=$o(^CacheTempJ(%JO,gref)) q:gref=""  s blocks=0 d compact Q:ABORT
+    ; process special entries
+ if 'ABORT f glo=1:1:otherglo do  quit:ABORT
+ . s gref=otherglo(glo),blocks=otherblks(glo),fullness=otherfull(glo) 
+ . d compact
+ if ('ABORT) {
+ 	w ?25,"_________",?35,"_________",!
+ 	w ?25,$j(totfrom,9),?35,$j(totto,9)
+ 	i totfrom w " ",$j(totto*100/totfrom,5,1),"%"
+ }
+END ;STC450
+ i counted do DecrementUserCount(DIRNAM) s counted=0
+ w ! 
+ I $D(IO),(IO=$P),$D(IOMS) U IO:/MAR=IOMS 
+ i $D(IO),(IO'=$I) c:$L(IO) IO
+ l -^|"^^"_DIRNAM|GCOMPACT
+ I $ZU(5,"%SYS")
+ S %BatchMode=$ZU(68,25,%BatchMode) ; restore original batch process mode
+ q
+errhand ;
+	s $ZT=""
+	w !,$ZE
+	g END
+FORCE ;
+	new resp
+	; Start here if you want to force GCOMPACT to run regardless
+	; of whether it thinks there are sufficient global buffers to
+	; run without triggering a write daemon panic. A write daemon
+	; panic means that the rules of image journaling will be
+	; violated in order to prevent the system from hanging. A crash
+	; during a panic can result in database degradation.
+	w !,"Are you sure you want to force GCOMPACT to run even"
+	w !,"if this may exhaust the buffer pool and trigger a"
+	w !,"write daemon panic condition? "
+	r !,"Continue with GCOMPACT? <No> ",resp
+	if "Yy"[$E(resp_"X") s FORCE=1 G TOP
+	q
+    ; compress and relocate this global
+compact s $zt="comperr"
+ w gref
+ n NSPNAM s NSPNAM="^^"_DIRNAM
+ s g="^["""_NSPNAM_"""]"_gref
+ i '$d(@g) w ?25,"no data in global",! q  ;jfp034;get starting block
+ s x=$zu(98,fullness,blocks)
+ ;the return from $ZU(98) is status:<info> where status is 0 or 1
+ if +x {
+	 set x=$P(x,":",2)
+ } else {
+	 s x=+$P(x,":",2)
+	 goto fatalerr
+ }
+ s totfrom=totfrom+x,totto=totto+$p(x,",",2)
+ w ?25,$j(+x,9),?35,$j($p(x,",",2),9) D INT^%T w ?45,%TIM,?55
+ i $p(x,",",3)="" w "finished global",!
+ e  w $p(x,",",3,1000),!
+ q
+comperr w !,"Error processing this entry - skipping it",! q
+fatalerr ;
+ ;come here when $ZU(98) returns 0:<code> with x=<code>
+ ;These are fatal errors, print an error message and exit
+ new msg
+ do GetZU98ErrMsg(x,.msg)
+ w !,msg
+ set ABORT=1
+ quit
+GetZU98ErrMsg(x,msg)
+ if (x=1) {
+	 s msg="GCOMPACT detected that there were insufficient free global"
+	 s msg=msg_$C(13,10)_" buffers to start compacting a bottom pointer block."
+	 s msg=msg_$C(13,10)_" Try again when the system is not so busy or increase the"
+	 s msg=msg_$C(13,10)_" size of the global buffer pool."
+ } elseif (x=2) {
+	 s msg="GCOMPACT detected that a write daemon panic occurred while it"
+	 s msg=msg_$C(13,10)_" was running. Try again when the system is not so busy."
+ } else {
+	 s msg="Unknown error code ("_x_") returned from $ZU(98)."
+	 s msg=msg_$C(13,10)_"GCOMPACT aborted."
+ }
+ q
+ ;
+ ; specify a starting global reference
+gref r !,gref i $e(gref)="^" s gref=$e(gref,2,*)
+ q:gref=""
+ i $e(gref)="[" w !,"[Do not include a directory specification]" g gref
+ n NSPNAM s NSPNAM="^^"_DIRNAM
+ i '$d(^||CacheTempUtil("GLO",$p(gref,"("))) w !,"[Must be a global in directory ",DIRNAM," ]" g gref
+ i gref["(",gref'?.E1")" s gref=gref_")"
+ s $zt="greferr" s g="^|"""_NSPNAM_"""|"_gref i $d(@g)
+ q
+greferr s $zt="" w !,"[Syntax error on global reference]" g gref
+CheckGCOMPACTLimit(force,DIRNAM,errmsg) ;
+	n NGLO,blksize,cnt,val,maxblks,bufpercopy,dbsize,realcnt,passtwo
+	s passtwo=0
+	s dbsize=$P($ZU(49,DIRNAM),",",2)
+	s maxblks=dbsize/8  ;max # of pointers in a bottom pointer block
+	s bufpercopy=maxblks*2  ;require a buffer pool at least 100% larger than this
+	s val=$Case(dbsize,2048:0,4096:1,8192:2,16384:3,32768:4,:5)
+	f  d  q:(NGLO)!(val=5)  s val=val+1
+ 	. s NGLO=$v($ZU(40,2,135)+(val*$ZU(40,0,1)),-2,$ZU(40,0,1))
+	i ('NGLO) s cnt=0,blksize=dbsize g CGLerr  ;Shouldn't happen
+	;Set blksize based on the size of the buffer we're going to use
+	s blksize=$CASE(val,0:2048,1:4096,2:8192,3:16384,4:32768,:65536)
+again ;
+	s cnt=$I(^|"%SYS"|%SYS("GCOMPACT","USERCNT",val))
+	;Take out the lock and return 1 if we can run.
+	;The lock is just so we can reset the count of the # of users
+	;if we think its out of sync.
+	i ((cnt*bufpercopy)'>NGLO) L +%GCOMPACT(val,$J) quit 1  ;success
+	;
+	;Too many users...
+	;
+	if 'force {
+	   s cnt=$I(^|"%SYS"|%SYS("GCOMPACT","USERCNT",val),-1)
+	   if cnt,'passtwo s realcnt=$$ResetGCOMPACTUserCount(val) if realcnt'=cnt s passtwo=1 goto again
+	}
+	s bufpercopy=(bufpercopy*blksize)/(1024*1024) ;convert to MB
+CGLerr ;
+	i 'cnt {
+		set errmsg="You do not have sufficient buffers configured to run GCOMPACT"
+		set errmsg=errmsg_$C(13,10)_"in this database. A minimum of "_bufpercopy_"MB is required."
+	} else {
+		set errmsg=cnt_$S(+cnt=1:" copy of GCOMPACT is",1:" copies of GCOMPACT are")_" already running."
+ 		set errmsg=errmsg_$C(13,10)_"The buffer pool is not large enough to support any more."
+ 	   set errmsg=errmsg_$C(13,10)_"Each copy requires approximatly "_bufpercopy_"MB to avoid exhausting the "
+ 		set errmsg=errmsg_$C(13,10)_"buffer pool which would trigger a write daemon panic."
+	}	
+	quit 0
+DecrementUserCount(DIRNAM) ;
+ ;Call this to release the lock and decrement the count of the
+ n NGLO,blksize,val
+ s dbsize=$P($ZU(49,DIRNAM),",",2)
+ s val=$Case(dbsize,2048:0,4096:1,8192:2,16384:3,32768:4,:5)
+ f  d  q:(NGLO)!(val=5)  s val=val+1
+ . s NGLO=$v($ZU(40,2,135)+(val*$ZU(40,0,1)),-2,$ZU(40,0,1))
+ i ('NGLO) quit   ;Shouldn't happen
+ ;# of jobs running GCOMPACT.
+ set x=$I(^|"%SYS"|%SYS("GCOMPACT","USERCNT",val),-1)
+ l -%GCOMPACT(val,$J)
+ q
+ResetGCOMPACTUserCount(val) ;
+	;This shouldn't be needed but if the user count gets out of sync
+	;this counts the # of locks on %GCOMPACT(...) to reset it. This is called
+	;any time we think there are too many users, just to make sure.
+	new name,cnt
+	s name="%GCOMPACT("_val_")"
+	for cnt=0:1 s name=$O(^$LOCK(name)) quit:(name="")!($QS(name,0)'="%GCOMPACT")!($QS(name,1)'=val)
+	set ^|"%SYS"|%SYS("GCOMPACT","USERCNT",val)=cnt
+	quit cnt

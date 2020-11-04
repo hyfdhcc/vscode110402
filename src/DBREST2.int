@@ -1,0 +1,1804 @@
+ROUTINE DBREST2 [Type=INT]
+DBREST2 ;Incremental Backup Restore (continued) ;$Change: 4521965 $
+ ; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/user/dbrest2.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syMirror.inc#1 $ ($Change: 4521965 $) */
+        /* Initializing is the state a member has at startup until it
+           gets to wait^MIRRORMGR for the 1st time. At that point it has 
+           either become the backup or primary or we set the role to null
+           to indicate that it is up and running as opposed to still getting
+           started */
+				    /* Arbiter failover rules are in effect */
+				    /* Agent contact is required */
+					/* IsOtherNodeDown^ZMIRROR */
+				/* The client supports the arbiter */
+			 	/* This system is connected to the arbiter */
+		  		/* The other failover member is connected to the arbiter */
+		  		/* Either the QOSTimeout changed or the arbiter address changed.
+		  		   we should look up the current values and use them */
+				/* Arbiter job shoud close the connection and exit. The
+				   retry routine can restart the arbiter if conditions
+				   warrent. Generally used with clearing ArbiterSupported
+				   when the backup is removed or demoted. Cleared when
+				   the arbiter exits (eg. its a one time flag). */
+  ;#if $$$NEWINC   ; CFL284+       
+  ; start the restore
+BEGIN ;
+ n %DIR,%SYSDIR,ALREADY,ANS,BACKSET,DELIM,DEV,DIR,INCDEV,OK,OURDIR
+ n PREVDATE,PREVFDATE,PREVFTIME,PREVH,PREVTIME,PREVTYPE,VOLNUM,sfn
+ n dlmlock
+ n TOTAL
+ n vernum
+ n MIRRORINFO,MirrorBackup,MirrorRestore,MirrorDBList
+ n SelectOnlyMirrorDBs ; for selective restore indicates whether we only ask about mirrored db's
+ s MirrorRestore=0,MirrorBackup=0
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") s RC=-7 g begin2
+ n oldmode s oldmode=$ZU(69,12)
+ D INT^%DIR S OURDIR=%DIR,DELIM=$c(0)
+ s OK=$$getLock^DBACK(.dlmlock)
+ if '+OK do  s RC=-3 g begin2
+ . W *7,!,"[A backup or restore is already in progress"
+ . W !,"This restore is aborted.]",!!
+ V $ZU(40,2,82):-2:4:$ZU(61,30,$ZU(61))  ; Load our jobid into incbkjobid
+ ; DO NOT CALL ^%ST. Define any %ST nodes required here.
+ ; Calling ^%ST can result in <PROTECT> errors when restoring the
+ ; manager's directory.
+ S %ST=$Case($zversion(1),1:"M/AV",2:"M/WNT",3:"M/UX",:"UNKNOWN")
+ S %ST("PLEN")=$ZU(40,0,4)
+ s %ST("GIND")=$V($ZU(40,2,11)+($ZU(40,0,4)*4),-2,"S")
+ V $ZU(40,2,78):-2:"C":0
+ V $ZU(40,2,79):-2:"C":0
+ I $$ZU(52,0)
+ V $ZU(40,2,99):-2:4:0   ; set the buffer count to 0
+ N BUFCOUNT S BUFCOUNT=0
+ B 0 S DEV=$G(INPDEV) 
+ I '$G(QUIETMODE) {
+    S DEV=$G(^SYS("BACKUP","LASTFULL","DEVICE"))
+    S INCDEV=$$GETINC("FIRST","") ;get first incremental backup file
+    if DEV="" s DEV=INCDEV,INCDEV=""
+ }
+ k ze
+ N DIRNAM,NOREST,dejrn,global
+ N CLSTATE,CLUBACKUP
+ n RCSUCCESS,RCINERR,RCOUTERR,RCMOUNT,RCBADMAP,RCMAPINERR,RCEOT,RCOFFLINE
+ n RCDEVFUL,RCOLDFORMAT,RCBADVOLUME,RCENDOFVOL,RCENDOFVOLSET,RCDIRLABELRECORD
+ n RCDIRLABELMISSING,RCINERRLABELGOOD,RCBADRECORDONCOPY,RCBADRECORDONRESTORE
+ n RCMISSINGBLKS,RCBLKSIZE,RCOUTCLUMNT,RCMAPERR,A,a,OBDIRLAB,startday,starttime
+ d initconstants s a=$h,startday=+a,starttime=+$p(a,",",2)
+ ; delete bad blocks recorded by any former restores more than 30 days old
+ f  s a=$o(^CacheRestoreBad("")) q:'a!(a>($h-30))  k ^(a)
+ S CLUBACKUP=0
+ S BACKSET=1,PREVDATE="",PREVTIME="",PREVTYPE=""
+ S PREVFDATE="",PREVFTIME="",PREVH=""
+ I +$G(QUIETMODE) {  ;switch 10 based on passed parameter
+    I ALLOWUPD=0 S ALREADY=$$CHECK10() I 'ALREADY D SET10
+ }
+ I '$G(QUIETMODE) DO
+ . S ALREADY=$$CHECK10() Q:ALREADY
+ . D Show("ALREADY") S X=$$YESNO(1) I X D SET10
+ . I 'X D Show("MAYBE")
+ S $ZT="ERR^"_$ZN
+ New batch Set batch=$$GETBATCH^%PRIO() Do SET^%PRIO("BATCH")
+begin1 I '$G(QUIETMODE) DO  I $$YESNO(1) G begin1
+ . F BACKSET=BACKSET:1 S X=$ZU(69,12,0) D NEXTBACK S X=$ZU(69,12,oldmode) Q:'OK  ; restore the next backup
+ . D Show("anymore"_(BACKSET>1))
+ I +$G(QUIETMODE) S X=$ZU(69,12,0) D NEXTBACK S X=$ZU(69,12,oldmode) S:OK RC=1 ;just the first one when quiet
+ ;
+ S DIR="" F  S DIR=$O(DIRNAM(DIR)) Q:DIR=""  D
+ . s dir=$P(DIRNAM(DIR),"^",1),char=$P(DIRNAM(DIR),"^",2)
+ . s:dir="" dir=DIR
+ . s n=$$ZU(52,8,dir,1)  ;JO2329
+ . i char'="" d
+ . . s n=$$ZU(52,7,dir,+char)
+ . . i n'=1 d
+ . . . d Show("zu52err",n,DIR,char,$p($ZU(49,dir),",",4))
+ . . . d Show("zu52e"_(-n))
+ . s RC=$$INLOGOR(dir,3,3,1)
+ . s n=$$ZU(52,5,dir,0)
+ . i n=-1 d Show("GFINCRES",DIR) k dejrn(DIR)
+ Do:$d(batch) SET^%PRIO(batch)
+ G finish^DBREST
+begin2 S X=$ZU(69,12,oldmode) Do:$d(batch) SET^%PRIO(batch) G begin2^DBREST
+ERR I $G(QUIETMODE) S $ZT="" G begin2
+ S $ZT="",ze=$ZE
+ D Show("errabort",ze) G begin2
+NEXTBACK ; If appropriate, reset default device to incremental default
+ N ALREADY,dir,yes S ALREADY=$$CHECK10()
+ I BACKSET=2,PREVTYPE="Full" S DEV=INCDEV ;INCDEV might be null
+ I BACKSET>1,INCDEV'="",PREVTYPE'="Full" S DEV=$$GETINC("NEXT",PREVH)
+ V $ZU(40,2,99):-2:4:0
+ S VOLNUM=1,sfn=-1 D VOLLABEL I 'OK Q
+ ; Process directory names if necessary
+nxtback1 K NEWDIR,NODIR S added=0,DIRLOC=VOLLOC ; input variables for DIRNAM()
+ For {
+	 S DIR=$$nextvol() 
+	 if DIR="" {
+		; End of volume label info, see if there's a continuation block
+		s flag=$V(VOLLOC,-3,1)
+		if flag=0 quit  ; we're done
+		; there is a continuation label block, read it and get more databases
+		s RC=$$ZU(52,10)
+		i +RC'=1 {
+ 		   W *7,!,"[Failed to read continuation volume label from "_DEV_"]"
+ 		   w !,"Do you want to continue anyway?"
+		   s yes=$$YESNO(0) w !
+ 		   i 'yes {
+	 		  s OK=0 
+	 		  s flag=$$ZU(52,3,"")
+ 		   }
+ 		   quit
+ 		}
+ 		S VOLLOC=$P(RC,",",4)+$P(RC,",",2)
+		S DIR=$$nextvol() 
+		if DIR="" quit  ; this is the end of the list, then we're done
+	 }
+	 S ZU49=$$nextvol() 
+	 Q:ZU49=""  
+	 D DIRNAM(DIR,ZU49)
+ }
+ q:OK=0
+ ; Go through the databases to be restore and see if we can privatly
+ ; mount them. If they don't exist that's ok but if we can't privatly
+ ; mount them they are mounted by someone else in the cluster and
+ ; can't be restored to.
+ S DIR="",flag=0 k BADDIR
+ if BACKSET=1,'$D(NEWDIR) {
+	 w:'$G(QUIETMODE) !,"No databases selected for restore."
+	 s OK=0
+	 s flag=$$ZU(52,3,"") 
+	 Q
+ }
+ n rc
+ f  {
+	S DIR=$O(NEWDIR(DIR)) 
+	Q:DIR=""  
+	s rc=$$TSTDIR(DIR)
+	if rc {
+		i 'flag {
+ 			w !,"The following directories appear to be dismounted, read-only or"
+ 			w !,"mounted elsewhere and can't be restored"
+ 			s flag=1
+		}
+ 		w !,?5,$S(NEWDIR(DIR)="":DIR,1:NEWDIR(DIR)) ;cf. mntdir in TSTDIR
+ 		w "    *"_$Case(rc,1:"Dismounted",2:"ReadOnly",3:"Cluster Mounted by other")
+	}
+ }
+ i flag {
+ 	w !,"Do you wish to continue, skipping these databases?"
+ 	s yes=$$YESNO(0) w !
+ 	i 'yes s OK=0 s flag=$$ZU(52,3,"") q
+ }
+ ; TSTDIR left list of databases we can't restore in BADDIR
+ s DIR="" 
+ f  {
+	 S DIR=$O(BADDIR(DIR)) 
+	 q:DIR=""
+ 	 k NEWDIR(DIR) 
+ 	 s NODIR(DIR)=""
+ }
+ ;
+ I added,RESTYPE="SELECT" {
+ 	D Show("chnglist") 
+ 	S yes=$$YESNO(0) W !
+ 	I yes {
+	 	S VOLLOC=DIRLOC 
+	 	G nxtback1
+ 	}
+ }
+ I BACKSET=1,'$G(QUIETMODE) {
+ 	D Show("confirmRestore") 
+ 	S yes=$$YESNO(0) W !
+	I 'yes {
+		s OK=0
+		s flag=$$ZU(52,3,"") 
+		Q
+	}
+ }
+ S DIR=$O(NODIR(""))
+ while (DIR '= "") {
+ 	s NOREST(DIR)=""
+ 	k NODIR(DIR)
+ 	s DIR=$O(NODIR(""))
+ }
+ s DIR=$O(NEWDIR(""))
+ while (DIR '="" ) {
+	 s DIRNAM(DIR)=NEWDIR(DIR)
+ 	 K NEWDIR(DIR)
+ 	 S dir=$P(DIRNAM(DIR),"^",1)
+ 	 s:dir="" dir=DIR  ; if restoring to same place, dir would be null
+ 	 I dir=DIR {
+	 	 S dejrn(DIR)=1
+ 	 } else {
+ 		 s dejrn(DIR)="1,"_dir
+ 	 }
+	 ; If the target is mirrored then we need to remove it from the
+	 ; mirror now so it can be restored. After the restore it will be
+	 ; added back.
+	 s mirdbname=$G(MirrorDBList("path",dir))
+	 if mirdbname'="" {
+		 if 'MirrorDBList(mirdbname,"inactive") {
+		    s rc=$$PauseMirroredDB($G(QUIETMODE),mirdbname,dir)	
+		    if 'rc {
+	 	       s NOREST(DIR)="" 
+	 	       k DIRNAM(DIR)
+	 	       k dejrn(DIR) 
+	 	       goto nextdir
+		    }
+	 	 }
+		 s rc=$SYSTEM.Mirror.DBRemove(dir)
+		 if '+rc {
+		    s err=$P(rc,",",2)
+		    if '$G(QUIETMODE) {
+		       w !,"Failed to remove restore target ",dir
+		       w !,"from the mirror, it will not be restored"
+		    } else {
+			   d $zu(9,"","DBREST failed to remove "_dir_" from the mirror - Skipped",1 /* broadcast and log message*/,1  /* Warning */)
+		    }
+	 	    s NOREST(DIR)="" 
+	 	    k DIRNAM(DIR)
+	 	    k dejrn(DIR) 
+	 	    goto nextdir
+		 }
+	 }
+ 	 ; Now set the GFINCREST flag to prevent others from using this dir
+ 	 i +$ZU(49,dir)>-2 {
+	 	 s rc=+$$ZU(52,5,dir,1)
+	 	 if rc<0 {  ;-1 or -2
+	 	     s NOREST(DIR)="" 
+	 	     k DIRNAM(DIR)
+	  	     k dejrn(DIR) 
+	  	     if (rc = -1) {
+	   	        d Show("errmrk",dir,DIR) ;error marking db as target as restore
+	  	     } else {
+	   	        d Show("errmrk2",dir,DIR) ;mirrored db cannot be target of restore
+	  	     }
+	 	 }
+ 	 }
+  	 D MOUNTQ(dir)
+nextdir ;
+	 s DIR=$O(NEWDIR(""))
+ } 
+ if BACKSET=1,'$D(DIRNAM) {
+	 w:'$G(QUIETMODE) !,"No databases remaining to be restored."
+	 s OK=0
+	 s flag=$$ZU(52,3,"") 
+	 Q
+ }
+ For  DO  Q:'OK!EOS
+ . s StartVolume=1,StartTime=$h D VOLUME s StartVolume=0 S RC=$$ZU(52,3,"") Q:'OK!EOS
+ . S VOLNUM=VOLNUM+1 D VOLLABEL
+ Q:'OK
+ S DIR="" For  S DIR=$O(DIRNAM(DIR)) Q:DIR=""  Do
+ . S DIRNAM=$P(DIRNAM(DIR),"^",1) S:DIRNAM="" DIRNAM=DIR
+ . Q:$D(NOREST(DIRNAM))  D DISMOUNT(DIRNAM),MOUNTQ(DIRNAM)
+ S PREVDATE=BACKDATE,PREVTIME=BACKTIME,PREVTYPE=BACKTYPE,PREVH=BACKH
+ i $g(logfile)'="" c logfile s logfile=""
+ Q
+nextvol() N a,b ; see if can find string in current line
+ S a=$F($V(VOLLOC,-3,-256),DELIM) I 'a Q ""
+ I $L(DELIM)+1=a s VOLLOC=VOLLOC+$l(DELIM) q ""
+ S b=$v(VOLLOC,-3,-(a-$l(DELIM)-1)),VOLLOC=VOLLOC+a-1
+ I '$D(XLT) S XLT=$$GETXLT(DEV)
+ Q $ZCVT(b,"I",XLT)
+GETINC(btype,prevdt) N dev,date,type I btype="FIRST" S prevdt=""
+ i +$ZU(49,$ZU(12))<0 q ""  ; if directory is dismounted, just quit
+ d ConvHistDate^DBACK s date=$S($G(prevdt):(+prevdt*1000000+$p(prevdt,",",2)),1:"")
+ S dev="",date=$O(^SYS("BACKUP","HISTORY",date)) I date]"" DO
+ . S dev=$G(^(date,"DEVICE")),type=$G(^("TYPE")) Q:type["Cumulative"
+ . N OK S OK=0
+ . F  S date=$O(^SYS("BACKUP","HISTORY",date)) Q:date=""  DO  Q:OK
+ . . I $G(^(date,"TYPE"))["Cumulative" S dev=$G(^("DEVICE")),OK=1
+ ;
+ Q dev
+DISMOUNT(dir) ;Dismount a directory
+ N a
+ s a=$ZU(3,dir)  ; dismount the directory
+ Q
+TSTDIR(DIR) ;
+ n zu49,mntdir,zu17,CLUSFLAG,zu49str,rc
+ s mntdir=$S(NEWDIR(DIR)="":DIR,1:NEWDIR(DIR))
+ s zu49str=$ZU(49,mntdir)
+ s zu49=+zu49str
+ q:zu49<-1 0
+ if zu49=-1!(zu49=$zu(40,0,41)) {
+	 d MOUNTQ(mntdir) 
+	 s $p(NEWDIR(DIR),"^",3)=zu49 ;-1 or $$$SFNUNDEF
+	 s zu49str=$ZU(49,mntdir)
+ 	 s zu49=+zu49str
+ }
+ if $zb(+$p(zu49str,",",17),$zu(40,8,13),1) {
+	 s rc=2
+	 G SetBad
+ }
+ if ($zb(+$p(zu49str,",",18),$zu(40,8,2),1)) {
+	 ;If its read only because its mirrored, then its fine to restore 
+	 ; to it (as long as its not marked mirrornowrite)
+	 if $zb(+$p(zu49str,",",17),$zu(40,8,28),1) && '$zb(+$p(zu49str,",",18),$zu(40,8,30),1) {
+		 quit 0
+	 }
+	 s rc=2
+	 G SetBad
+ }
+ q:'$S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0) 0
+ ; if database is mounted privately, return success otherwise,
+ ;    if database is mounted clustered, dismount it
+ n dismounted s dismounted=0
+ i zu49>-1,zu49'=$zu(40,0,41) q:+$P($ZU(49,mntdir,1),",",2)=0 0 s dismounted=1,$p(NEWDIR(DIR),"^",3)=2 i $ZU(3,mntdir)
+ ; database is not mounted or dismounted. Try to mount it privately
+ s Status=##Class(SYS.Database).MountDatabase(mntdir,0,0)
+ i (''Status) q 0
+ i dismounted i $ZU(17,mntdir,1)
+ s rc=3
+SetBad
+ ; Database can't be mounted privately, don't restore it and 
+ ; signal failure
+ S BADDIR(DIR)=""
+ if $p(NEWDIR(DIR),"^",3)=-1 d DISMOUNT(mntdir)
+ q rc
+QUIET() ;wait for the system to quiet down -- set switch 10 if needed
+ N already,%SW,%VAL,rc
+ S already=$$CHECK10() I 'already S %SW=10,%VAL=1 D SWSET
+ s rc=$$TQUISYS^SWSET(1)
+ I 'already S %SW=10,%VAL=0 D SWSET ;reset switch 10 when done
+ q rc
+DIRNAM(dir,zu49) ;
+ n clflag
+ n mirdata,mirdbname,info,mirname,mirindex,rc
+ n curjrnfilecnt,curjrnoff,backupjrnfilecnt,backupjrnfileoff
+ n indent,path
+ s mirdata=$P(dir,"^",3)  ;stored by getMirDBInfo^DBACKB
+ if mirdata="" {
+	 s mirdbname=""
+ } else {
+	 s mirdbname=":mirror:"_$P(mirdata,":",6)_":"_$P(mirdata,":",1)
+ }
+ s clflag=$P(dir,"^",2),dir=$P(dir,"^",1)  ; get cluflag
+ i clflag="" s clflag="P"  ;from a prior/non-cluster version
+ i $D(NOREST(dir)) q  ; quit if dir not to be restored
+ i $D(DIRNAM(dir)) { ; not a new name, but make sure its sfn didn't change
+   i $g(gdir(+zu49))=dir q  ;sfn didn't change
+   ;sfn of the directory changed between consecutive backups
+   ;remove the gdir entry for the directory with the old sfn
+   n sfn s sfn="" f  s sfn=$o(gdir(sfn)) q:sfn=""  i gdir(sfn)=dir k gdir(sfn) q
+   s gdir(+zu49)=dir ;add the new gdir entry
+   q
+ }
+ ; if restore all directories, add to restore list
+ i RESTYPE="ALL" G diradd
+ ; Select individual directories and see if need to rename
+ if ($G(SelectOnlyMirrorDBs)=1) && (mirdata="") {
+	 S NODIR(dir)=""
+	 s gdir(+zu49)=dir 
+	 quit
+ }
+ I $G(QUIETMODE) {
+	 ; Set up arrays for selecting directories to restore only
+	 ; for non-interactive restore
+	 S gdir(+zu49)=dir
+	 D SELDIR(dir,mirdbname)
+	 quit
+ } 
+ I 'added {
+	 W *7 
+ 	 D Show("DIRNAM") W !
+ 	 S added=1
+ }
+ n zdir,xdir,dpl
+ask4new ; Display original directory name so user can select/reject/rename it
+ w dir
+ if mirdbname'="" w " (",mirdbname,")"
+ w " => " 
+ r a,! 
+ I $$UC(a)="X"!$$STOP(a) {
+	 S NODIR(dir)=""
+	 s gdir(+zu49)=dir 
+	 Q
+ }
+ if a="" {
+	 if mirdbname="" {
+		 s a=dir
+	 } else {
+		 ; set a to the local database (if there is one)
+		 ; with the same mirror database name
+		 s a=$G(MirrorDBList(mirdbname,"path"))
+		 if a="" {
+		    if MirrorRestore=1 {
+			    ; this is the system the backup came from, restore
+			    ; to the original location
+			    s a=dir
+		    } else {
+			    w !,"The backup comes from a different system, and the target"
+			    w !,"mirror database was not found on the local system. You"
+			    w !,"must enter a path to restore this database or x/X to skip it."
+			    w !
+			    goto ask4new
+		    }
+		 }
+	 }
+ }
+ s a=$zu(12,a),dpl=0,zdir=""
+ s zdir=$O(NEWDIR(""))
+ while (zdir'="") {
+	 s xdir=NEWDIR(zdir)
+	 s:xdir="" xdir=zdir
+	 if xdir=a {
+		 D Show("DUPLDIR",a)
+		 goto ask4new  ;get a new response
+	 }
+	 s zdir=$O(NEWDIR(zdir))
+ }
+ i $l(zu49,",")=4 {
+	 if (($zu(12,a,3)="") || ($zu(49,a)<-1)) {
+		 i $zu(12,a,3)="" {
+			 d Show("NotExist",a)
+		 } else {
+			 d Show("dirnexis",a)
+		 }
+		 d Show("MakeLater")
+		 s yes=$$YESNO(0) 
+		 w !
+		 if yes goto ask4new   ;get a new choice
+	 } else {
+		 set yes=$$CheckForMirrorTarget(dir,mirdbname,mirdata,a)
+		 if 'yes goto ask4new 
+	 }
+ }
+ i $l(zu49,",")=12 {
+	 if (($zu(12,a,3)="") || ($zu(49,a)<-1)) {
+		 i $zu(12,a,3)="" {
+			 d Show("NotExist",a)
+		 } else {
+			 d Show("dirnexis",a)
+		 }
+		 w !,"Do you want to create this database?"
+		 s yes=$$YESNO(1) 
+		 w ! 
+		 if 'yes goto ask4new  ;don't create it, get a new choice
+		 s DIRNAM=a
+		 s dirneed=zu49
+		 i ('$$c5(DIRNAM)) || ($ZU(12,DIRNAM,3)="") || ($zu(49,DIRNAM)<-1) {
+			 w !,"Could not create database "_DIRNAM_", please enter different name.",!
+			 goto ask4new 
+		 }
+		 s a=DIRNAM
+	 } else {
+		 set yes=$$CheckForMirrorTarget(dir,mirdbname,mirdata,a)
+		 if 'yes goto ask4new 
+	 }
+ }
+ if (mirdbname'="") {  ;from the backupo
+	 s path=$G(MirrorDBList(mirdbname,"path"))  ;local database list
+	 if (path'="") {
+	    if a'=path {
+		    w !,"Warning, mirror database ",mirdbname," exists in"
+		    w !,?5,path
+		    w !,"but you are restoring it to"
+		    w !,?5,a
+		    w !,"Activation and catchup of the restored database will fail"
+		    w !,"because a mirror database name can only be used by one"
+		    w !,"database on an instance at a time."
+			w !,"Do you want to continue anyway?"
+		    s yes=$$YESNO(0) 
+		    w ! 
+		    if 'yes goto ask4new 
+	    }
+	 }
+ }
+ S NEWDIR(dir)=$s(a=dir:"",1:a)
+ S gdir(+zu49)=dir
+ S CLSTATE(dir)=clflag
+ i 'CLUBACKUP,clflag="C" s CLUBACKUP=1
+ Q
+diradd ;
+ S gdir(+zu49)=dir
+ if 'added {
+ 	W !,"The following directories will "
+ 	W $s(BACKSET'=1:"also ",1:""),"be restored: ",!
+ }
+ S added=1
+ if $G(TopDir)="" {
+	 if 'MirrorRestore {
+	    s a=$ZU(12,dir)
+	 } else {
+		 ; For MirrorRestore=2 we only restore mirrored databases
+		 ; and only if they have a corresponding local location
+		 if (MirrorRestore=2) && ((mirdbname="") || '$D(MirrorDBList(mirdbname))) {
+			 s NODIR(dir)=""
+			 quit
+		 }
+		 ; If this is a mirrored database and it has a local copy then
+		 ; set up the redirection. If the local copy is currently active,
+		 ; we have to deactivate it. If the local copy is active and newer
+		 ; than the copy in the backup, we ask the user to confirm or we
+		 ; abort the operation (for non-interactive).
+		 if (mirdbname="") || '$D(MirrorDBList(mirdbname)) {
+		    s a=$ZU(12,dir)
+		 } else {
+		     s info=MirrorDBList(mirdbname,"info")
+		     if $P(info,":",4)'=$P(mirdata,":",4) {  ;database guid
+				 if '$G(QUIETMODE) {
+				    w !,dir," skipped because its guid does not"
+				    w !,?5,"match the guid of the current database."
+				 }
+			     s NODIR(dir)=""
+			     quit
+		     }
+		     if $P(info,":",5)'=$P(mirdata,":",5) {  ; mirror guid
+				 if '$G(QUIETMODE) {
+				    w !,dir," skipped because its mirror guid does not "
+				    w !,?5,"match the mirror guid of the current database."
+				 }
+			 	 s NODIR(dir)=""
+			 	 quit
+		     }
+		     s curjrnfilecnt=+$P(info,":",2),curjrnoff=+$P(info,":",3)
+		     s backupjrnfilecnt=+$P(mirdata,":",2),backupjrnoff=+$P(mirdata,":",3)
+		     if (curjrnfilecnt>backupjrnfilecnt) || 
+		           ((curjrnfilecnt=backupjrnfilecnt) && (curjrnoff>backupjrnoff)) {
+			    if 'MirrorDBList(mirdbname,"inactive") {
+				    if '$G(QUIETMODE) {
+					    if $SYSTEM.Mirror.GetInfo()["PRIMARY" {
+					    	w !,dir," skipped because the"
+							w !,?5,"target database is active and this is the primary mirror member."
+							w !,?5,"The target database needs to be removed from the mirror"
+							w !,?5,"before it can be the target of a restore."
+					    } else {
+					    	w !,dir," skipped because the target database "
+							w !,?5,"is active and is newer than the database in the backup"
+							w !,?5,"The database in the backup is current as of journal file #",backupjrnfilecnt
+							w !,?5,"and the current database is current as of file #",curjrnfilecnt," and the current"
+							w !,?5,"database does not appear to be damaged as it is active."
+							w !,?5,"Use a Selective Restore if you want to restore over the existing copy."
+					    }
+					    w !
+				    }
+				    S NODIR(dir)=""
+				    quit
+			    } else {
+				    if '$G(QUIETMODE) {
+					    w !,"Note that the copy of ",dir
+					    w !,?5,"in the backup is older than the current"
+					    w !,?5,"database, ",MirrorDBList(mirdbname,"path"),"."
+					    w !,?5,"However the current database is not active in the mirror"
+					    w !,?5,"so it can be overwritten if the current database is damaged."
+					    w !
+				    }
+			    }
+		    }
+		    s a=MirrorDBList(mirdbname,"path")
+	    }
+	 }
+ } else {
+	 s a=$ZU(12,$$prefix(TopDir,dir))
+ }
+ W dir," => " ;
+ if (mirdbname'="") {  ;from the backupo
+	 s path=$G(MirrorDBList(mirdbname,"path"))  ;local database list
+	 if (path'="") {
+	    if a'=path {
+		    w !,"Warning, mirror database ",mirdbname," exists in"
+		    w !,?5,path
+		    w !,"but you are restoring it to"
+		    w !,?5,a
+		    w !,"Activation and catchup of the restored database will fail"
+		    w !,"because a mirror database name can only be used by one"
+		    w !,"database on an instance at a time."
+	    }
+	 }
+ }
+ S NEWDIR(dir)="" 
+ I a'=dir {
+	 s NEWDIR(dir)=a 
+	 s:mirdbname'="" a=a_" ("_mirdbname_")"
+	 ; If the target + mirrordb name won't fit on the
+	 ; same line as the source then try to align it so
+	 ; it fits on the next line indenteted a bit
+	 if $L(a)+$X>79 {
+		 w ! 
+		 s indent=79-$L(a)
+		 if (indent > $L(dir)) {
+			 s indent=$L(dir)-10
+		 }
+		 if (indent<0) {
+			 s indent=5
+		 }	 
+		 w @("?"_indent)
+	 }
+	 W a
+ }
+ S CLSTATE(dir)=clflag
+ i 'CLUBACKUP,clflag="C" {
+	 s CLUBACKUP=1
+ }
+ w ! Q
+prefix(top,dir)
+ i ($zversion(1)=2) q top_$s($e(dir,1,2)="\\":$p(dir,"\",2,999),$e(dir,2)=":":$e(dir,3,$l(dir)),1:dir)
+ i ($zversion(1)=1) q $e(top,1,*-1)_"."_$p(dir,"[",2,$l(dir,"["))
+ i ($zversion(1)=3) q top_dir
+ q dir
+PauseMirroredDB(QUIETMODE,mirdbname,dir) PUBLIC {
+   S sw10set=$$CHECK10() 
+   I sw10set {
+	   do CLEAR10
+   }
+   d $zu(9,"","De-activating mirrored restore target: "_dir,0,0  /* Informational message */)
+   S mirname=$P(mirdbname,":",3)
+   s mirindex=$SYSTEM.Mirror.MirrorNameToIndex(mirname,1)+1 
+   s rc=$SYSTEM.Mirror.PauseDatabase(mirindex,dir)
+   I sw10set {
+	   do SET10
+   }
+   if +rc=0 {  ;0,<error text>
+	   if 'QUIETMODE {
+		   w !,dir," skipped - failed to deactivate ",dir," (",$P(rc,",",2),")"
+	   } else {
+		   d $zu(9,"","DBREST failed to deactivate "_dir_" - Skipped ("_$P(rc,",",2)_")",1 /* broadcast and log message*/,1  /* Warning */)
+	   }
+	   quit 0
+   }
+   quit 1
+}
+CheckForMirrorTarget(src,mirdbname,mirdata,targ) [MirrorDBList] PUBLIC {
+	; This is called during an interactive selective restore when
+	; the target database exists. We want to check whether the target
+	; is a mirrored database and if so, warn the user if it doesn't match
+	; the database in the backup and ask if they want to continue
+	;
+	; mirdbname is the mirror database name of the src database as
+	;    extracted from the info stored in the backup header. This
+	;    is used as a subscript into the MirrorDBList() array to get the
+	;    mirror inforation for this db that was extracted from the
+	;    database header record in the backup file.
+	;
+	; Returns: 0 = do not restore to this target
+	;          1 = ok to restore to this target
+	s targmirdbname=$g(MirrorDBList("path",targ))
+	if targmirdbname="" {
+		; Target is not mirrored, all is well
+		quit 1
+	}
+	s targmirdata=MirrorDBList(targmirdbname,"info")
+	s inactive=MirrorDBList(targmirdbname,"inactive")
+	s targmirname=$P(targmirdata,":",6)
+	s targmirindex=$SYSTEM.Mirror.MirrorNameToIndex(targmirname,1)+1 
+	if mirdbname="" {
+		; Source is not mirrored, this is not good
+		w !,"The output database ",targ," is mirrored but the "
+		w !,"database in the backup ",src," is not."
+		w !,"Continuing will remove the target database from the "
+		w !,"mirror and destroy it."
+		goto checkContinue
+	}
+	; Source is mirrored, see if the target matches the source
+	if targmirdbname'=mirdbname {
+		w !,"The mirror database name of the target ",targmirdbname
+		w !,"does not match the name of the source in the backup ",mirdbname
+		w !,"Continuing will overwrite the contents of ",targ
+		goto checkContinue
+	}
+	; The mirror database names match so the guids should also match
+	; but we check them just to be sure.
+	if $P(targmirdata,":",4)'=$P(mirdata,":",4) {  ;database guid
+		w !,"The mirror database guid ",$P(targmirdata,":",4)," of the target database"
+		w !,"does not match the guid ",$P(mirdata,":",4)," of the source in the backup."
+		w !,"Continuing will overwrite the contents of ",targ
+		goto checkContinue
+	}
+	if $P(targmirdata,":",5)'=$P(mirdata,":",5) {  ; mirror guid
+		w !,"The mirror guid ",$P(targmirdata,":",5)," of the target database"
+		w !,"does not match the mirror guid ",$P(mirdata,":",5)," of the source in the backup."
+		w !,"Continuing will overwrite the contents of ",targ
+		goto checkContinue
+	}
+	if inactive {
+		; The target database is inactive, go ahead and let the user
+		; restore over it
+		quit 1
+	}
+    ; If this is the primary then we don't allow this. 
+    if $SYSTEM.Mirror.GetInfo()["PRIMARY" {
+	    w !,"The target database is active and this is the primary"
+	    W !,"mirror member so it cannot be the target of a restore."
+	    w !,"If you really want to restore to this database then mark"
+	    w !,"it as not mirrored."
+	    w !
+	    quit 0
+    }
+	; The database is active so check whether it is more current
+	; than the copy we're restoring
+    s curjrnfilecnt=+$P(targmirdata,":",2),curjrnoff=+$P(targmirdata,":",3)
+    s backupjrnfilecnt=+$P(mirdata,":",2),backupjrnoff=+$P(mirdata,":",3)
+    if (curjrnfilecnt>backupjrnfilecnt) || 
+        ((curjrnfilecnt=backupjrnfilecnt) && (curjrnoff>backupjrnoff)) {
+	    w !,"The target database is active and is more up to date"
+	    w !,"than the copy in the backup. Continuing will overwrite"
+	    w !,"the contents of ",targ," with older data."
+checkContinue ;		
+		r !,"Continue? <No> ",resp
+		w !
+		if "Yy"'[$E(resp_"X") {
+			quit 0
+		}
+    }
+    quit 1  ;ok to restore
+}
+SELDIR(dir,mirdbname) ;get the list of arrays
+ N DONE,SELTARG,SEL1 
+ S DONE=0
+ S I=1
+ while $D(SELDIR(I)) && ('DONE) {
+    S SEL1=$P(SELDIR(I),",")
+    if SEL1'="" {
+	    ;See if the configuration file entry is based on mirror db names
+	    if $E(SEL1,1,8)=":mirror:" {
+		    if SEL1=mirdbname {
+			    s SEL1=dir
+		    } else {
+			    goto next	    
+		    }
+	    }
+ 	    S SEL1=$ZU(12,SEL1)
+ 	    if SEL1=$zu(12,dir) {
+ 			S SELTARG=$P(SELDIR(I),",",2) ; Second piece is target dir
+ 		    I (SELTARG="X") || (SELTARG="x") {
+	 		    S NODIR(dir)=""   ;not a directory
+ 		    } else {
+ 			   	I SELTARG="" {
+	 			   	; If the source directory is mirrored then use the local
+	 			   	; copy of that mirror db as the default output directory
+	 			   	if mirdbname'="" {
+		 			   	s SELTARG=$G(MirrorDBList(mirdbname,"path"))
+		 			   	if SELTARG="",MirrorRestore=2 {
+			 			   	; MirrorRestore=2 means this is being restored
+			 			   	; on a different system than it was made one. We
+			 			   	; dont' default the output to the directory from
+			 			   	; the backup in this case.
+		 			   		s NODIR(dir)=""
+		 			   		s DONE=1
+		 			   		goto next
+		 			   	}
+	 			   	}
+	 			   	if SELTARG="" {
+	 			   	   S SELTARG=dir ;same directory
+	 			   	}
+ 			   	}
+ 			   	IF $E(SELTARG,1,8)=":mirror:" {
+	 			   	s SELTARG=$G(MirrorDBList(SELTARG,"path"))
+	 			   	if SELTARG="" {
+		 			   	; Have to abort here - we don't have a location
+		 			   	; for this so we can't just create a missing database
+		 			   	s NODIR(dir)=""
+		 			   	s DONE=1
+		 			   	goto next
+	 			   	}
+ 			   	}
+ 				S SELTARG=$ZU(12,SELTARG)
+ 				; See if the target is a mirrored database
+			    s targmirdbname=$G(MirrorDBList("path",SELTARG))
+ 				if targmirdbname'="" {
+	 				; The target is mirrored. We don't overwrite a mirrored
+	 				; database during non-interactive restore (eg. now) unless
+	 				; the source matches the target and the source is newer 
+	 				; than the target or the target is inactve (eg. might be
+	 				; broken)
+	 				;
+	 				; mirdata & mirdbname are set based on the source
+	 				; database. Now compare them to the values in the
+	 				; target db in info.
+	 				s info=$G(MirrorDBList(targmirdbname,"info"))
+	 				if targmirdbname'=mirdbname {
+		 				s NODIR(dir)=""
+	 				} elseif $P(info,":",4)'=$P(mirdata,":",4) {  ;database guid
+					    s NODIR(dir)=""
+				    } elseif $P(info,":",5)'=$P(mirdata,":",5) {  ; mirror guid
+					    s NODIR(dir)=""
+				    } elseif 'MirrorDBList(targmirdbname,"inactive") {
+					    ; If the db is inactive, then we're good to go. Otherwise if
+					    ; its active, make sure that it isn't more current than the
+					    ; copy we're restoring. 
+					    s curjrnfilecnt=+$P(info,":",2),curjrnoff=+$P(info,":",3)
+					    s backupjrnfilecnt=+$P(mirdata,":",2)
+					    s backupjrnoff=+$P(mirdata,":",3)
+					    if (curjrnfilecnt>backupjrnfilecnt) || 
+					        ((curjrnfilecnt=backupjrnfilecnt) && (curjrnoff>backupjrnoff)) {
+						    S NODIR(dir)=""
+					    }
+				    }
+ 				}
+ 				if '$D(NODIR(dir)) {
+ 				   	if (SELTARG=dir) {
+	 				   	s NEWDIR(dir)=""
+ 					} else {
+	 					s NEWDIR(dir)=SELTARG
+ 					}
+ 					; Third piece is used if target directory does not exist
+ 					S DIRNEW(SELTARG)=$P(SELDIR(I),",",3)
+ 				}
+ 		    }
+ 			s DONE=1  ;exit while loop and indicate we found a match
+ 	    }
+    }
+next ;    
+    s I=I+1
+ }
+ I 'DONE S NODIR(dir)="" ;never found
+ Q
+SWSET   do $SYSTEM.Util.SetSwitch(%SW,%VAL)
+	quit
+SET10   do $SYSTEM.Util.SetSwitch(10,1)
+        quit
+CLEAR10 do $SYSTEM.Util.SetSwitch(10,0) 
+        quit
+CHECK10() n res
+	s res=$SYSTEM.Util.GetSwitch(10)
+	if '+res quit 0  ; not owned
+	if +$P(res,",",2)'=+$J quit 0  ; not owned by us
+	quit 1  ; set and owned by us
+ ;uppercase function
+UC(x) q $zcvt(x,"u")
+ ;check  for stop text function
+STOP(x) S x=$$UC($E(x,1,4)) Q (x["EXIT")!(x["STOP")!(x["QUIT")!(x["HALT")!($E(x)="^")
+YESNO(a) N v,b S a=$G(a)  F  DO  Q:$D(v)
+ . W *-1,$S(a:" Yes",1:" No")_" => " R b I b="" S v=a Q
+ . S b=$TR($E(b),"yn","YN") I "YN"[b S v=(b="Y") Q
+ . W *7," [answer Yes or No, please]" I $x>68 W !
+ Q v
+Show(item,p1,p2,p3,p4) ;
+ n d,i,p0,p,tx s d="#",tx=$g(dbrtext(item))
+ i tx="" w !,*7,"MISSING DBRTEXT ITEM ",item
+ e  f i=0:1:4 s p="p"_i w $p(tx,d,i),$g(@p)
+ h 0 q 
+ ;
+ ;Restore a volume
+VOLUME s EOV=0,EOS=0,OK=1 ; haven't yet reached an end of volume
+ I VOLNUM=1 S LASTFUNC="",DIRNAM="" ; if 1st, not continuing a func
+ I LASTFUNC="SKIP" d SKIPDIR q:'OK!EOV!EOS  G dirnext
+ I LASTFUNC="RESTORE" DO  D DIRREST Q:'OK!EOV!EOS  G dirnext
+ . w !,"***Continuing restore of "_DIR w:DIR'=DIRNAM " to "_DIRNAM W !
+ D SKIPDIR ; read to the first directory block
+ I EOV!EOS W *7,!,"[Can't find any directories in this input file]",! q
+ Q:'OK
+ ; process additional directories in this file
+dirnext For  D dodir Q:'OK!EOV!EOS
+ Q
+dodir ;
+ S LEN=$V(VOLLOC,-3,2),VOLLOC=VOLLOC+2
+ s dirneed=$$nextvol() ; get file characteristics from label
+ g dirnamer:dirneed="" s DIR=$g(gdir(+dirneed)) g dirnamer:DIR=""
+ s DIRNAM=$p($g(DIRNAM(DIR)),"^",1) s:DIRNAM="" DIRNAM=DIR
+ g SKIPDIR:$D(NOREST(DIR)),dirnamer:'$D(DIRNAM(DIR))
+ g dirnamer:($l(dirneed,",")<24)
+ s dirhave=$ZU(49,DIRNAM) ; get actual file characteristics
+ i +dirhave=-2!(+dirhave=-3) d create i 'OK d SKIPDIR q
+ ; If necessary, change the file characteristics of this directory
+ s OK2=1
+ i $p(dirhave,",",2)=2048 d
+ . n partialmap,havemaps,zt,blkn,mapsz
+ . s partialmap=0,havemaps=+$p(dirhave,",",24)
+ . i havemaps=+$p(dirneed,",",24) d  
+ . . S mapsz=+$P(dirhave,",",23) O 63:"^^"_DIRNAM V (havemaps-1)*mapsz+1
+ . . f blkn=mapsz-1:-1:0 q:$V(blkn,0,1)'=254 
+ . . s partialmap=mapsz-1-blkn C 63
+ . i partialmap!(havemaps<$p(dirneed,",",24)) d  i 'OK d SKIPDIR s OK2=0 q
+ . . i partialmap S $P(dirneed,",",24)=0
+ . . do modify 
+ . i havemaps>$p(dirneed,",",24) d MOUNTQ(DIRNAM)
+ e  d
+ . n partialmap,havemaps,zt
+ . s partialmap=0,havemaps=+$p(dirhave,",",4)
+ . i havemaps<$p(dirneed,",",4) d  i 'OK d SKIPDIR s OK2=0 q
+ . . do modify 
+ . i havemaps>$p(dirneed,",",4) d MOUNTQ(DIRNAM)
+ ;
+ q:'OK!EOV!EOS!'OK2
+ ; Start the restore
+ d output^%Wprim("***Restoring "_DIR_$s(DIR'=DIRNAM:" to "_DIRNAM,1:"")_" at "_$ztime($p($h,",",2)))
+ d DIRREST ; restore the directory
+ q
+DIRREST S LASTFUNC="RESTORE",FUNC=1
+dirrest1 H 0 S sec=$zh
+ s RC=$$ZU(52,FUNC,DIRNAM,sfn),sec=$zh-sec,FUNC=1,VOLLOC=BUFBASE+$P(RC,",",3)
+ s TOTAL(DIRNAM)=$g(TOTAL(DIRNAM))+$p(RC,",",2)
+ d Show("stchk0",$P(RC,",",2),$fn(sec,"",1),TOTAL(DIRNAM))
+ ; check return code
+ i +RC=RCDIRLABELRECORD!(+RC=RCDIRLABELMISSING)!(+RC=RCBADRECORDONRESTORE&($p(RC,",",3)=OBDIRLAB)) d  q
+ . i +RC=RCBADRECORDONRESTORE d Show("stchk2") s DEV=""
+ . d nextlabel(RC)
+ i +RC=RCJRNMARKINFORECORD s DEJRNSTART=$p(RC,",",3,$l(RC)),EOS=1 q
+ i +RC=RCENDOFVOL s EOV=1 q
+ i +RC=RCENDOFVOLSET d done s EOS=1 q
+ i +RC=RCINERRLABELGOOD d  g dirrest1
+ . s y=$p(RC,",",3,999) f i=0:1 s a=$p(y,",",i*3+3) q:a  i a="" d  q
+ . . d Show("stchk3") s DEV=""
+ . . f i=0:1 s a=$p(y,",",i*3+1) q:a=""  i a<(65536*65536-10) w a,?8,gdir($p(y,",",i*3+2)),!
+ i +RC=RCMISSINGBLKS d  g dirrest1
+ . d Show("stchk4") s DEV=""
+ . s lastblk=$p(RC,",",3),lastsfn=$p(RC,",",4),nextblk=$p(RC,",",5),nextsfn=$p(RC,",",6)
+ . s lastdir=$g(gdir(lastsfn),"<sfn="_lastsfn_">")
+ . s nextdir=$g(gdir(nextsfn),"<sfn="_nextsfn_">")
+ . i lastsfn=nextsfn,nextblk'<lastblk d
+ . . d Show("stchk5",lastblk,nextblk,lastdir)
+ . e  d Show("stchk6",lastblk,lastdir,nextblk,nextdir)
+ . w ! q
+ i +RC=RCBADRECORDONCOPY!(+RC=RCBADRECORDONRESTORE) d  g dirrest1
+ . s DEV=""
+ . Set size=+$p(RC,",",4),blk=$p(RC,",",5),skip=$p(RC,",",6)\4
+ . If +RC=RCBADRECORDONCOPY Do Show("stchk8",blk) If 1
+ . Else  Do Show("stchk7",blk)
+ . If skip Do Show("stchk24") Set a=$$ZU(52,2) q
+ . w ! i '$$viewblk d Show("stchk9") s a=$$ZU(52,2) q
+ . d Show("stchk10")
+ . s i=$increment(^CacheRestoreBad(startday,starttime,DIRNAM,blk))
+ . s ^CacheRestoreBad(startday,starttime,DIRNAM)=size
+ . s a=size\(16*1024),b=size#(16*1024),c=0
+ . f j=0:1:a-1 s ^CacheRestoreBad(startday,starttime,DIRNAM,blk,i,j)=$v(c,0,-(16*1024)),c=16*1024+c
+ . i b s ^CacheRestoreBad(startday,starttime,DIRNAM,blk,i,a)=$v(c,0,-b)
+ . c 63
+ i +RC=RCBLKSIZE d Show("stchk11"),SKIPDIR q
+ i +RC=RCMAPERR d Show("stchk12"),abortdir,SKIPDIR q
+ i +RC=RCOUTCLUMNT d Show("stchk13",DIRNAM),abortdir,SKIPDIR q
+ i +RC=RCMOUNT d Show("stchk14",DIRNAM),abortdir,SKIPDIR q
+ i +RC=RCOUTERR d Show("stchk15"),abortdir,SKIPDIR q
+ d Show("stchk16") g abortrestore
+ q
+ ;
+ ; done with restore
+done ;
+ d Show("stchk17") s a=$$ZU(52,4)
+ q
+ ;
+ ;abortrestore
+ ; abort rest of restore
+abortrestore ;
+ d Show("stchk18") i $$ZU(52,4)
+ q
+ ;
+ ; viewblk
+viewblk() ;
+ s $zt="viewerr"
+ o 63:"^^"_dir v blk q 1
+viewerr q 0
+ ;
+abortdir ;
+ d Show("abtdmt")
+ s outdir=$P(DIRNAM(DIR),"^",1)
+ s:outdir="" outdir=DIR  ; if restoring to same place, outdir would be null
+ n origchr
+ s origchr=$P(DIRNAM(DIR),"^",2)
+ i +$ZU(49,outdir)>-1,origchr'="" d
+ . s n=$$ZU(52,7,outdir,+origchr)
+ . i n'=1 w !,*7,"Failed to restore size characteristics of ",DIR
+ . i n'=1 w " (code = ",n,")"
+ s n=$$ZU(52,5,outdir,-1)  ; Convert the GFINCREST flag to a DISMOUNT state
+ ; indicate skip in future
+ ; & don't remount & don't restore journal
+ K DIRNAM(DIRNAM),nodir(DIR),dejrn(DIR)
+ k CLSTATE(DIR)
+ S NOREST(DIR)="" K DIRNAM(DIR),nodir(DIRNAM),dejrn(DIRNAM) Q
+SKIPDIR ;returns OK, EOV, EOS
+ i DIRNAM'="" d Show("stchk19",DIRNAM)
+ s begintime=$zh
+ S LASTFUNC="SKIP",RC=$$ZU(52,2,"",sfn),VOLLOC=BUFBASE+$P(RC,",",3)
+ s sec=$zh-begintime,numblks=$p(RC,",",2)
+ d:DIRNAM'="" Show("stchk20",numblks,sec)
+ ; check return code
+ ; If no error, see if we reached end of volume condition
+ i +RC=RCDIRLABELRECORD!(+RC=RCDIRLABELMISSING) d  s OK=1 q
+ . d nextlabel(RC)
+ i +RC=RCBADRECORDONRESTORE d Show("stchk2"),nextlabel(RC) s OK=1 q
+ i +RC=RCJRNMARKINFORECORD s DEJRNSTART=$p(RC,",",3,$l(RC)),EOS=1,OK=1 q
+ i +RC=RCENDOFVOLSET d Show("stchk21",DIRNAM),done s EOS=1,OK=1 q
+ ; Check for end of input volume
+ I +RC=RCENDOFVOL d Show("stchk22",DEV,DIRNAM) S BUFCOUNT=$P(RC,",",2),EOV=1,OK=1,a=$$ZU(52,3) q
+ i +RC=RCMISSINGBLKS d  g SKIPDIR
+ . d Show("stchk4")
+ . s lastblk=$p(RC,",",3),lastsfn=$p(RC,",",4),nextblk=$p(RC,",",5),nextsfn=$p(RC,",",6)
+ . s lastdir=$g(gdir(lastsfn),"<sfn="_lastsfn_">")
+ . s nextdir=$g(gdir(nextsfn),"<sfn="_nextsfn_">")
+ . i lastsfn=nextsfn,nextblk'<lastblk d
+ . . d Show("stchk5",lastblk,nextblk,lastdir)
+ . e  d Show("stchk6",lastblk,lastdir,nextblk,nextdir)
+ ; Must have an input error
+ d Show("stchk23",DEV,DIRNAM)
+ d Show("SKIPDIR") S OK=$$YESNO(1) w ! g SKIPDIR:OK
+ q
+create ;
+ I $G(QUIETMODE)!($g(TopDir,"")'="") DO  Q  ;non-interactive
+ . i "Yy"[$e($g(DIRNEW(DIRNAM))_"?")!($g(TopDir,"")'="") d  q
+ . . i $$c5(DIRNAM) d c2 q
+ . . s OK=0 d abortdir q
+ . S OK=0 D Show("restwont",DIRNAM)
+ . D abortdir Q
+ ;
+ I $ZU(12,DIRNAM,3)="" D Show("NotExist",DIRNAM),Show("MakExist") I 1
+ E  D Show("dirnexis",DIRNAM)
+ D Show("CREATE") W !
+c1 r "R[etry], C[reate], or A[bort]? ",R,! S R=$$UC($E(R_"?"))
+ if "RCA"'[R w "Invalid response - ",R,! G c1
+ I R="A" S OK=0 G abortdir
+ S OK=1
+ I R="R" S dirhave=$ZU(49,DIRNAM) G create:dirhave<-1 Q
+ ; Must be a creation at this point....
+ w "Creating "_DIRNAM_" ... " h 0
+ i '$$c5(DIRNAM) g create
+ w "done!",!
+c2 ;
+ g:'$$QUIET() c1 d DISMOUNT(DIRNAM)   ; File created mounted, dismount
+ g:'$$QUIET() c1 d MOUNTQ(DIRNAM)     ; remount
+ i +$$ZU(52,5,DIRNAM,1)<0 d  g abortdir  ; No retry on this type of error
+ . do Show("errmrk1",DIRNAM)
+ . s OK=0
+ d MOUNTQ(DIRNAM)
+ i $$QUIET()   ; can't hurt
+ s dirhave=$ZU(49,DIRNAM)
+ s OK=1 q
+c3() s $ZT="c4" X $$zucom(0) q zuret
+c4 s $ZT="",$ZE="" q -1
+c5(DIRNAM) {  /* Private so it can't be called from outside of DBREST2 */
+ 	i $zu(12,DIRNAM,3)="" {  ; First create all directories in path
+		Set name=$zu(12,DIRNAM,1,1)
+		If name="" {
+			w !,*7,"[Couldn't create ",DIRNAM,"]",!
+			Quit 0
+		}
+		s rc=$ZU(140,9,DIRNAM,1) ;,1 = create missing dirs in the tree
+		if rc<0 {
+			w !,*7,"[Couldn't create this directory (rc = "_rc_")]",!
+			q 0
+		}
+ 	}
+ 	i $$c3<0 {
+		w !,*7,"[Couldn't create this directory]",!
+		q 0 ; Now try to create the database file
+ 	}
+ 	q 1
+}
+MOUNTQ(dir) ;
+ N a S a=$ZU(17,dir) Q  ;Quick Mount: mount w/o implicit/replication
+ ; form ZU command for file create or file modify
+zucom(func) ;build appropriate execute for ZU functions
+ s a="s zuret=$ZU("_func_",DIRNAM"
+ f i=2:1:12 s a=a_","_$p(dirneed,",",i)
+ Q a_")"
+ ; error in directory name
+dirnamer S OK=0 w *7,!,"[Directory label error]",! Q
+modify ; Modify a directory
+ I '$G(QUIETMODE) w "Expanding "_DIRNAM_" ...",!
+ n curchar
+ s curchar=$ZU(49,DIRNAM)
+ i partialmap s zt=$ZT,$ZT="mod2"
+ X $$zucom(1) ; modify the directory
+mod2 I partialmap S $ZT=zt,$ZE="",$P(dirneed,",",24)=havemaps
+ E  I zuret<0 DO  Q
+ . w !,*7,"[Couldn't expand directory "_DIRNAM_" Error "_zuret_"]",!
+ . s OK=0 d abortdir
+ ; Wait for expansion to complete
+ n x,v
+ s x=$ZU(40,2,46)
+ i partialmap d Show("expmap",DIRNAM)
+ i 'partialmap d
+ . d Show("expand2",DIRNAM,$p(curchar,",",4),$P(dirneed,",",4))
+ f  h 1 s v=$v(x,-2,$ZU(40,0,22)) q:v'=1  w "." i $X>67 d
+ . W !,"        ." ;show every 60
+ V x:-2:$ZU(40,0,22):0 ;reset internal flag so others can use it
+ I $V(x,-2,$ZU(40,0,22)) V x:-2:$ZU(40,0,22):0 ; ? this came from MSUUS2 but why?
+ I partialmap D
+ . S mapsz=+$P(dirhave,",",23) O 63:"^^"_DIRNAM V (havemaps-1)*mapsz+1
+ . f blkn=mapsz-1:-1:0 q:$V(blkn,0,1)'=254 
+ . s blkn=mapsz-1-blkn C 63
+ . i blkn=partialmap D Show("expnoblk",DIRNAM,mapsz-blkn)
+ . i blkn<partialmap D Show("expblk",DIRNAM,mapsz-partialmap,mapsz-blkn)
+ I 'partialmap,v=2 D Show("experr") s OK=0 d abortdir q
+ ;
+ d DISMOUNT(DIRNAM)  ; Flush blocks to disk
+ d MOUNTQ(DIRNAM)    ; and make it accessable to us again
+                     ; note: gfincrest prevents others 
+                     ;       from using it.
+ s OK=1 q
+VOLLABEL ;read a volume label
+ I $G(QUIETMODE),VOLNUM=1 DO  Q
+ . s RC=$$ZU(52,4),RC=$$ZU(52,0)
+ . H 0 S RC=$$OpenDev(DEV)
+ . I +RC'=1 W *7,!,"[Can't open "_DEV_"]",! S OK=0 Q
+ . S BUFBASE=$P(RC,",",4),VOLLOC=BUFBASE+$P(RC,",",2) D VOLHEAD I 'OK S RC=-2
+ i +$G(QUIETMODE) {
+	w !!,"RESTORE OF FILE "_INPDEV_" HAS FAILED, BACKUP MAY BE CORRUPT",!
+	s OK=0
+	q
+ }
+ For  D GETDEV Q:OK  Q:VOLNUM=1  DO  Q:'OK  ; get device name
+ . W !,"Do you want to abort the restore of this backup?"
+ . S OK='$$YESNO(0) W !
+ Q:'OK
+vol1 i VOLNUM=1 s RC=$$ZU(52,4),RC=$$ZU(52,0)
+ S RC=$$OpenDev(DEV),BUFBASE=$P(RC,",",4),VOLLOC=BUFBASE+$P(RC,",",2)
+ i +RC=RCINERR DO  G vol1:$$YESNO(1) S DEV="" G VOLLABEL
+ . W *7,!,"[Can't open "_DEV_"] Retry it?"
+head D VOLHEAD I 'OK S RC=$$ZU(52,3,"") G VOLLABEL ;get header part of label
+ Q
+OpenDev(DEV) s $ZT="OpenErr" Quit $$ZU(52,0,DEV)
+OpenErr Quit RCINERR
+VOLHEAD ;
+ S OK=0 ;,VOLLOC=BUFBASE+$P(RC,",",2) ; start at beginning of volume label
+ I +RC=RCOLDFORMAT D  S OK=0 S DEV="" Q
+ . W *7,!,"[This volume has an obsolete backup format not supported by this "_"Cache"_" version]",!
+ I +RC=RCBADVOLUME D  S OK=0 S DEV="" Q
+ . W *7,!,"[This is not a "_"Cache"_" Backup File]",!
+ N HEAD S HEAD=$$nextvol()
+ I "Cache"_" BACKUP"'=HEAD,"Open M BACKUP"'=HEAD DO  S OK=0 S DEV="" Q
+ . W *7," [This is not a "_"Cache"_" Backup File]",!
+ N VERID,HEAD,BackupVersion
+ S VERID=$$nextvol()  ;"VERSION<nnn>" where <nnn> is the version #
+ I $E(VERID,1,7)="VERSION" {
+     s vernum=+$E(VERID,8,*)
+     ; vernum is 0 for "VERSION", 1 for "VERSION1.0", etc...
+    S BackupVersion=$$nextvol()  ;$ZV string
+    S HEAD(1)=$$nextvol()  ;Backup volume #
+ } else {
+    S HEAD(1)=VERID,BackupVersion="UNKNOWN"
+    s vernum=0
+ }
+ F I=2:1:12 S HEAD(I)=$$nextvol() ; Read header info
+ if vernum>0 {
+     ; version 1 introduces mirror support. 
+     s HEAD(13)=$$nextvol()  ; : seperated mirror name, guid, local sys name, etc
+ } else {
+     s HEAD(13)=""  ;JO2379
+ }
+ if VOLNUM=1,$P(HEAD(13),":",3)="" {
+     s MirrorBackup=0
+ } else {
+     s MirrorBackup=1
+ }
+ I HEAD(1)'=VOLNUM V $ZU(40,2,99):-2:4:BUFCOUNT D volerr("Volume number") Q
+ I VOLNUM'=1 {
+    /* This is not a 1st volume, so verify that it is for
+       the correct backup and then quit
+       [JO2313] we could add code here to store/validate the mirror id
+       (eg. HEAD(13)) across volumes if that seems useful
+    */
+    i BACKDATE'=HEAD(2) V $ZU(40,2,99):-2:4:BUFCOUNT D volerr("Date") q
+    i BACKTIME'=HEAD(3) V $ZU(40,2,99):-2:4:BUFCOUNT D volerr("Time") q
+    i BACKTYPE'=HEAD(4) V $ZU(40,2,99):-2:4:BUFCOUNT D volerr("Type") q
+    i DESCRIPTION'=HEAD(11) V $ZU(40,2,99):-2:4:BUFCOUNT D volerr("Description") q
+    if MIRRORINFO'=HEAD(13) V $ZU(40,2,99):-2:4:BUFCOUNT D volerr("MirrorInfo") q
+    S OK=1 ; This volume label is correct
+    quit
+ }
+ I BACKSET=1 {
+     if '$G(QUIETMODE) {
+         D volh1 
+         Q:'OK  ;1st volume for 1st backup
+     }
+     if MirrorBackup {
+         ; MirrorRestore=0 - ignore mirror informatin
+         ;              =1 - restore all db's (backup is from this system)
+         ;              =2 - restore only mirrored db's which exist
+         s MirrorRestore=$$GetMirrorInfo(HEAD(13),RESTYPE,$G(QUIETMODE))
+         if MirrorRestore'=0 {
+             if (vernum<1.1)&&(RESTYPE="ALL")&&(TopDir="") {
+                 /* For a restore of all databases without specifying a
+                   new topdir we require a backup version # of 1.1 or 
+                   higher. 1.1 added the mirror database nofailover flag to
+                   the backup header. It would be ok to continue however the
+                   code will think all the mirrored databases have the nofailover
+                   flag clear (eg. they are read/write) so it will refuse to restore
+                   any of them. */
+                   if '$G(QUIETMODE) {
+                       w !,"This is a version ",vernum," backup file from an older"
+                       w !,"mirror member so the mirrored databases cannot be automatically"
+                       w !,"restored. Use a selective restore or pick a new top level"
+                       w !,"directory. Because it is from an older version, DBREST will not"
+                       w !,"prevent a database in the backup which was marked read/write on"
+                       w !,"an async member from begin restored over a read/only failover copy."
+                   }
+                   goto ERR
+             }
+             if (RESTYPE="SELECT") && ('$G(QUIETMODE)) {
+	             ; If this is a selective restore involving mirrored databases
+	             ; we ask the user whether they want to process all databases or
+	             ; only mirrored databases. 
+	             r !,"Limit restore to mirrored databases? ",resp
+	             while "YyNn"'[$E(resp_"X") {
+		             w !,"Please answer yes or no"
+	                 r !,"Limit restore to mirrored databases? ",resp
+	             }
+	             if "Yy"[$E(resp) {
+		             s SelectOnlyMirrorDBs=1
+	             } else {
+		             s SelectOnlyMirrorDBs=0
+	             }
+             }
+             do BuildMirrorDBList($G(QUIETMODE),.MirrorDBList)
+         }
+     }
+ }
+ I $G(QUIETMODE) S OK=1
+ I BACKSET'=1 DO  q:'OK
+ . i HEAD(4)="Full" DO  Q
+ . . w !,"This is a full backup file. A full backup can only be"
+ . . w !,"the first backup restored in a sequence. If there are"
+ . . w !,"multiple full backups which need to be restored, ^DBREST"
+ . . w !,"must be run separately for each file. Restoring"
+ . . w !,"multiple full backups in a single run of DBREST would"
+ . . w !,"cause problems with the subsequent journal restore."
+ . . s DEV=""
+ . . s OK=0
+ . i HEAD(4)="Cumulative Incremental" DO  Q
+ . . I HEAD(5)<PREVH ;either before that date
+ . . E  I +HEAD(5)=+PREVH,$p(HEAD(5),",",2)<$p(PREVH,",",2) ;or time
+ . . I  W !,"Date must be more recent than last restored backup"
+ . . I  D volerr("Date") Q
+ . . I PREVFDATE'="",PREVFDATE'=HEAD(9) D volerr("Date") q
+ . . I PREVFTIME'="",PREVFTIME'=HEAD(10) D volerr("Time") q
+ . . S OK=1
+ . ; Must be a regular incremental backup - Check that the
+ . ; previous date/time match the last restored date/time
+ . i PREVDATE'=HEAD(6) D volerr("Date") q
+ . i PREVTIME'=HEAD(7) D volerr("Time") q
+ . S OK=1 ; This volume label is correct
+ ;
+ S BACKDATE=HEAD(2),BACKTIME=HEAD(3),BACKTYPE=HEAD(4),BACKH=HEAD(5)
+ S PREVDATE=HEAD(6),PREVTIME=HEAD(7),PREVTYPE=HEAD(8)
+ S PREVFDATE=HEAD(9),PREVFTIME=HEAD(10),DESCRIPTION=HEAD(11)
+ S MIRRORINFO=HEAD(13)  ;From $$LookupMirrorInfo^DBACK()
+ I BACKTYPE="Full" S PREVFDATE=BACKDATE,PREVFTIME=BACKTIME ;Full!
+ Q
+volerr(A) w !,*7," [",A," error in the volume label]",!
+ D voldisp S OK=0
+ W !,"We were expecting:",!,"  Volume #: ",VOLNUM
+ W "  with Previous date: ",PREVDATE,"  and time: ",PREVTIME
+ W !,"  and buffer count of: ",BUFCOUNT,!!
+ Q
+ ; Display the volume label
+voldisp d:BackupVersion="UNKNOWN" Show("volnover")
+ d:BackupVersion'="UNKNOWN"
+ . n Vers ; remove date & time from end of version string
+ . s Vers=BackupVersion,Vers=$e(Vers,1,$f(Vers," ",$f(Vers,")")+1)-2)
+ . d Show("voldisver",Vers)
+ d Show("voldis14",HEAD(1),HEAD(2),HEAD(3),HEAD(4))
+ d Show("voldis68",HEAD(6),HEAD(7),HEAD(8))
+ d Show("voldis9e",HEAD(9),HEAD(10),HEAD(11),HEAD(12))
+ if HEAD(13)'="" {
+	 if $P(HEAD(13),":",1)'="" {
+		; backup is from a failover member, mirror name is not null
+        d Show("voldis13",$P(HEAD(13),":",1),$P(HEAD(13),":",3))
+	 } else {
+		; backup is from an async member, mirror name is null
+        d Show("voldis13b",$P(HEAD(13),":",3))
+	 }
+ }
+ Q
+volh1 D voldisp W !,"Is this the backup you want to start restoring?"
+ S OK=$$YESNO(1) Q
+GETDEV ;select a device to use -- returns DEV,OK
+ W !!,"Specify input file for volume "_VOLNUM
+ ;
+ I VOLNUM=1 DO  ;first time!
+ . I PREVDATE="" W " of backup "_BACKSET
+ . E  w " of backup following "_PREVDATE_"  "_PREVTIME
+ ;
+ I VOLNUM>1 W " dated "_BACKDATE_"  "_BACKTIME
+ ;
+ W !," (Type STOP to exit)"
+ W !,"Device: " W:DEV]"" DEV_" => " R ANS,! S:ANS]"" DEV=ANS
+ I DEV=""!$$STOP(ANS) S OK=0 Q
+ ;
+ S DEV=$$FILENORM(DEV) S OK=1
+ S XLT=$$GETXLT(DEV)
+ Q        
+GETXLT(DEV) ;get nls translation table for this device
+ I DEV?2N,$G(^%IS(DEV,0))="Magnetic tape" S XLT=$$GetPDefIO^%SYS.NLS(4)
+ E  S XLT=$$GetPDefIO^%SYS.NLS(3)
+ Q XLT
+ ;
+ ; nextlabel
+ ; we've reached a label record or missing label record
+ ; get its characteristics
+ ; call: x is return string from a function
+ ;       with return code of RCDIRLABELRECORD,RCDIRLABELMISSING, or RCBADRECORDONRESTORE
+ ; returns: sfn  input file #
+ ;          dir  directory name to which restore
+nextlabel(x) ;
+ s zu49=""
+ i +x=RCDIRLABELMISSING s sfn=$p(x,",",3),filesize=$p(x,",",4) q:'filesize
+ e  i +x=RCDIRLABELRECORD!(+x=RCBADRECORDONRESTORE) s sfn=$p(x,",",6),filesize=$p(x,",",7),zu49=$p(x,",",8,99)
+ s (dir,DIR)=gdir(sfn)  ; get directory name
+ s DIRNAM=$p($g(DIRNAM(DIR)),"^",1) s:DIRNAM="" DIRNAM=DIR
+ i +x'=RCBADRECORDONRESTORE,$d(DIRNAM(DIR)) s $p(DIRNAM(DIR),"^",2)=filesize
+ ; make sure current file is at least filesize big
+ ; If not, then expand it
+ ; If +x=RCBADRECORDONRESTORE, then the filesize and zu49 info is questionable but the rest is reliable
+ q
+ ;
+initconstants ;
+ s OBDIRLAB=65536*65536-1 ;directory label "blk #"
+ s RCSUCCESS=1   ;success
+ s RCINERR=-1    ; General Input error
+ s RCOUTERR=-2   ; General output error 
+ s RCMOUNT=-4    ; either directory name was too long or we couldn't mount the directory
+ ; input errors during backup (in addition to RCINERR)
+ s RCBADMAP=-11  ; 2kb: missing incremental bitmaps
+                 ;big database: Bad label in incremental backup bitmap
+ s RCMAPINERR=-13 ; disk error reading incremental backup bitmap
+ ;
+ ; write errors during backup (in addition to RCOUTERR)
+ ;
+ s RCEOT=2       ; Output: end of tape or volume
+ s RCOFFLINE=3   ; Output device offline
+ s RCDEVFUL=4    ; Output: file expansion failed
+ ; # 5 no longer used
+ ;
+ ; input errors during $zu(52,0,device) which opens input volume and reads label
+ ; (in addition to RCINERR)
+ s RCOLDFORMAT=-6        ; On a restore, Input file has old backup
+                         ;file format.  Abort the restore.
+ s RCBADVOLUME=-7        ; Input file is not backup file format.
+                         ;In general, if we fail during open of input
+                         ;device or 1st read of it we get an RCINERR error.
+                         ;If the volume block's contents are bad, we
+                         ;get either RCBADVOLUME or RCOLDFORMAT
+ ; success returns during restore
+ s RCENDOFVOL=-10        ; End of input backup volume reached
+ s RCENDOFVOLSET=-17     ; End of input backup volume reached and
+                         ; this is the last volume
+ s RCDIRLABELRECORD=-18  ; reached a directory label record, current
+                         ; record is next record
+ s RCDIRLABELMISSING=-19 ; we're at a data record for a different
+                         ; directory and we should act as if we
+                         ; reached a directory label except the
+                         ; current record is the first data block of the
+                         ; next directory to be restored.  This usually
+                         ; is the result of various read errors that
+                         ; resulted in missing a directory label record
+ s RCJRNMARKINFORECORD=-20 ;reached a journal marker info record, likely the
+                         ; last record on the last volume
+ ; input errors during restore (during restore, if we get an input
+ ; error we usually translate it to something else)
+ s RCINERRLABELGOOD=-14  ; We got an error reading a block but
+                         ; it passed validation on its label.
+                         ; The contents should be reported by the
+                         ; utility as suspicious unless we can
+                         ; determine that there's a particular
+                         ; 1 or more records that fail crc.
+                         ; We should then try to restore its contents,
+                         ; and we should expect one or more of the
+                         ; records in the block to result in
+                         ; a RCBADRECORDONRESTORE error.
+ s RCBADRECORDONCOPY=-15 ; record in rinbp->ricurr is bad
+                         ; It was bad when the backup was originally
+                         ; created i.e. we got a read error during
+                         ; the backup). Normally the utility
+                         ; should save a copy of the block that
+                         ; is already in the CACHE.DAT file and
+                         ; then restore this block
+ s RCBADRECORDONRESTORE=-8 ; record in rinbp->ricurr failed
+                         ; CRC validation, probably due to a read
+                         ; error during the restore.
+                         ; We probably previously got a
+                         ; RCINERR_LABELGOOD error on this block.
+                         ;  If both _ONCOPY and _ONRESTORE conditions
+                         ; are present, we report it as _ONRESTORE.
+                         ; Normally the utility should save a copy of the
+                         ; block that is already in the CACHE.DAT file and
+                         ; then restore this block
+ s RCMISSINGBLKS=-16     ; The block # of the last record in the last block
+                         ; successfully read from the input media doesn't
+                         ; match what this block has in incrlabel_LASTBLKNUM
+                         ; and incrlabel_LASTSFN.   We must have skipped
+                         ; some blocks (which is probably the result of read
+                         ; errors.)
+ ; -9, RCBADLABEL, is no longer used.  If we get an input block
+ ; whose label fails validation (e.g. CRC wrong), we act like we
+ ; just got an input error
+ s RCBLKSIZE=-12 ; record in rinbp->ricurr has the wrong
+                 ;block size for this CACHE.DAT file
+                 ;If this is the first block for this CACHE.DAT
+                 ;then we probably are restoring to the wrong
+                 ;CACHE.DAT (one with a different block size),
+                 ;and that is a fatal error.  Otherwise it is
+                 ;probably a label error and we should skip this
+                 ;input block.
+ ; other restore errors in $zu(52,1,...) and $zu(52,4)*/
+ s RCOUTCLUMNT=-3        ; Target of restore is cluster mounted
+                         ;       but must be privately mounted.  This error
+                         ;       occurs when we issue $zu(52,1,...) to open
+                         ;       cache.dat file as target JAO742
+ s RCMAPERR=-5   ; 2kb only: Problem detected between
+                 ;          source & target map blocks.  This is
+                 ;           a fatal error in attempting to restore
+                 ;           to this target file JAO572
+ q
+ /* GetMirrorInfo when the volume header of the 1st backup being
+    restored indicates it came from a mirror. We come here to
+    figure out whether we're a member of this mirror and if so,
+    what we want to do.
+    Returns a value for MirrorRestore based on what we should do with 
+    mirrored db's for a full database restore (selective database restores 
+    the user decides what to do with each database).
+    ReturnValue = 0 - Mirrored databases are not restored
+                = 1 - Backup being restored on mirror member which generated
+                      the backup, all databases are restored
+                = 2 - Backup being restored on a different mirror member, only
+                      mirrored databases which exist locally are restored 
+                      (also used when restoring to async members)
+ */
+GetMirrorInfo(MIRINFO,RESTYPE,QUIETMODE) PUBLIC {
+    ; When MirrorRestore is 0 we will restore mirrored db's but
+    ; we don't do anything special. The target of a restore cannot be
+    ; a mirrored database.
+    s QUIETMODE=+QUIETMODE
+    s isMirror=($SYSTEM.Mirror.GetInfo()[",DEFINED,")||$D(^SYS("MIRRORSET"))
+    if 'isMirror {
+        if 'QUIETMODE {
+           w !,"Restoring a mirror backup but this system is not a mirror member"
+        }
+        quit 0
+    }
+    ;
+    Set isReportingNode = ##class(Config.MirrorMember).isAsyncMember()
+    if isReportingNode {
+        ; Only restore databases which exist on the local system
+        quit 2
+    }
+	s MirrorName=##class(Config.Mirrors).GetMirrorName()
+    if MirrorName="" {
+        if 'QUIETMODE {
+           w !,"Mirror name not set in mirror configuration"
+        }
+        quit 0
+    }
+	s cls=##class(Config.Mirrors).Open(MirrorName,,.rc)
+    s MirrorGUID=cls.GUID
+    s cls=""
+    ;
+    s cls=##class(Config.MirrorMember).Open(,,.rc)
+    if ('rc) {
+        if 'QUIETMODE {
+            k err
+            Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+            w !,"Failed to open mirror member configuration: ",err(1)
+        }
+        quit 0
+    }
+    s SystemName=cls.SystemName
+    if SystemName="" {
+        if 'QUIETMODE {
+            w !,"Mirror system name not defined in mirror member configuration"
+        }
+        quit 0
+    }
+    ;
+    s cls=##class(Config.MapMirrors).Open(MirrorName,SystemName,,,.rc)
+    if ('rc) {
+        if 'QUIETMODE {
+            k err
+            Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+            w !,"Failed to open MapMirrors.",MirrorName," to read info for ",SystemName,": ",err(1)
+        }
+        quit 0
+    }
+    s SystemGUID=cls.GUID
+    s cls=""
+    ;
+    ; these are stored in HEAD(13) by LookupMirrorInfo^DBACK()
+    s BackupMirrorName=$P(MIRINFO,":",1)  ;mirror name
+    s BackupMirrorGUID=$P(MIRINFO,":",2)  ;guid of mirror
+    s BackupSystemName=$P(MIRINFO,":",3)  ;guid of instance which ran backup
+    s BackupSystemGUID=$P(MIRINFO,":",4)  ;guid of instance which ran backup
+    if MirrorGUID'=BackupMirrorGUID {
+        ; this backup is from a different mirror (and we're not a reporting
+        ; node).
+        if 'QUIETMODE {
+            w !,"This backup is from a different mirror (",BackupMirrorName,")."
+        }
+        quit 0
+    }
+    if SystemGUID'=BackupSystemGUID {
+        if 'QUIETMODE {
+            w !,"This backup was made on the other mirror member."
+            if RESTYPE="ALL" {
+               w !,"Only mirrored databases which exist locally will be"
+               w !,"restored."
+            }
+        }
+        quit 2  ;only restore mirrored databases
+    }
+    ; this backup was created by this mirror member,
+    ; restore everything (we could ask what they want to do here)
+    quit 1
+}   
+ /* BuildMirrorDBList returns information about a mirrored
+    database on the local system which might or might not be
+    part of the active mirror (it could be dismounted, it could
+    require catchup or it could be an active database). The
+    information returned matches the information stored by
+    getMirDBINFO^DBACKB for each database when the backup was
+    created. */
+BuildMirrorDBList(QUIETMODE,dblistp) PUBLIC {
+    s x=$zu(40,0,41)
+    s sfnmax=($V($ZU(40,2,176),-2,4))-1  ;highest sfn used
+    s QUIETMODE=+QUIETMODE
+    for sfn=0:1:sfnmax {
+        s dbdata=$ZU(49,+sfn)
+        if +dbdata>-1,($zb(+$p(dbdata,",",17),$zu(40,8,28),1)) {
+           s namedata=$zu(49,+sfn,3)
+           s locdir=$P(namedata,"^",2)
+    	   s info=$SYSTEM.Mirror.DBGetInfoByName(0,locdir)
+    	   if info'="" {
+			   s dbname  =$P(info,"^",2)
+			   s mirjrnfilecnt =$P(info,"^",3)
+			   s jrnoff  =$P(info,"^",4)
+			   s dbguid  =$P(info,"^",6)
+			   s mirguid =$P(info,"^",7)
+			   s mirname =$P(info,"^",8)
+			   s sysguid =$P(info,"^",9)
+			   ;
+			   s nofailoverflag=+$P(info,"^",12)
+			   s nofailoverbit=+$ZU(40,8,31)
+			   s readonly=$ZB(nofailoverflag,nofailoverbit,1)          
+			   if readonly'=0 s readonly=1
+			   ; lastfilecntrestored is usually zero unless the database
+			   ; is currently being caught up. In that situation this contains
+			   ; the mirjrnfilecnt of the last journal file replayed to
+			   ; this database.
+			   s lastfilerest =$P(info,"^",11)
+			   ; 
+			   ; getMirDBINFO uses : as a seperator so we'll use that here
+			   ; as well as it probably reduces confusion. Since we're using
+			   ; : though we can't store any filenames/paths in the string
+			   s backupinfo=dbname_":"_mirjrnfilecnt_":"_jrnoff_":"_dbguid
+			   s backupinfo=backupinfo_":"_mirguid_":"_mirname_":"_sysguid
+			   s backupinfo=backupinfo_":"_readonly
+			   ;
+			   s mirdbname=":mirror:"_mirname_":"_dbname
+			   if '$D(dblistp(mirdbname)) {
+                  s dblistp(mirdbname,"path")=locdir
+                  s dblistp(mirdbname,"info")=backupinfo
+                  s dblistp(mirdbname,"inactive")='$zb(+$p(dbdata,",",18),$zu(40,8,29),1)
+                  s dblistp("path",locdir)=mirdbname  ;create a translation from path->mirror db name
+			   } else {
+				  if 'QUIETMODE {
+				     w !,"Two copies of ",mirdbname," found"
+			         ; 1st copy				     
+					 w !,?5,dblistp(mirdbname,"path")," "
+					 if dblistp(mirdbname,"inactive") {
+						 w "(inactive)"
+					 } else {
+						 w "(active)"
+					 }
+					 ; new copy
+					 w !,?5,locdir," "
+					 if '$zb(+$p(dbdata,",",18),$zu(40,8,29),1) {
+						 w "(inactive)"
+					 } else {
+						 w "(active)"
+					 }
+					 w !,"Ignoring 2nd copy"
+			      }
+			   }
+	   	    }
+        }
+    }
+    quit
+}
+INLOGOR(DIR,SOURCE,TARGET,DISPOSE) ;Adapter, present same i'face for VAX & UX
+ n rc
+ try {
+   s rc=$ZU(31,DIR,SOURCE,TARGET,DISPOSE)
+ } catch {
+   s rc=-1_","_$ze
+   s $ze=""
+ }
+ q rc
+FILENORM(NAME) ;Return normalized version of NAME
+ S OK=1,$ZT="FNERR"
+ i ($zversion(1)=1) N MTDEV S MTDEV=$$OSDEVICE(NAME) I MTDEV'="" D  Q MTDEV
+ . s ISREG=0
+ . W !,"Cache device numbers are not legal here.  Substituting ",MTDEV
+ i '($zversion(1)=1) N MTDEV,DIR S MTDEV=$$OSDEVICE(NAME) I MTDEV'="" S ISREG=0 Q NAME
+ i ($zversion(1)=1) S DIR=NAME
+ i ($zversion(1)=1) q $ZU(12,DIR)
+ i ($zversion(1)=2),$E(NAME,1,2)="\\" S L=$$CheckForTape(NAME) I L'="" S ISREG=0 Q L
+ i ($zversion(1)=2) S L=$L(NAME,"\"),DIR=$P(NAME,"\",1,L-1)
+ i ($zversion(1)=2) IF L>1 S DIR=DIR_"\"
+ i ($zversion(1)=2) S NAME=$ZU(12,DIR)_$P(NAME,"\",L,L),ISREG=$ZU(140,7,NAME),ISREG=$S(ISREG>0:1,ISREG=-2:1,1:0) Q NAME
+ i ($zversion(1)=3) S L=$L(NAME,"/"),DIR=$P(NAME,"/",1,L-1)
+ i ($zversion(1)=3) IF L>1 S DIR=DIR_"/"
+ i ($zversion(1)=3) S NAME=$ZU(12,DIR)_$P(NAME,"/",L,L),ISREG=$ZU(140,7,NAME),ISREG=$S(ISREG=-2:1,ISREG/32768#2:1,1:0) Q NAME
+FNERR S OK=0,ERRMSG="Not a valid device name." Q
+CheckForTape(NAME)
+ S NAME=$ZCVT(NAME,"U")
+ N I,TAPE
+ For I=47:1:62 s TAPE=$$OSDEVICE(I) I NAME=$ZCVT(TAPE,"U") S NAME=I Q
+ I NAME?2N Q NAME
+ I NAME?1"\\.\TAPE"1N Q NAME
+ Q ""
+TQUIWRITE(verbose) q $$QUIESCE(1,"buffer activity",10,verbose)
+TQUIGC(verbose) q $$QUIESCE(2,"garbage collection",10,verbose)
+TQUIDB(verbose) q $$QUIESCE(4,"database expansion",10,verbose)
+TQUIGLO(verbose) q $$QUIESCE(8,"global activity",10,verbose)
+TQUIGLOUPD(verbose) q $$QUIESCE(16,"global updates",10,verbose)
+TQUINET(verbose) q $$QUIESCE(32,"network activity",10,verbose)
+TQUIDISK(verbose) q $$QUIESCE(1+2,"disk activity",10,verbose)
+TQUIUPD(verbose) q $$QUIESCE(1+2+4+16,"update activity",10,verbose)
+TQUISYS(verbose) q $$QUIESCE(1+2+4+8,"system activity",10,verbose)
+QUIESCE(bits,text,retries,verbose,intv) ;
+ s verbose=+$g(verbose),retries=+$g(retries,-1),intv=+$g(intv,1)
+ q ($$Quiesce(bits,text,retries,verbose,intv)>0)
+Quiesce(bits,text,retries,verbose,intv) ;
+ n noWDbits  ;JO1988
+ s $zt="QUIESCEE"
+ q:$zu(51,bits) 1 ;double checking $ZU(51) is no longer necessary
+ s verbose=+$g(verbose),retries=+$g(retries,-1),intv=+$g(intv,1)
+ d msgout($c(13,10)_"WARNING: Switch is set and may affect production for up to "_(retries*intv)_" seconds."_$c(13,10)_"Waiting for "_text_" to finish...",NOFORCE)
+ f  q:'retries  h intv q:$zu(51,bits)  s retries=retries-1 i retries#5=0 d msgout(".",NOFORCE)
+ s noWDbits=1
+ s:$s($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0):''$zu(59,0),1:0) noWDbits=noWDbits+2
+ s noWDbits=$zboolean(bits,noWDbits,2)  ;2 = x & ~ y
+ if '$ZU(51,bits),bits'=1,$zboolean(bits,1,1),$zu(51,noWDbits) {
+	 d msgout($c(13,10)_"System is idle except WD is still running."_$c(13,10)_"     Waiting up to 2 minutes for WD to finish",NOFORCE)
+	 f i=1:1:120 q:$ZU(51,bits)  h 1 if i#5=0 d msgout(".",NOFORCE)
+	 if $ZU(51,bits) s retries=1 ;signal success
+ }
+ d msgout($s(retries:" ready.",1:" abort. "_$$quiescefailmsg(bits))_$c(13,10),NOFORCE)
+ q retries
+quiescefailmsg(bits)
+ N ret,clu,clumsg s ret="",clu=$zb(bits,512+256+128,1),clumsg=""
+ if $zb(clu,128,1)||($zb(clu,(256+512),1)=(256+512)) s clu=128,clumsg=" (cluster wide)"
+ if $zb(clu,512,1) s clumsg=" (cluster master only)"
+ if $zb(clu,256,1) s clumsg=" (cluster slaves only)"
+ if $zb(bits,1,1)&&('$ZU(51,clu+1)) S ret=ret_"write daemon"_clumsg_","
+ if $zb(bits,2,1)&&('$ZU(51,clu+2)) S ret=ret_"garbage collector"_clumsg_"," 
+ if $zb(bits,4,1)&&('$ZU(51,clu+4)) S ret=ret_"file expander"_clumsg_","
+ if $zb(bits,8,1)&&('$ZU(51,clu+8)) S ret=ret_"global reference"_clumsg_","
+ if $zb(bits,16,1)&&('$ZU(51,clu+16)) S ret=ret_"global update"_clumsg_","
+ if $zb(bits,32,1)&&('$ZU(51,clu+32)) S ret=ret_"client-side network connections"_clumsg_","
+ if $zb(bits,64,1)&&('$ZU(51,clu+64)) S ret=ret_"network server activity"_clumsg_","
+ if ret'="" s ret="Quiesce failed reason: "_$e(ret,1,*-1) d $zu(9,"",ret,1,2) i $d(^rOBJ("ZQuiesceFail")) d ^ZQuiesceFail
+ Q ret
+QUIESCEE s $zt="" d $zu(9,"","QUIESCE: "_$ze,(1>0),1) q -1 ;0
+CluQuiet(switch,target,timeout)
+ n flags,rc
+ i $g(switch)-10,$g(switch)-13 ztrap "SWITCH"
+ n targetmsg s target=$g(target)
+ i target=1 s target=256,targetmsg=" on cluster slave members"
+ e  i target=2 s target=512,targetmsg=" on cluster master"
+ e  s target=512+256,targetmsg=" cluster wide"
+ s flags=1+2+4+$s(switch=10:8,1:16)
+ s rc=$$Quiesce(flags+target,$s(switch=10:"system activity",1:"update activity")_targetmsg,$g(timeout,10),'$g(QUIET,$g(QUIETLY)))
+ i rc<0 ztrap "Abort"
+ q rc
+quietsw(switch,timeout) ;quiesce activities w/ timeout after setting switch 10 or 13
+ n flags,rc
+ i $g(switch)-10,$g(switch)-13 ztrap "SWITCH"
+ s flags=1+2+4+$s(switch=10:8,1:16)
+ i CLUBACKUP s flags=flags+128
+ s rc=$$Quiesce(flags,"disk cleanup",$s($g(timeout)="":30,1:timeout),'$g(QUIET))
+ i rc<0 ztrap "Abort"
+ q rc
+hibernate(switch,released,timeo) ;
+ i +$g(released) d msgout($c(13,10)_"Switch "_switch_" is released.",NOFORCE)
+ n hibtime s hibtime=$s(timeo>3:10,timeo>2:1,timeo>1:.1,timeo>0:.01,1:10)
+ d msgout($c(13,10)_"Backup will hibernate for "_hibtime_" second(s) and try again."_$c(13,10)_"You may abort Backup via Ctrl-C. ",NOFORCE) 
+ i hibtime<1 h hibtime
+ e  n i f i=1:1:hibtime h 1 d msgout(".",NOFORCE)
+ d msgout($c(13,10),NOFORCE)
+ q
+ENQ10 ;
+ n t s t=$g(quietimeout,60) s:t>0 t=(t+9)\10 ;rounded up to 10 sec
+ s $zt="ENQ10e"
+ i CLUBACKUP d  q
+ . f  q:$$CLU^SWSET(10,1,ALRDY10,$g(QUIETMASTERONLY))  s t=t-1 zt:'t "Abort" d hibernate(10,'ALRDY10,t)
+ i ALRDY10 q:$$quietsw(10)  zt "Abort"
+ f  S %SW=10,%VAL=1 D INT^SWSET  q:$$quietsw(10)  s t=t-1 zt:'t "Abort" d DEQ10,hibernate(10,1,t)
+ Q
+ENQ10e s $zt="" d DEQ10 ztrap $ze
+DEQ10 ;
+ i CLUBACKUP,$ZU(95,10,0)  ; Clear SW10 clusterwide
+ i 'ALRDY10 s %SW=10,%VAL=0 D INT^SWSET
+ Q
+ENQ13 ;
+ n t s t=$g(quietimeout,60) s:t>0 t=(t+9)\10 ;rounded up to 10 sec
+ s $zt="ENQ13e"
+ i CLUBACKUP d  q
+ . f  q:$$CLU^SWSET(13,1,ALRDY13)  s t=t-1 zt:'t "Abort" d DEQ13,hibernate(13,'ALRDY13,t)
+ i ALRDY13 q:$$quietsw(13)  zt "Abort"
+ f  S %SW=13,%VAL=1 D INT^SWSET  q:$$quietsw(13)  s t=t-1 zt:'t "Abort" d DEQ13,hibernate(13,1,t)
+ Q
+ENQ13e s $zt="" d DEQ13 zq 1 g:$zt'="" @$zt q
+DEQ13 ;
+ i CLUBACKUP,$ZU(95,13,0)  ; Clear SW13 clusterwide
+ i 'ALRDY13 s %SW=13,%VAL=0 D INT^SWSET
+ Q
+HOLDWD(dir) ;suspend write daemon (dir may be passed as an array)
+ n n
+ i $zu(182,1,0) ;clear any remaining backup request
+ f  q:'$zu(182,0)  h 1  ;wait until write daemon runs again
+ i $d(dir)<10 d $zu(52,9,dir,1) d $zu(182,2,0,+$zu(49,dir)) s n=1 i 1
+ e  s dir="" f n=0:1 s dir=$o(dir(dir)) q:dir=""  d $zu(52,9,dir,1) d $zu(182,2,n,+$zu(49,dir))
+ i $zu(182,1,n)  ;set number of databases to back up
+ f  q:$zu(182,0)  h 1  ;wait until write daemon suspends
+ q
+FREEWD ;unsuspend write daemon
+ i $zu(182,1,0)
+ q
+msgout(aaamess,flag) ;
+         s flag=$g(flag,1) ; default to FORCE
+         W *-1            ;Flush the input buffer                     ;SSG012
+         q:'$L(aaamess)   ; Avoid argumentless writes...
+         i $g(logfile)'="" u logfile w aaamess
+         u 0
+         q:flag=3  ; 1 = FORCE, FORCE, 2 = NOFORCE, 3 = LOGONLY
+         i '$G(INTERNAL,0)!('$G(NOINPUT,0)&(flag=1!'$G(QUIET,0))) w aaamess
+         i $g(gui) D  
+         . s return=$$IjcMsg^%Wprima("DI"_aaamess) ; Retval might =  cancel msg
+         . i return="CANCEL" d  
+         . . i $$IjcMsg^%Wprima("DI"_$c(13,10)_"Abort received!"_$c(13,10))
+         . . zt "Abort"
+         u 0 
+         q
+timestmp(flag) 
+         n msg,%TS,%TN
+         s msg="TIMESTAMP: "
+         s %DN=+$H d INT^%DO
+         s msg=msg_%DS
+         s %TN=$P($h,",",2) d ^%TO
+         s msg=msg_" "_%TS
+         d msgout($c(13,10)_msg_$c(13,10))
+         q
+OSDEVICE(mdevice,new) ;osdevice + range check, pad input, strip output.
+ s mdevice=+mdevice q:mdevice<47 ""  q:mdevice>62 ""
+ i $d(new) s new=$$zpad(new,32)
+ q $$zstrip($$osdevice(mdevice,.new))
+osdevice(mdevice,new) ;"Raw" osdevice
+ n adr,old,size,where,charsize
+ s $ZT="osdeverr"
+ s charsize=$$charsize^%Wprim() ; check size one char
+ s size=32,adr=(mdevice-47)*(size*charsize)+$ZU(40,2,28),where=-2
+ s old=$v(adr,where,-size_"w")
+ i $d(new) v adr:where:-size_"w":new
+ q old
+osdeverr q ""
+zstrip(x) ;Return x with ASCII NUL's removed
+ q $tr(x,$c(0),"")
+zpad(x,len) ;x, maybe truncated, NUL-padded to length len, one NUL guaranteed
+ n zeroes
+ s zeroes=$j("",len),zeroes=$tr(zeroes," ",$c(0)) ;String of len NUL's
+ s x=$e(x,1,len-1) ;Silently truncate x if necessary
+ s $e(zeroes,1,$l(x))=x
+ q zeroes
+ZU(A,B,C,D,E,F,G,H,I,J,K,L,M,N,P) ;so needn't change $$ZU's to $ZU's
+ IF '$D(B) Q $ZU(A)
+ IF '$D(C) Q $ZU(A,B)
+ IF '$D(D) Q $ZU(A,B,C)
+ IF '$D(E) Q $ZU(A,B,C,D)
+ IF '$D(F) Q $ZU(A,B,C,D,E)
+ IF '$D(G) Q $ZU(A,B,C,D,E,F)
+ IF '$D(H) Q $ZU(A,B,C,D,E,F,G)
+ IF '$D(I) Q $ZU(A,B,C,D,E,F,G,H)
+ IF '$D(J) Q $ZU(A,B,C,D,E,F,G,H,I)
+ IF '$D(K) Q $ZU(A,B,C,D,E,F,G,H,I,J)
+ IF '$D(L) Q $ZU(A,B,C,D,E,F,G,H,I,J,K)
+ IF '$D(M) Q $ZU(A,B,C,D,E,F,G,H,I,J,K,L)
+ IF '$D(N) Q $ZU(A,B,C,D,E,F,G,H,I,J,K,L,M)
+ IF '$D(P) Q $ZU(A,B,C,D,E,F,G,H,I,J,K,L,M,N)
+           Q $ZU(A,B,C,D,E,F,G,H,I,J,K,L,M,N,P)
+MORE Q      ;JAO580 added 
+  ;#endif $$$NEWINC  ; CFL284-

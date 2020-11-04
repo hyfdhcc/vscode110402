@@ -1,0 +1,177 @@
+ROUTINE NLS2 [Type=INT]
+NLS2	; Manage NLS properties (System settings)
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;%ShmObj.INC ; JLC1084 11/07/07
+ Quit
+Current() [nLines] PUBLIC {
+ If '$D(nLines) Do GetLines()
+ Set options(1)="Display loaded I/O tables"
+ Set options(2)="Display loaded collations"
+ Set options(3)="Display system defaults for I/O tables"
+ Set options(4)="Display system defaults for internal tables"
+ Set options(5)="Display process defaults for I/O tables"
+ Set options(6)="Display process defaults for internal tables"
+ While (1) {
+	Set op="",st=##Class(%Library.Prompt).GetMenu("Option?",.op,.options,,128+4)
+	If (st=2)||(st=3) Quit
+	If op=1 { Do DispIOTabs() }
+	ElseIf op=2 { Do DispCOLTabs() }
+	ElseIf op=3 { Do DispIOSysDef() }
+	ElseIf op=4 { Do DispIntSysDef() }
+	ElseIf op=5 { Do DispIOProcDef() }
+	ElseIf op=6 { Do DispIntProcDef() }
+	Else { Quit }
+ } 
+}
+DispIOTabs() [nLines] {
+ Write #,$$Justify(" Loaded I/O tables ",75,2,"-"),!
+ Set hdr1="I/O Table pair   ",hdr2="Type                "
+ Do DispHeader(hdr1,hdr2)
+ Set tab=$V((0)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25)),nam=""
+ For {
+	Set nam=$ZU(127,2,tab,nam) Quit:nam=""
+	If nLines,$Y+5>nLines {
+		Set st=##class(%Library.Prompt).GetMore()
+		If st=3 ZTrap "QUIT"
+		If st=2 Quit
+		Write # Do DispHeader(hdr1,hdr2)
+	}
+	Do DispNamEle(tab,nam,2)
+ }
+}
+DispCOLTabs() {
+ Write #,$$Justify(" Loaded collations ",75,2,"-"),!
+ Do DispHeader("Number","Name                     ")
+ For col=0,1,5:1:255 {
+	Set nam=$$GetCOL(col)
+	If nam'="" Write !,$J(col,4),?9,nam
+ }
+}
+GetCOL(col) {
+ Set rul=$ZU(23,2,col),nam=""
+ If $P(rul,"^",1,2)'="255^255" {
+	Set num=$P(rul,"^",3)
+	If num {
+		Set offs=$ZU(83,num),dec=+$P(offs,",",2),enc=+offs
+		If enc||dec {
+			Set nam=$$GetOffName(enc,"COL")
+			If col>128 Set nam=nam_" string"
+		}
+	} Else {
+		If col<6 { Set nam=$P("Old ANSI^New ANSI^^^^Cache standard","^",col+1) }
+ 		ElseIf col#128<6 { Set nam=$P("Old string^New string^^^^Cache standard string","^",col-127) }
+		Else { Set nam="???" }
+ 	}
+ }
+ Quit nam
+}
+DispIOSysDef() {
+ Write #,$$Justify(" System defaults for I/O tables ",60,2,"-"),!
+ Do DispIOTab($ZU(40,2,105),-2)
+}
+DispIOProcDef() {
+ Write #,$$Justify(" Process defaults for I/O tables ",60,2,"-"),!
+ Do DispIOTab($ZU(40,1,27),-1)
+}
+DispIntSysDef()
+{
+ Write #,$$Justify(" System defaults for internal tables ",60,2,"-"),!
+ Do DispDef($ZU(40,2,104),-2)
+ Do DispCOL(0)
+ Do DispTab("",$ZU(40,2,106),"$X/$Y action",0,-2)
+}
+DispIntProcDef()
+{
+ Write #,$$Justify(" Process defaults for internal tables ",60,2,"-"),!
+ Do DispDef($ZU(40,1,26),-1)
+ Do DispCOL(1)
+ Do DispTab("",$ZU(40,1,28),"$X/$Y action",0,-1)
+}
+DispNamEle(tab, nam, ele) {
+ Set ele(0)=0,t1=20
+ For i=1:1:ele Set ele(i)=$ZU(127,1,tab,nam,i) Set:ele(i) ele(0)=1
+ Write !,nam If 'ele(0) Write ?t1,"Empty" Quit
+ For i=1:1:ele {
+	If ele(i) {
+		Write:i>1 ! Write:ele-1 ?t1-6,$P("In,Out",",",i)
+		Write ?t1,$$GetOffName(ele(i))
+	}
+ }
+}
+DispTab(hdr,base,names,max,typ) {
+ If hdr'="" Do DispHeader(hdr,"Name           ")
+ For i=0:1:max {
+	Set off=$V((i)*$ZU(40,0,25)+(base),typ,$ZU(40,0,25)) Write !,$P(names,",",i+1)
+	If off { Write ?20,$ZU(126,5,off) }
+ }
+ Write !
+}
+DispIOTab(base,typ) {
+ Do DispHeader("Table            ","Name           ")
+ For i=0:1:5,8:1:9 {
+	Set off=$V((i)*$ZU(40,0,25)+(base),typ,$ZU(40,0,25)) Write !,$P("Process,Cache Terminal,Other terminal,File,Magtape,TCP/IP,DSM-DDP,DTM-DCP,System call,Printer",",",i+1)
+	If off { Write ?20,$ZU(126,5,off) }
+ }
+ Write !
+}
+DispCOL(proc) {
+ Set col=$ZU(23,proc),nam=$$GetCOL(col)
+ Write !,"Collation",?20,nam
+}
+DispDef(base,typ) {
+ Do DispHeader("Table            ","Name                ")
+ For i=0:1:6 {
+	If i=5,'$ZBITGET($ZVERSION(0),30) Continue
+	Set off=$V((i)*$ZU(40,0,25)+(base),typ,$ZU(40,0,25)) Write !,$P("Pattern match,Identifier,Uppercase,Lowercase,Titlecase,U2 pattern match,Alphaup",",",i+1)
+	If off { Write ?20,$$GetOffName(off,$P("Pattern,Ident,UpperCase,LowerCase,TitleCase,Pattern,UpperCase",",",i+1)) }
+ }
+}
+DispHeader(h1,h2,h3,h4) {
+ Write ! Set sep="   "
+ Write:$D(h1) h1 Write:$D(h2) sep,h2 Write:$D(h3) sep,h3 Write:$D(h4) sep,h4
+ Write !
+ Write:$D(h1) $TR($J("",$L(h1))," ","-")
+ Write:$D(h2) sep,$TR($J("",$L(h2))," ","-")
+ Write:$D(h3) sep,$TR($J("",$L(h3))," ","-")
+ Write:$D(h4) sep,$TR($J("",$L(h4))," ","-")
+}
+GetOffName(off,typ) {
+ Set oid=+$O(^|"%SYS"|SYS("shm","Off",1,off,"")),typ=$G(typ,"XLT")
+ If 'oid Quit $S(typ="XLT"||(typ="COL")||(typ["Case"):"Built-in",1:"Latin1")
+ Set nam=$Q(^|"%SYS"|SYS("shm","Src",0,oid)) Quit:$QS(nam,3)'=0 "" Quit:$QS(nam,4)'=oid ""
+ Quit $S(typ="XLT":$QS(nam,7)_"->"_$QS(nam,8),1:$QS(nam,8))
+}
+GetLines() [nLines] {
+ Set nLines=24
+ Set st=##class(%Library.Prompt).GetNumber("Number of lines for paging (0=don't page): ",.nLines,0,200)
+}
+Justify(Str,Wid,Whr=1,Chr=" ") {
+ Set len=$L(Str)
+ If len=Wid Quit Str
+ If len>Wid Quit $E(Str,1,Wid)
+ Set $P(blnks,Chr,Wid+1)=""
+ If Whr=1 {
+	Set Str=Str_$E(blnks,len+1,Wid)
+ } ElseIf Whr=2 {
+	Set n=Wid-len\2,Str=$E(blnks,1,n)_Str_$E(blnks,1,n)
+	If $L(Str)<Wid Set Str=Chr_Str
+ } Else {
+	Set Str=$E(blnks,len+1,Wid)_Str
+ }
+ Quit Str
+}

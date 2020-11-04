@@ -1,0 +1,55 @@
+ROUTINE %SYS.NOJRN [Type=INT]
+NOJRN ;Disable/Enable job's journaling ; HYY1470 08/23/09
+ ;
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;   
+ D DISABLE() Q
+DISABLE() public { 
+ I '($V(0,-1,4)\1024#2) { V 0:-1:4:$V(0,-1,4)+1024 }
+ Q
+ } 
+STOP() public {
+ I '($V(0,-1,4)\1024#2) { D DISABLE Q 1 } ;journal was active (& now isn't)
+ Q 0 ;journal was not active
+} 
+ENABLE() public {
+ I $V(0,-1,4)\1024#2 { V 0:-1:4:$V(0,-1,4)-1024 }
+ Q
+ }
+CURRENT() public {
+ q '($V(0,-1,4)\1024#2)
+ }
+DisableJournal() public {
+ i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"}
+ q $$STOP()
+}
+EnableJournal() public {
+ i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"}
+ D ENABLE
+ q
+}
+SetJournal(journal) public {
+	If journal=('($view(0,-1,4)\1024#2)) Quit journal
+	i '($e($roles,1,$l("%All"))="%All") { n $ET,$roles s $ET="",$roles=$roles_","_"%All"}
+	If journal {
+		View 0:-1:4:$view(0,-1,4)-1024
+	} Else {
+		View 0:-1:4:$view(0,-1,4)+1024
+	}
+	Quit 'journal
+}

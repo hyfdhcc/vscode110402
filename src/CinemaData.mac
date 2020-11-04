@@ -1,0 +1,170 @@
+ROUTINE CinemaData
+#Include %occInclude
+
+CinemaData //
+ //
+ // Create sample data for the Cache' Cinema application
+ //
+ do Load(4)
+ quit
+Load(Level) //
+ new cat,i,the,TheCount
+ //
+ set Level = $G(Level,4)
+ //
+ // Delete existing data
+ set $zt="ErrorClassDelete"
+ do ##class(Cinema.Film).%DeleteExtent()
+ if (Level > 1) {
+         do ##class(Cinema.FilmCategory).%DeleteExtent()
+ }
+ if (Level > 2) {
+         do ##class(Cinema.Theater).%DeleteExtent()
+         do ##class(Cinema.Show).%DeleteExtent()
+ }
+ if (Level > 3) {
+	 do ##class(Cinema.Review).%DeleteExtent()
+ }
+ //
+ set $zt="ErrorClassLoad"
+ //
+ // Create Theater objects
+ if (Level > 2) {
+         set TheCount = 9
+         set the(1) = ##class(Cinema.Theater).%New()
+         set the(1).TheaterName= "General Cinema Cambridge"
+         set the(2) = ##class(Cinema.Theater).%New()
+         set the(2).TheaterName= "Boston Multiplex"
+         set the(3) = ##class(Cinema.Theater).%New()
+         set the(3).TheaterName= "Loews Downtown"
+         set the(4) = ##class(Cinema.Theater).%New()
+         set the(4).TheaterName= "General Cinema Boston"
+         set the(5) = ##class(Cinema.Theater).%New()
+         set the(5).TheaterName= "Downtown Multiplex"
+         set the(6) = ##class(Cinema.Theater).%New()
+         set the(6).TheaterName= "Loews Cambridge"
+         set the(7) = ##class(Cinema.Theater).%New()
+         set the(7).TheaterName= "General Cinema Downtown"
+         set the(8) = ##class(Cinema.Theater).%New()
+         set the(8).TheaterName= "Cambridge Multiplex"
+         set the(9) = ##class(Cinema.Theater).%New()
+         set the(9).TheaterName= "Loews Boston"
+         //
+         // Set ticket prices
+         for i=1:1:TheCount {
+         set the(i).AdultPrice= 6 + ($R(8)*.25)
+         set the(i).ChildPrice= the(i).AdultPrice - 1.50
+         do (the(i)).%Save()
+         }
+ }
+ //
+ // Create Film and FilmCategory objects
+ //
+ // Drama Category
+ set cat=$$CreateCategory("Drama")
+ do CreateFilm(cat,"Her Spicy Brothers","A post-modern excursion into family dynamics and Thai cuisine.",130,47000,1,"PG-13")
+ do:Level>3 CreateReviewObject("Her Spicy Brothers", 5, "Director Francis Drake breaks with tradition and casts its first ever Asian-American princess in this enchanting reworking of the Grimm brothers' fairytale, set in Shanghai around the time of the First World War. Tiana (voiced by Emma Carlton) is turned into a frog after kissing a smooth-talking amphibian, and her ever-squabbling brothers (John Gascogne and Tim Wanders) have to embark on a perilous quest to get her turned back into a human.")
+ do CreateFilm(cat,"Einstein's Geisha","A gripping true story of honor and discovery",121,50000,1,"R")
+ do:Level>3 CreateReviewObject("Einstein's Geisha", 4, "The grass certainly seems to be greener on the other side for a doting father in this tender romance directed by Kim Kash, adapted from the novel by Philippe Dutrez. Stock trader Jean (Ed Kowalsky) is devoted to his wife Anne-Marie (Mary Po) and young son, enjoying a simple yet happy life. When Jean meets his son's new teacher, Catherine Marly (Sophie Laquelle), something stirs within the broker and he begins to question whether his marriage is everything he hoped it would be. As Jean slowly falls for Mademoiselle Catherine's charm and vulnerability, he risks his marriage to edge closer to the object of his unexpected yet powerful affections.")
+ do CreateFilm(cat,"A Kung Fu Hangman","A Jungian analysis of pirates and honor",101,5000,1,"PG")
+ do CreateFilm(cat,"Holy Cooking","A charming diorama about sibling rivalry",124,7000,1,"G")
+ do:Level>3 CreateReviewObject("Holy Cooking", 3, "Love blossoms when a father least expects in Alex Anderson's modern day fairytale. Italian fisherman Giovanni (Luca DeMoroni) is struggling to raise his young daughter Annie (Shania Regal), who requires kidney dialysis. Casting out his nets one day, Giovanni captures a mysterious woman called Adrienne (Cindy Ford), and the pair begin to fall in love. Adrienne signals its intentions early on, but it takes its time to state the obvious.")
+ //
+ // Animation category
+ set cat=$$CreateCategory("Animation")
+ do CreateFilm(cat,"The Low Calorie Guide to the Internet","An exciting diorama of struggle in Silicon Valley",100,48000,1,"PG")
+ do CreateFilm(cat,"New York Dog","A heart-warming tale of friendship",91,7500,1,"G")
+ do CreateFilm(cat,"Mysterious Mind","A colorful trip through the world of nursery school art",206,15000,1,"PG-13")
+ do CreateFilm(cat,"The French Brothers","A warming tour-de-force of extinction and UFOs",121,25000,1,"R")
+ //
+ // Thriller category
+ set cat=$$CreateCategory("Thriller")    
+ do CreateFilm(cat,"The Joy Diet","A can't-turn-away tale of pathos and lust",121,5000,1,"R")
+ do:Level>3 CreateReviewObject("The Joy Diet", 4, "Written and directed by Kenneth Yngish, this film is this year's The Wrestler, following a self-destructive has-been on the slow and painful road to redemption. Ivan Paricz's portrayal of drunkard Ted Spencer doesn't earn our sympathy with ease, yet through an unlikely romance with reporter Jeanine Alden (Conny Johnson), we are able to glimpse the tenderness and sadness in this pitiful man. Ivan delivers a compelling performance, and he is matched by this emotionally raw portrayal of a lonely woman who is heading for heartache.")
+ do CreateFilm(cat,"Invisible House",
+         "An illuminating fantasy of one man's search for the truth and one woman's search for self identity.",
+         115,49000,1,"PG-13")
+ do CreateFilm(cat,"The New York Robot","A mesmerizing adventure of twenty first century urban life",100,17000,1,"PG")
+ do CreateFilm(cat,"Blue Connection","An other worldy examination of Internet romance",130,19000,1,"G")
+ //
+ // Action category
+ set cat=$$CreateCategory("Action")      
+ do CreateFilm(cat,"A Hollow Way of Life","A fast-paced fantasy about redemption at the OJ Simpson trial",115,44000,1,"R")
+ do CreateFilm(cat,"The Santa Fe Conspiracy","A whirlwind tale of one man's search for truth",120,43000,1,"PG")
+ do:Level>3 CreateReviewObject("The Santa Fe Conspiracy", 4, "Keanu Ulmenson (Patrick Rooney) is an outspoken taxi driver who takes a very dim view of anything to do with the government - so much so that he spends his days making up complicated scenarios of conspiracies. When one of his theories happens to be true, he finds himself chased by the person hiding behind it. Helen Wayne is the love interest of the film with only one problem - she works for the government Patrick so devotedly mistrusts. Any film containing such a heavyweight cast is of course going to be nothing short of mesmerising. The plotline reaches out to a platter of genres and the fact that it can't be pigeonholed, only makes it better viewing. Anecdote: Keanu Ulmenson went that extra mile to get to know his co-star Helen, by dispatching a gift-wrapped freeze-dried rat to her, before filming started!")
+ do CreateFilm(cat,"An Invisible Attitude","A humerous farce of scandal amid the search for self identity",105,8000,1,"PG-13")
+ do:Level>3 CreateReviewObject("An Invisible Attitude",4,"Scandinavian director Johann Johannson introduces a memorably unconventional heroine in his superb adaptation of the best-selling novel by James Craydon. Part one of a trilogy, this is a gripping and suspenseful yarn full of intrigue and deception that pulls no punches with the violence meted out to the morally flawed characters. The violence is graphic and shocking, yet these scenes are never gratuitous and the director ensures that every bone-crunching punch is vital to the serpentine narrative.")
+ do CreateFilm(cat,"On English Time","An angst-ridden yarn of the quest for glory on the high seas",262,700,1,"G")
+ //
+ // Comedy category
+ set cat=$$CreateCategory("Comedy")      
+ do CreateFilm(cat,"Cooking with Jane Austen","A complex history of struggle and redemption",117,5000,1,"R")
+ do CreateFilm(cat,"The Art of Time","A humerous look at UFOs and their impact on the stock market",121,13000,1,"PG-13")
+ do CreateFilm(cat,"The Amusing Boy","One family's triumphant adventure",121,5000,1,"PG")
+ do CreateFilm(cat,"The Holistic Lizard","A humerous look at cross-species friendship",103,16000,1,"G")
+ do:Level>3 CreateReviewObject("The Holistic Lizard",2,"Hollywood has enjoyed a long love affair with man's best friend, with the canine star often outshining the human actors. This is certainly true in this yarn, which pits Ben Castor and Ann-Sue Pollux against the cutest of fluffy Akita puppies and an impeccably trained full-grown version. While many dog movies can be little more than a schmaltz-fest, director Medley Scott reins it in, keeping his meditation on love and everyday life just the right side of sentimental.")
+ //
+ quit 1
+ //
+CreateFilm(Cat,Title,Desc,Len,Sold,Playing,Rating)
+ new film
+ set film=##class(Cinema.Film).%New()
+ set film.Title=Title
+ set film.Description=Desc
+ set film.TicketsSold=Sold
+ set film.PlayingNow=Playing
+ if (Level > 1) {
+         set film.Length=Len
+         set film.Rating=Rating
+         set film.Category=Cat
+ }
+ do film.%Save()
+ if (Level > 2) {
+         do CreateShows(film)
+ }
+ quit
+ //
+CreateCategory(Name)
+ if (Level < 2) q 0
+ new cat
+ set cat=##class(Cinema.FilmCategory).%New()
+ set cat.CategoryName=Name
+ do cat.%Save()
+ quit cat
+ //
+CreateShows(TheFilm) //
+ // Add Show objects for a film
+ new TheNum,i,show,StartTime
+ set TheNum = 1 + $R(7)
+ //
+ for i = TheNum:1:TheNum+2 {
+         set StartTime = 12 * 3600 + (300 * $R(6))
+         while StartTime < (3600 * 22) {
+                 set show=##class(Cinema.Show).%New()
+                 set show.Film=TheFilm
+                 set show.Theater=the(i)
+                 set show.StartTime=StartTime
+                 do show.%Save()
+                 set StartTime = StartTime + (TheFilm.Length * 60) + 1200 \ 300 * 300
+         }
+ }
+ quit
+ //
+ErrorClassDelete //
+ quit -1
+ErrorClassLoad //
+ quit -2
+
+CreateReviewObject(title, score, text)
+	set fId = $o(^CinemaooFilmI("TitleIndex", " "_$zconvert(title,"U"), ""))
+	quit:fId=""
+	set f = ##class(Cinema.Film).%OpenId(fId)
+	quit:f=""
+	
+	set review = ##class(Cinema.Review).%New()
+	set review.Film = f
+	set review.ReviewScore = score
+	set review.ReviewText = text
+	do review.%Save()
+	set review = ""
+	quit

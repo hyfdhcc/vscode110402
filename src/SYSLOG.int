@@ -1,0 +1,126 @@
+ROUTINE SYSLOG [Type=INT]
+SYSLOG ; System Error Log Report ; STC1843 09/23/10
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ERRLOG ;
+ New
+ New POP,%ST
+ N IOMS s IOMS=$System.Device.GetRightMargin()
+ n SELF d OUT^%IS q:POP  s SELF=IO=$I
+ n detail s detail=($$YN("Show detail","N")="Y")
+ If POP G Done  
+ d INT^%D d INT^%T U IO
+ W !,"Cache"_" System Error Log printed on ",%DAT," at ",%TIM 
+ w !,"--------------------------------------------------------"
+ D INT
+Done I 'SELF C IO Q
+ U IO:/MAR=IOMS
+ Q
+INT ;
+ n e
+ n bignum,dispval,%DN,%TN,%TS
+ i '$d(detail) s detail=0
+ s bignum=2147483648 ; Largest positive #
+ d ^ST i $D(%ST("LOGENTRY")) g ERRNEW
+ ; Use old SYSLOG format
+ w !,"Number",?12,"process",?24,"addr",?36,"time"
+ f e=%ST("LOGTAB"):16 q:$V(e,-3,4)=0  w ! f o=0:4:12 d
+ . s dispval=$V(e+o,-3,4)
+ . ; if this is the errno, if its negative, make it so
+ . i 'o,dispval'<bignum s dispval=dispval-(bignum*2)
+ . i o=12 d
+ .. s %DN=47117+dispval\86400,%TN=dispval#86400
+ .. d 200^%TO s dispval=$ZDATE(%DN,2,,4)_" "_%TS
+ . w ?o*3," ",dispval
+ q
+ERRNEW ;
+ n esize,tab,nerr,tabsize,e,lin,mod,cnt,i
+ s esize=%ST("LOGENTRY")
+ s tab=%ST("LOGTAB"),tabsize=$V(tab,-3,4),nerr=$V(tab+4,-3,4),tab=tab+8
+ i nerr<tabsize s cnt=nerr 
+ e  s cnt=tabsize
+ w !,"Printing the last ",cnt," entries out of ",nerr," total occurrences."
+ w !,"Err",?6,"Process",?17,"Date/Time"
+ i esize>16 w ?37,"Mod",?41,"Line"
+ w ?47,"Routine"
+ w ?66,"Namespace"
+ f i=1:1:cnt D ERRLIN
+ w ! q
+ERRLIN ;
+ n errtoolong,charsize
+ s nerr=nerr-1,e=tab+((nerr#tabsize)*esize)
+ s dispval=$V(e+$zu(40,31,1),-3,4)
+ i dispval'<bignum s dispval=dispval-(bignum*2)
+ i $l(dispval)>5 s errtoolong=1
+ e  s errtoolong=0
+ w !,dispval,?6
+ i errtoolong w " "
+ w $s(($zversion(1)=1):$ZH(+$v(e+$zu(40,31,2),-3,4)),1:$v(e+$zu(40,31,2),-3,4))
+ s dispval=$V(e+$zu(40,31,3),-3,$ZU(40,0,55))
+ s dispval=$zdth(dispval,-2)
+ s %DN=$P(dispval,",",1),%TN=$P(dispval,",",2)
+ d 200^%TO s dispval=$zd(%DN)_" "_%TS
+ n len,toolong,rouval,nsval,nslen,cast
+ s charsize=$$charsize^%Wprim()
+ i charsize=2 s cast="w"
+ e  s cast=""
+ s len=$v(e+$zu(40,31,5),-3,charsize),toolong=18
+ i len s rouval=$v(e+$zu(40,31,5)+charsize,-3,$s('detail && (len>toolong):-toolong,1:-len)_cast)
+ e  s rouval=""
+ i $x>16 w $s('detail:" ",1:$c(13,10))
+ w ?17,dispval
+ i esize>16 d  
+ . s mod=$V(e+$zu(40,31,4),-3,4),lin=mod#65536,mod=mod\65536
+ . i $x>36 w $s('detail:" ",1:$c(13,10))
+ . w ?37,mod
+ . i $x>40 w $s('detail:" ",1:$c(13,10))
+ . w ?41,lin
+ i $x>46 w $s('detail:" ",1:$c(13,10))
+ w ?47,rouval
+ s len=$v(e+$zu(40,31,10),-3,charsize),toolong=13
+ i len d  
+ . s nsval=$v(e+$zu(40,31,10)+charsize,-3,$s('detail && (len>toolong):-toolong,1:-len)_cast)
+ . i $e(nsval,1,2)="@@" s nsval="^^"_$e(nsval,3,*)
+ e  s nsval=""
+ s nslen=$l(nsval)
+ i 'detail d  
+ . i $x>65 w " "
+ . w ?66,nsval
+ e  d  
+ . i $x>(79-nslen) w !,?(79-nslen),nsval
+ . e  d  
+ . . i $x>65 w " " 
+ . . w ?66,nsval
+ i 'detail q  
+ w !,?6
+ d showitem($zu(40,31,8))
+ d showitem($zu(40,31,6))
+ d showitem($zu(40,31,7))
+ d showitem($zu(40,31,9))
+ q
+showitem(off) 
+ s len=$v(e+off,-3,charsize)
+ i len d  
+ . s val=$v(e+off+charsize,-3,-len_cast)
+ . i off=$zu(40,31,8) w val
+ . e  w "/",val
+ q
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R

@@ -1,0 +1,626 @@
+ROUTINE NLSLOAD [Type=INT]
+NLSLOAD   ; Load FULLNLS tables, locales, defaults ; JLC1925 10/28/15
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;%ShmObj.INC ; JLC1084 11/07/07
+ Quit
+Locale(locale) New (locale) Set $zt="%LocaleERROR"
+ Set ref=$name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","LocalesD")),ref=$name(@ref@(locale))
+ If '$D(@ref) Goto LocaleOld
+ Set lrec=@ref
+ Set msg="Loading Locale "_locale_" ("_$LG(lrec,6)_") from objects"
+ Set charset=$LG(lrec,2)
+ Do $zu(9,"",msg,(0>0),0)
+ Set tabs=$LG(lrec,4),typ="COL"
+ For i=1:1:$LL(tabs) {
+		Set nam=$LI(tabs,i)
+		Set load(typ,nam,0)=$$LoadTable(typ,nam,charset)
+		Set load(typ,nam,1)=$$LoadTable(typ,charset,nam)
+ }
+ Set tabs=$LG(lrec,8),typ="Ident"
+ For i=1:1:$LL(tabs) {
+	Set nam=$LI(tabs,i),load(typ,nam,1)=$$LoadTable(typ,charset,nam)
+ }
+ Set tabs=$LG(lrec,11),typ="LowerCase"
+ For i=1:1:$LL(tabs) {
+	Set nam=$LI(tabs,i),load(typ,nam,1)=$$LoadTable(typ,charset,nam)
+ }
+ Set tabs=$LG(lrec,29),typ="UpperCase"
+ For i=1:1:$LL(tabs) {
+	Set nam=$LI(tabs,i),load(typ,nam,1)=$$LoadTable(typ,charset,nam)
+ }
+ Set tabs=$LG(lrec,17),typ="TitleCase"
+ For i=1:1:$LL(tabs) {
+	Set nam=$LI(tabs,i),load(typ,nam,1)=$$LoadTable(typ,charset,nam)
+ }
+ Set tabs=$LG(lrec,13),typ="Pattern"
+ For i=1:1:$LL(tabs) {
+	Set nam=$LI(tabs,i),load(typ,nam,1)=$$LoadTable(typ,charset,nam)
+ }
+ Set tabs=$LG(lrec,31),typ="XY"
+ For i=1:1:$LL(tabs) {
+	Set nam=$LI(tabs,i),load(typ,nam,1)=$$LoadTable(typ,charset,nam)
+ }
+ Set nam=$O(@ref@("XLTTables",""),1,lst),typ="XLT",namtab=$V((0)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25))
+ While (nam'="") {
+	Set fr=$LI(lst,1),to=$LI(lst,2),inp=$$LoadTable(typ,fr,to)
+	If 'inp,nam'=fr {
+		If $ZU(127,1,namtab,fr,0) Set inp=$ZU(127,1,namtab,fr,1)
+		Else  Do $zu(9,"","Failed to load input side of table "_nam,(1>0),1)
+	}
+	Set load(typ,nam,0)=inp
+	Set fr=$LI(lst,3),to=$LI(lst,4),out=$$LoadTable(typ,fr,to)
+	If 'out,nam'=to {
+		If $ZU(127,1,namtab,to,0) Set out=$ZU(127,1,namtab,to,2)
+		Else  Do $zu(9,"","Failed to load output side of table "_nam,(1>0),1)
+	}
+	Set load(typ,nam,1)=out
+ 	Set nam=$O(@ref@("XLTTables",nam),1,lst)
+ }
+ Set typ="XLT",namtab=$V((0)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25)),nam=$O(load(typ,""))
+ While (nam'="") {
+	Set val=+$g(load(typ,nam,0))
+	Set:val val=$ZU(127,1,namtab,nam,1+0,val)
+	Set val=+$g(load(typ,nam,1))
+	Set:val val=$ZU(127,1,namtab,nam,1+1,val)
+	Set nam=$O(load(typ,nam))
+ }
+ If '$zbitget($zversion(0),1) {
+	If charset="Latin1" { Do $zu(191,2,0,0) }
+ 	Else { Do $zu(191,2,+$g(load("XLT","UnicodeLittle",0)),+$g(load("XLT","UnicodeLittle",1))) }
+ }
+ Set val=-1 If $E(charset,1,2)="CP" Set val=128
+ Set val=$Case(charset,"Unicode":8364,"CP1251":136,"Latin9":164,:val)
+ Do $zu(191,3,val)
+ Do $zu(191,5,locale)
+ Set typ="XY",namtab=$V((1)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25)),nam=$O(load(typ,""))
+ While (nam'="") {
+	Set val=+$G(load(typ,nam,1))
+	Set:val val=$ZU(127,1,namtab,nam,1,val)
+	Set nam=$O(load(typ,nam))
+ }
+ Set val=$zu(191,1,charset)
+ Set typ="COL",i=0
+ For tab=1:1:$zu(83) If $zu(83,tab)="0,0" Set i=tab Quit
+ Set nam=$O(load(typ,""))
+ While (nam'="") {
+	Set enc=+$G(load(typ,nam,1)) If 'enc Set nam=$O(load(typ,nam)) Continue
+	Set dec=+$G(load(typ,nam,0)) If 'dec Set nam=$O(load(typ,nam)) Continue
+	Set tab=$Name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","TablesD")),tab=$Name(@tab@("COL",charset,nam)),trec=$G(@tab)
+	Set col=$LG(trec,14),lrule=$LI(col,2),grule=$LI(col,3),col=$LI(col)
+	If col#128>9,col<256 {
+		Set col=col#128,lrule=lrule#32,grule=grule#32
+		Set tabnum=$p($zu(23,2,col),"^",3) If 'tabnum Set tabnum=i Set:i i=i+1
+		If tabnum Do $zu(83,tabnum,enc,dec),$zu(23,2,col,lrule,grule,tabnum),$zu(23,2,col+128,lrule+64,grule+64,tabnum)
+	}
+	Set nam=$O(load(typ,nam))
+ }
+ Set cfgr=$Name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","Config"))
+ Set nam=$G(@cfgr@("Collation"),$LG(lrec,3))
+ If nam'="" {
+	 Set val=$$GetNum^COLLATE(nam)
+	 If val'<0 {
+	 	If val#128<10 { Set val=$zu(23,0,val) }
+		ElseIf +$G(load("COL",nam,0)),+$G(load("COL",nam,1)) {
+			Set tab=$Name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","TablesD")),tab=$Name(@tab@("COL",charset,nam)),trec=$G(@tab)
+			Set col=$LG(trec,14),val=+$LI(col)
+ 			If val#128>9,val<256 Set val=$zu(23,0,val)
+		}
+	}
+ }
+ Set base=$ZU(40,2,104)
+ Do SetSysTableDef(base,0,$LG(lrec,12))
+ Do SetSysTableDef(base,1,$LG(lrec,7))
+ Do SetSysTableDef(base,2,$LG(lrec,28))
+ Do SetSysTableDef(base,3,$LG(lrec,10))
+ Do SetSysTableDef(base,4,$LG(lrec,16))
+ If $ZBITGET($ZVERSION(0),30) {
+ 	Set nam=$O(load("Pattern","U2"))
+ 	If nam?1"U2".E Do SetSysTableDef(base,5,nam),$ZU(191,4)
+ }
+ Set base=$ZU(40,2,105),namtab=$V((0)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25))
+ Do SetSysIoDef(base,0,$LG(lrec,27),namtab)
+ Do SetSysIoDef(base,1,$LG(lrec,23),namtab)
+ Do SetSysIoDef(base,2,$LG(lrec,26),namtab)
+ Do SetSysIoDef(base,3,$LG(lrec,24),namtab)
+ Do SetSysIoDef(base,4,$LG(lrec,20),namtab)
+ Do SetSysIoDef(base,5,$LG(lrec,22),namtab)
+ Do SetSysIoDef(base,6,$LG(lrec,18),namtab)
+ Do SetSysIoDef(base,7,$LG(lrec,19),namtab)
+ Do SetSysIoDef(base,8,$LG(lrec,25),namtab)
+ Do SetSysIoDef(base,9,$LG(lrec,21),namtab)
+ Set base=$ZU(40,2,106),namtab=$V((1)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25))
+ Do SetSysXyDef(base,0,$LG(lrec,30),namtab)
+ Set usfmt='$G(@cfgr@("LocaleFormat"))
+ Do $ZU(174,1,$S(usfmt:1,1:$LG(lrec,33)))
+ Do $ZU(174,2,$S(usfmt:0,1:$LG(lrec,52)))
+ Do $ZU(174,3,$S(usfmt:1,1:$LG(lrec,47)))
+ Do $ZU(174,4,$S(usfmt:0,1:$LG(lrec,48)))
+ Do $ZU(174,5,$S(usfmt:3,1:$LG(lrec,44)))
+ Do $ZU(174,6,$S(usfmt:".",1:$LG(lrec,37)))
+ Do $ZU(174,7,$S(usfmt:",",1:$LG(lrec,43)))
+ Do $ZU(174,8,$S(usfmt:"/",1:$LG(lrec,36)))
+ Do $ZU(174,9,$S(usfmt:":",1:$LG(lrec,49)))
+ Do $ZU(174,10,$S(usfmt:"+",1:$LG(lrec,46)))
+ Do $ZU(174,11,$S(usfmt:"-",1:$LG(lrec,39)))
+ Do $ZU(174,12,$S(usfmt:"AM",1:$LG(lrec,32)))
+ Do $ZU(174,13,$S(usfmt:"PM",1:$LG(lrec,45)))
+ Do $ZU(174,14,$S(usfmt:"NOON",1:$LG(lrec,42)))
+ Do $ZU(174,15,$S(usfmt:"MIDNIGHT",1:$LG(lrec,38)))
+ Do $ZU(174,16,$S(usfmt:" Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec",1:$LG(lrec,40)))
+ Do $ZU(174,17,$S(usfmt:" January February March April May June July August September October November December",1:$LG(lrec,41)))
+ Do $ZU(174,18,$S(usfmt:" Sun Mon Tue Wed Thu Fri Sat",1:$LG(lrec,50)))
+ Do $ZU(174,19,$S(usfmt:" Sunday Monday Tuesday Wednesday Thursday Friday Saturday",1:$LG(lrec,51)))
+ Do $ZU(174,20,$S(usfmt:0,1:$LG(lrec,35)))
+ Do $ZU(174,21,$S(usfmt:2980013,1:$LG(lrec,34)))
+ Do $ZU(174,22,$S(usfmt:"$",1:$LG(lrec,53)))
+ If $zbitget($zversion(0),1) Do $zu(69,37,+$LG(lrec,54))
+ d $ZU(125,8)
+ Quit
+SetSysTableDef(base,idx,nam) [cfgr,load] {
+ Set cfg=$G(@cfgr@($P("PatternMatch,Identifier,Uppercase,Lowercase,Titlecase,PatternMatch,Uppercase",",",idx+1))) If cfg'="" Set nam=cfg
+ If $G(nam)="" Quit
+ Set typ=$P("Pattern,Ident,UpperCase,LowerCase,TitleCase,Pattern,UpperCase",",",idx+1),val=+$G(load(typ,nam,1))
+ If 'val,nam="Latin1" Set val=$V((idx)*$ZU(40,0,25)+($ZU(40,2,166)),-2,$ZU(40,0,25))
+ If val V (idx)*$ZU(40,0,25)+(base):-2:$ZU(40,0,25):val
+}
+SetSysIoDef(base,idx,nam,namtab) [cfgr] {
+ Set cfg=$G(@cfgr@($P("Process,CacheTerminal,OtherTerminal,File,Magtape,TCPIP,DSMDDP,DTMDCP,SystemCall,Printer",",",idx+1))) If cfg'="" Set nam=cfg
+ If $G(nam)="" Quit
+ Set val=$ZU(127,1,namtab,nam,0)
+ If 'val,nam="RAW" Set val=$V($ZU(40,2,168),-2,$ZU(40,0,25))
+ If val V (idx)*$ZU(40,0,25)+(base):-2:$ZU(40,0,25):val
+}
+SetSysXyDef(base,idx,nam,namtab) [cfgr] {
+ Set cfg=$G(@cfgr@("XYAction")) If cfg'="" Set nam=cfg
+ If $G(nam)="" Quit
+ Set val=$ZU(127,1,namtab,nam,0)
+ If 'val,nam="Latin1" Set val=$V($ZU(40,2,167),-2,$ZU(40,0,25))
+ If val V (idx)*$ZU(40,0,25)+(base):-2:$ZU(40,0,25):val
+}
+LocaleOld	; ^%nls
+ s msg="Loading Locale "_locale_" - "_$g(^%nls("Loc",locale))
+ d $zu(9,"",msg,(0>0),0)
+ Set ref=$name(^%nls("Loc",locale))
+ Set charset=@ref@(0),typ="",nam=""
+ For  Set typ=$o(@ref@(1,typ)) Quit:typ=""  Do
+ . For  Set nam=$o(@ref@(1,typ,nam)) Quit:nam=""  Do
+ . . Set tab=$name(@ref@(1,typ,nam))
+ . . If $d(@tab)<10 Do
+ . . . Set:typ="XLT"!(typ="COL") load(typ,nam,0)=$$LoadTable(typ,nam,charset)
+ . . . Set load(typ,nam,1)=$$LoadTable(typ,charset,nam)
+ . . Else  For i=0,1 Do:$d(@tab@(i))
+ . . . Set load(typ,nam,i)=$$LoadTable(typ,@tab@(i,0),@tab@(i,1))
+ Set typ="XLT",namtab=$V((0)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25))
+ For  Set nam=$o(load(typ,nam)) Quit:nam=""  Do
+ . Set val=+$g(load(typ,nam,0))
+ . Set:val val=$ZU(127,1,namtab,nam,1+0,val)
+ . Set val=+$g(load(typ,nam,1))
+ . Set:val val=$ZU(127,1,namtab,nam,1+1,val)
+ If '$zbitget($zversion(0),1),charset'="Latin1" {
+ 	Do $zu(191,2,+$g(load("XLT","UnicodeLittle",0)),+$g(load("XLT","UnicodeLittle",1)))
+ }
+ Set val=-1 If $E(charset,1,2)="CP" Set val=128
+ Set val=$Case(charset,"Unicode":8364,"CP1251":136,"Latin9":164,:val)
+ Do $zu(191,3,val)
+ Set typ="XY",namtab=$V((1)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25))
+ For  Set nam=$o(load(typ,nam)) Quit:nam=""  Do
+ . Set val=+$g(load(typ,nam,1))
+ . Set:val val=$ZU(127,1,namtab,nam,1,val)
+ Set val=$zu(191,1,charset)
+ Set typ="COL",i=0
+ For tab=1:1:$zu(83) If $zu(83,tab)="0,0" Set i=tab Quit
+ For  Set nam=$o(load(typ,nam)) Quit:nam=""  Do
+ . Set enc=+$g(load(typ,nam,1)) Quit:'enc
+ . Set dec=+$g(load(typ,nam,0)) Quit:'dec
+ . Set tab=$name(@ref@(1,"COL",nam))
+ . If $d(@tab)<10 Set tab=$name(^%nls("Rules",charset,nam))
+ . Else  Set tab=$name(^%nls("Rules",@tab@(1,0),@tab@(1,1)))
+ . Set col=$g(@tab),lrule=$p(col,"^",2),grule=$p(col,"^",3),col=+col
+ . If col#128>9,col<256 Do
+ . . Set col=col#128,lrule=lrule#32,grule=grule#32
+ . . Set tabnum=$p($zu(23,2,col),"^",3) If 'tabnum Set tabnum=i Set:i i=i+1
+ . . If tabnum Do $zu(83,tabnum,enc,dec),$zu(23,2,col,lrule,grule,tabnum),$zu(23,2,col+128,lrule+64,grule+64,tabnum)
+ Set nam=$g(@ref@(2,3,0,1))
+ If nam'="" Set val=$$GetNum^COLLATE(nam) Do:val'<0
+ . If val#128<10 Set val=$zu(23,0,val) Quit
+ . If +$g(load("COL",nam,0)),+$g(load("COL",nam,1)) Do
+ . . Set tab=$name(@ref@(1,"COL",nam))
+ . . If $d(@tab)<10 Set val=+$g(^%nls("Rules",charset,nam))
+ . . Else  Set val=+$g(^%nls("Rules",@tab@(1,0),@tab@(1,1)))
+ . . If val#128>9,val<256 Set val=$zu(23,0,val)
+ Set tab=$name(@ref@(2))
+ Set base=$ZU(40,2,104),def=0
+ For i=0:1:6 Do:$d(@tab@(def,i))
+ . Set typ=@tab@(def,i,0),nam=@tab@(def,i,1)
+ . Set val=+$g(load(typ,nam,1))
+ . If 'val,nam="Latin1" Set val=$V((i)*$ZU(40,0,25)+($ZU(40,2,166)),-2,$ZU(40,0,25))
+ . If val V (i)*$ZU(40,0,25)+(base):-2:$ZU(40,0,25):val
+ Set base=$ZU(40,2,105),def=1,namtab=$V((0)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25))
+ For i=0:1:9 Do:$d(@tab@(def,i))
+ . Set typ=@tab@(def,i,0),nam=@tab@(def,i,1)
+ . Set val=$ZU(127,1,namtab,nam,0)
+ . If 'val,nam="RAW" Set val=$V($ZU(40,2,168),-2,$ZU(40,0,25))
+ . If val V (i)*$ZU(40,0,25)+(base):-2:$ZU(40,0,25):val
+ Set base=$ZU(40,2,106),def=2,namtab=$V((1)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25))
+ For i=0:1:0 Do:$d(@tab@(def,i))
+ . Set typ=@tab@(def,i,0),nam=@tab@(def,i,1)
+ . Set val=$ZU(127,1,namtab,nam,0)
+ . If 'val,nam="Latin1" Set val=$V($ZU(40,2,167),-2,$ZU(40,0,25))
+ . If val V (i)*$ZU(40,0,25)+(base):-2:$ZU(40,0,25):val
+ d $ZU(125,8)
+ Quit
+%LocaleERROR Do ErrMsg("Error while trying to set locale to "_locale)
+ Quit
+ErrMsg(m) New msg,zr,s Set msg="",zr=$zr,s=$C(10)_"   " Quit:'$d(^%nlsmisc("DEBUG"))
+ If $ze["<STORE>" Set msg=$s(m[" create ":"Partition full: $S="_$S,1:"Increase Generic Memory Heap parameter in Configuration Manager | Advanced | Memory.")
+ Else  If $ze["<UNDEFINED>"!($ze["<ILLEGAL VALUE>") Set msg="Possibly inconsistent ^%nls* globals. Load a consistent set."
+ Write !,m Write:msg]"" !,msg
+ Write !,$ze,!,zr,!,$zu(56,2),!
+ If $zu(9,"",m_s_msg_$S(msg]"":s,1:"")_$ze_s_zr_s_$zu(56,2)_s)
+ Quit
+LoadTable(typ,fromenc,name) New oid,ref
+ Set ref=$Name(^SYS("shm")) Set:'$D(@ref) ref=$Name(^%shm)
+ Set oid=$o(@ref@("Src",1,"%nls",typ,fromenc,name,""),-1) Quit:oid $$Load^ShmObj(oid,ref)
+ Quit 0
+Table(loc,typ,nam) PUBLIC {
+ Set lref=$Name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","LocalesD")),lref=$Name(@lref@(loc))
+ If '$D(@lref,lrec) Quit $$TableOld(loc,typ,nam)
+ Set charset=$LG(lrec,2),inp=0,out=0,err=0
+ If typ="XLT" {
+	If $D(@lref@("XLTTables",nam),lst) {
+		Set namtab=$V((0)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25))
+		Set inp=$$LoadTable(typ,$LI(lst,1),$LI(lst,2))
+		If 'inp,nam'=$LI(lst,1) Set inp=$ZU(127,1,namtab,$LI(lst,1),1)
+		If 'inp Quit "1,Could not load input table"
+		Set out=$$LoadTable(typ,$LI(lst,3),$LI(lst,4))
+		If 'out,nam'=$LI(lst,4) Set out=$ZU(127,1,namtab,$LI(lst,4),2)
+	} Else { Quit "1,Table not defined in locale" }
+ } Else {
+	Set off=$Case(typ,"COL":4,"Ident":8,"LowerCase":11,"UpperCase":29,"TitleCase":17,"Pattern":13,"XY":31)
+	Set tabs=$LG(lrec,off),fnd=0
+	For i=1:1:$LL(tabs) If $LI(tabs,i)=nam Set fnd=1 Quit
+	If fnd {
+		If typ="COL" Set inp=$$LoadTable(typ,nam,charset) If 'inp Quit "1,Could not load input table"
+		Set out=$$LoadTable(typ,charset,nam)
+	} Else { Quit "1,Table not defined in locale" }
+ }
+ If 'out Quit "1,Could not load output table"
+ If typ="XLT" {
+	Set namtab=$V((0)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25))
+	Set val=$ZU(127,1,namtab,nam,1+0,inp)
+ 	Set val=$ZU(127,1,namtab,nam,1+1,out)
+ 	Set base=$ZU(40,2,105),basep=$ZU(40,1,27),val=$ZU(127,1,namtab,nam,0)
+ 	Set off=27_","_23_","_26_","_24_","_20_","_22_","_18_","_19_","_25_","_21
+ 	For i=0:1:9 {
+	 	If $LG(lrec,$P(off,",",i+1))=nam { V (i)*$ZU(40,0,25)+(base):-2:$ZU(40,0,25):val V (i)*$ZU(40,0,25)+(basep):-1:$ZU(40,0,25):val }
+ 	}
+ }
+ Elseif typ="XY" {
+	Set base=$ZU(40,2,106),basep=$ZU(40,1,28),namtab=$V((1)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25))
+	Set val=$ZU(127,1,namtab,nam,1,out)
+	Set val=$ZU(127,1,namtab,nam,0)
+	If $LG(lrec,30)=nam { V (0)*$ZU(40,0,25)+(base):-2:$ZU(40,0,25):val V (0)*$ZU(40,0,25)+(basep):-1:$ZU(40,0,25):val }
+ }
+ Elseif typ="COL" {
+	Set tabnum=0
+	Set tab=$Name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","TablesD")),tab=$Name(@tab@("COL",charset,nam)),trec=$G(@tab)
+	Set col=$LG(trec,14),lrule=$LI(col,2),grule=$LI(col,3),col=+$LI(col,1)
+	If col#128'>9!(col'<256) { Set err="1,Invalid collation number: "_col }
+	Else {
+		Set tabnum=$p($zu(23,2,col),"^",3)
+		If 'tabnum For i=1:1:$zu(83) If $zu(83,i)="0,0" Set tabnum=i Quit
+		If 'tabnum { Set err="1,No index available for collation table" }
+		Else {
+			Set val=$zu(83,tabnum,out,inp)
+			Set val=$zu(23,2,col,lrule,grule,tabnum)
+		}
+	}
+ }
+ Else {
+	Set base=$ZU(40,2,104),basep=$ZU(40,1,26)
+	Set off=$Case(typ,"Ident":7,"LowerCase":10,"UpperCase":28,"TitleCase":16,"Pattern":12,:0)
+	Set idx=$Case(typ,"Ident":1,"LowerCase":3,"UpperCase":2,"TitleCase":4,"Pattern":0,:0)
+	If $LG(lrec,off)=nam {
+		V (idx)*$ZU(40,0,25)+(base):-2:$ZU(40,0,25):out V (idx)*$ZU(40,0,25)+(basep):-1:$ZU(40,0,25):out
+	}
+ }
+ Quit err
+}
+TableOld(loc,typ,nam)	; Load table from ^%nls
+ Set ref=$name(^%nls("Loc",loc))
+ Set charset=$g(@ref@(0))
+ If charset="" Quit "1,Locale "_loc_" is not defined"
+ Set tab=$name(@ref@(1,typ,nam)),inp=0,out=0,err=0
+ If '$d(@tab) Quit "1,Table "_nam_" not defined in locale "_loc
+ If $d(@tab)<10 Do
+ . Set:typ="XLT"!(typ="COL") inp=$$LoadTable(typ,nam,charset)
+ . Set out=$$LoadTable(typ,charset,nam)
+ Else  Do
+ . If $d(@tab@(0)) Set inp=$$LoadTable(typ,@tab@(0,0),@tab@(0,1))
+ . If $d(@tab@(1)) Set out=$$LoadTable(typ,@tab@(1,0),@tab@(1,1))
+ If 'inp,'out Quit "1,Could not load table objects"
+ If typ="XLT" Set namtab=$V((0)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25)) Do
+ . If inp Set val=$ZU(127,1,namtab,nam,1+0,inp)
+ . If out Set val=$ZU(127,1,namtab,nam,1+1,out)
+ . Set tab=$name(@ref@(2))
+ . Set base=$ZU(40,2,105),basep=$ZU(40,1,27),def=1,namtab=$V((0)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25))
+ . For i=0:1:9 If $g(@tab@(def,i,0))=typ,$g(@tab@(def,i,1))=nam Do
+ . . Set val=$ZU(127,1,namtab,nam,0) If val V (i)*$ZU(40,0,25)+(base):-2:$ZU(40,0,25):val V (i)*$ZU(40,0,25)+(basep):-1:$ZU(40,0,25):val
+ Else  If typ="XY" Set namtab=$V((1)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25)) Do
+ . If out Set val=$ZU(127,1,namtab,nam,1,out)
+ . Set tab=$name(@ref@(2))
+ . Set base=$ZU(40,2,106),basep=$ZU(40,1,28),def=2,namtab=$V((1)*$ZU(40,0,25)+($ZU(40,2,103)),-2,$ZU(40,0,25))
+ . For i=0:1:0 If $g(@tab@(def,i,0))=typ,$g(@tab@(def,i,1))=nam Do
+ . . Set val=$ZU(127,1,namtab,nam,0) If val V (i)*$ZU(40,0,25)+(base):-2:$ZU(40,0,25):val V (i)*$ZU(40,0,25)+(basep):-1:$ZU(40,0,25):val
+ Else  If typ="COL" Set tabnum=0 Do
+ . Set tab=$name(^%nls("Rules",charset,nam))
+ . Set col=$g(@tab),lrule=$p(col,"^",2),grule=$p(col,"^",3),col=+col
+ . If col#128'>9!(col'<256) Set err="1,Invalid collation byte: "_col Quit
+ . Set tabnum=$p($zu(23,2,col),"^",3)
+ . If 'tabnum For i=1:1:$zu(83) If $zu(83,i)="0,0" Set tabnum=i Quit
+ . If 'tabnum Set err="1,No index available for collation table" Quit
+ . Set val=$zu(83,tabnum,out,inp)
+ . Set val=$zu(23,2,col,lrule,grule,tabnum)
+ Else  Do
+ . Set tab=$name(@ref@(2))
+ . Set base=$ZU(40,2,104),basep=$ZU(40,1,26),def=0
+ . For i=0:1:6 If $g(@tab@(def,i,0))=typ,$g(@tab@(def,i,1))=nam Do
+ . . If out V (i)*$ZU(40,0,25)+(base):-2:$ZU(40,0,25):out V (i)*$ZU(40,0,25)+(basep):-1:$ZU(40,0,25):out
+ Quit err
+INSTALL() [Locale,Language,LocaleDir,nlsMsg,SrcDir,Update,%Log] PUBLIC {
+ Set $ZT="InstallError",Unicode=$ZBitget($ZVersion(0),1)
+ If '$D(Locale) Set Locale=$S(Unicode:"enuw",1:"enu8")
+ If '$D(LocaleDir) Set LocaleDir=SrcDir
+ If '$D(%Log) Set %Log=0
+ If '$D(Update) Set Update=0
+ If Update Set OldCollations=$$GetCurrentCollations()
+ If 'Update Kill ^%nls,^mnls
+ Kill ^%shm,^mshm,^SYS("shm")
+ Set dir=$ZU(12),lib=$S(($zversion(1)=1):$E(dir,1,$L(dir)-1)_".CACHELIB]",1:dir_"cachelib"_$E(dir,$L(dir)))
+ Write !,$S(Update:"Updating",1:"Installing")," locales from ",lib
+ Do CopyLocales($Name(^["^^"_lib]NLS),Unicode)
+ Write !,"Compiling Locale (",Locale,")",!
+ Set st=##class(Config.NLS.Locales).Compile(Locale)
+ If st'=1 {
+	Do $System.OBJ.DisplayError(st)
+ 	Write !!,nlsMsg(4),Locale,nlsMsg(5)
+ 	If '($zversion(1)=2) Use 0 Write !!,nlsMsg(4),Locale,nlsMsg(5) Use %Log
+ 	Set Locale="enu"_$S(Unicode:"w",1:"8")
+ 	Write !,"Compiling Locale (",Locale,")",!
+ 	Set st=##class(Config.NLS.Locales).Compile(Locale)
+ 	If st'=1 Do $System.OBJ.DisplayError(st)
+ }
+ If $D(^%nls("Ident")) Write !,"Cannot upgrade custom locales/tables from this version"
+ If Update Write !,"Importing custom Tables"
+ Set typ=$O(^%nls("Src",""))
+ While (typ'="") {
+	 If typ="SUB" Set typ=$O(^%nls("Src",typ)) Continue
+	 Set from=$O(^%nls("Src",typ,""))
+	 While (from'="") {
+		 Set to=$O(^%nls("Src",typ,from,""))
+		 While (to'="") {
+			 If $E(from)="y"||($E(to)="y") {
+				 Write !,"   Converting Table (",typ,",",from,",",to,")"
+				 Set st=##class(Config.NLS.Tables).ImportFromNls(typ,from,to,1)
+				 If st'=1 Do $System.OBJ.DisplayError(st)
+			 }
+			 Set to=$O(^%nls("Src",typ,from,to))
+		 }
+		 Set from=$O(^%nls("Src",typ,from))
+	 }
+	 Set typ=$O(^%nls("Src",typ))
+ }
+ If Update Write !,"Importing custom Locales"
+ Set loc=$O(^%nls("Loc","y"))
+ While (loc'="") {
+ 	If $E(loc)="y" {
+	 	Write !,"   Converting Locale (",loc,")"
+		For tab="HTML","XML","JS","URL" Kill ^%nls("Loc",loc,1,"XLT",tab)
+		Set st=##class(Config.NLS.Locales).ImportFromNls(loc)
+		If st'=1 { Do $System.OBJ.DisplayError(st) }
+		Else {
+	 		Write !,"   Compiling Locale (",loc,")",!
+			Set st=##class(Config.NLS.Locales).Compile(loc)
+			If st'=1 Do $System.OBJ.DisplayError(st)
+		}
+ 	}
+ 	Set loc=$O(^%nls("Loc",loc))
+ }
+ Kill ^%nls,^mnls
+ Set loc=$G(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,5))@("LOCALE","CURRENT"))
+ If $E(loc)="y" {
+	If ##class(Config.NLS.Locales).IsLoadable(loc) { Set Locale=loc }
+	Else {
+		Write !,"Compiling Locale (",loc,")",!
+		Set st=##class(Config.NLS.Locales).Compile(loc)
+		If st'=1 Do $System.OBJ.DisplayError(st)
+		If ##class(Config.NLS.Locales).IsLoadable(loc) Set Locale=loc
+	}
+ }
+ Set oLoc=##class(Config.NLS.Locales).%OpenId(Locale,,.st)
+ If st'=1 Do $System.OBJ.DisplayError(st)
+ Write !,"Setting current locale to ",Locale
+ Set @("^|""^^"_$zu(203,1)_"""|"_$zu(203,5))@("LOCALE","CURRENT")=Locale
+ Set Language=$ZCVT(oLoc.LanguageAbbr,"L") Set:$E(Language,1,3)="en-" Language="en"
+ If Update {
+	 Set OldLanguage=$$GetDefaultLanguage^%occMessages()
+	 If Unicode||("de,en,es,fi,fr,it,nl,pt-br"[OldLanguage) Set Language=OldLanguage
+ }
+ Write !,"Setting current language to ",Language
+ Do SetDefaultLanguage^%occMessages(Language)
+ If Update {
+	Set NewCollations=$$GetCurrentCollations(),old=$LG(OldCollations)
+	If old'="",old'=$LI(NewCollations) {
+		If $LF(NewCollations,old,1) {
+			Set cfgr=$Name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","Config"))
+			If '$D(@cfgr@("Collation")) Set @cfgr@("Collation")=old
+			Write !,"Preserving default collation ",@cfgr@("Collation")
+		} Else { Write !,"Old default collation ",old," is not available in new locale ",Locale }
+	}
+ }
+ If 'Update Do Locale(Locale)
+ If 'Unicode,##class(Config.NLS.Locales).Exists(Locale,.oLoc) {
+ 	Job LoadMsgs(oLoc.CharacterSet,$J) Do ##class(%SYSTEM.Event).Wait()
+ }
+ Quit
+InstallError Set $ZT=""
+ Write !,"Error installing NLS support: ",$ZE,!,$ZU(56,2)
+}
+CopyLocales(fromRef,uni) [Product] PUBLIC {
+ Set all=$G(Product)="EMS"
+ Set gbl=$Name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","LocalesD")),loc=$O(@fromRef@("LocalesD",""),1,lrec)
+ While (loc'="") {
+	Set chs=$LG(lrec,2),copy=0
+	If uni,chs="Unicode" { Set copy=1 }
+	ElseIf 'uni,chs'="Unicode" { Set copy=1 }
+	If copy||all {
+		Set toRef=$Name(@gbl@(loc))
+		Kill @toRef Merge @toRef=@fromRef@("LocalesD",loc)
+		Do GetTables(toRef,.Tables)
+	}
+	Set loc=$O(@fromRef@("LocalesD",loc),1,lrec)
+ }
+ Do CopyTables(fromRef,.Tables,.SubTables)
+ Do CopySubTables(fromRef,.SubTables)
+}
+CopyTables(fromRef,Tables,SubTables) PUBLIC {
+ Set type=$O(Tables("")),gbl=$Name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","TablesD"))
+ While (type'="") {
+	Set from=$O(Tables(type,""))
+	While (from '="") {
+		Set to=$O(Tables(type,from,""))
+		While (to'="") {
+			Set trec=$G(@fromRef@("TablesD",type,from,to))
+			Set toRef=$Name(@gbl@(type,from,to))
+			Kill @toRef Merge @toRef=@fromRef@("TablesD",type,from,to)
+			If type="COL"||(type="XLT")||(type["Case") {
+				Set sub=$LG(trec,4)
+				Set mod=$LG(trec,7)
+				If sub'="" Set SubTables(sub)=""
+				If type="XLT",mod'="" {
+					If '$D(Tables("Mode",mod,mod)) {
+						Set Tables("Mode",mod,mod)=""
+						Set toRef=$Name(@gbl@("Mode",mod,mod))
+						Set libRef=$Name(@fromRef@("TablesD","Mode",mod,mod))
+						Kill @toRef Merge @toRef=@libRef
+						Set num=$O(@libRef@("Modes",""),1,mod)
+						While (num'="") {
+							Set SubTables($P(mod,":",1))=""
+							Set num=$O(@libRef@("Modes",num),1,mod)
+						}
+					}
+				}
+			} ElseIf type="Pattern" {
+				Set pat=$LG(trec,4)
+				Set toRef=$Name(@gbl@("Patcode",pat,pat))
+				Kill @toRef Merge @toRef=@fromRef@("TablesD","Patcode",pat,pat) 			
+ 			}
+    		Set to=$O(Tables(type,from,to))
+		}
+		Set from=$O(Tables(type,from))
+	}
+	Set type=$O(Tables(type))
+ }
+}
+CopySubTables(fromRef,SubTables) PUBLIC {
+ Set sub=$O(SubTables("")),gbl=$Name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","SubTablesD"))
+ While (sub'="") {
+	Set toRef=$Name(@gbl@(sub))
+	Kill @toRef Merge @toRef=@fromRef@("SubTablesD",sub)
+	Set sub=$O(SubTables(sub))
+ }
+}
+GetTables(ref,Tables) PUBLIC {
+ Set lrec=$G(@ref)
+ Set chs=$LG(lrec,2)
+ Set tabs=$LG(lrec,4),typ="COL"
+ For i=1:1:$LL(tabs) Set t=$LI(tabs,i) Set Tables(typ,chs,t)="",Tables(typ,t,chs)=""
+ Set tabs=$LG(lrec,8),typ="Ident"
+ For i=1:1:$LL(tabs) Set t=$LI(tabs,i),Tables(typ,chs,t)=""
+ Set tabs=$LG(lrec,13),typ="Pattern"
+ For i=1:1:$LL(tabs) Set t=$LI(tabs,i),Tables(typ,chs,t)=""
+ Set tabs=$LG(lrec,11),typ="LowerCase"
+ For i=1:1:$LL(tabs) Set t=$LI(tabs,i),Tables(typ,chs,t)=""
+ Set tabs=$LG(lrec,17),typ="TitleCase"
+ For i=1:1:$LL(tabs) Set t=$LI(tabs,i),Tables(typ,chs,t)=""
+ Set tabs=$LG(lrec,29),typ="UpperCase"
+ For i=1:1:$LL(tabs) Set t=$LI(tabs,i),Tables(typ,chs,t)=""
+ Set tabs=$LG(lrec,31),typ="XY"
+ For i=1:1:$LL(tabs) Set t=$LI(tabs,i),Tables(typ,chs,t)=""
+ Set typ="XLT",nam=$O(@ref@("XLTTables",""),1,tab)
+ while (nam'="") {
+ 	Set Tables(typ,$LI(tab,1),$LI(tab,2))="",Tables(typ,$LI(tab,3),$LI(tab,4))=""
+ 	Set nam=$O(@ref@("XLTTables",nam),1,tab)
+ }
+}
+LoadMsgs(chs,ppid)	PUBLIC {
+ Set clib=$S(($zversion(1)=1):"[.cachelib]",1:"cachelib")
+ Set stat=$zu(49,clib),rdonly=$zb(+$p(stat,",",17),4,1),$zt="lderr"
+ If rdonly {
+    Set rnam=$p(stat,",",25)
+    If @("$zu(1,"""_clib_""","_$p(stat,",",2,12)_",2,0,0,0,0,"""_rnam_""")")
+ }
+ Set lgs=$LB("de","en","es","fi","fr","it","nl","pt-br"),lan=""
+ Set domain=$order(^%qCacheMsg(""))
+ While domain'="" {
+	Set language=$order(^%qCacheMsg(domain,""))
+	While language '="" {
+		If '$LF(lgs,language) Kill ^%qCacheMsg(domain,language)
+		Set language=$order(^%qCacheMsg(domain,language))
+	}
+	Set domain=$order(^%qCacheMsg(domain))
+ }
+ Set lgs=$Case(chs,"LatinC":"ru","CP1251":"ru",:"") Goto:lgs="" done
+ Set dir=$$ComputeFullDBDir^%SYS.API("Locale")
+ For i=1:1:$L(lgs,",") {
+	 Set lan=$P(lgs,",",i)
+	 Set domain=$order(^%qCacheMsg(""))
+	 While domain'="" {
+		 Kill ^%qCacheMsg(domain,lan)
+		 Set domain=$order(^%qCacheMsg(domain))
+	 }
+	 Do Import^%occMessages(dir_"allmessages_"_lan_".xml")
+ }
+done If rdonly,@("$zu(1,"""_clib_""","_$p(stat,",",2,12)_",1,0,0,0,0,"""_rnam_""")")
+ If $D(ppid) Do ##class(%SYSTEM.Event).Signal(ppid)
+ Quit
+lderr Set $zt="" Goto done
+}
+LoadALPHAUP(charset,name) PUBLIC {
+	Set off=$$LoadTable("UpperCase",charset,name)
+	If off V (6)*$ZU(40,0,25)+($ZU(40,2,104)):-2:$ZU(40,0,25):off
+	Quit off
+}
+UnloadALPHAUP() PUBLIC {
+	V (6)*$ZU(40,0,25)+($ZU(40,2,104)):-2:$ZU(40,0,25):0
+	Quit 1
+}
+GetALPHAUP() PUBLIC {
+	Set off=$V((6)*$ZU(40,0,25)+($ZU(40,2,104)),-2,$ZU(40,0,25))
+	If 'off Quit ""
+	Set oid=+$O(^|"%SYS"|SYS("shm","Off",1,off,"")) Quit:'oid ""
+	Set nam=$q(^|"%SYS"|SYS("shm","Src",0,oid)) Quit:$QS(nam,3)'=0 "" Quit:$QS(nam,4)'=oid ""
+	Set len=$QL(nam)
+	Quit $QS(nam,len-1)_"-"_$QS(nam,len)
+}
+GetCurrentCollations() PUBLIC {
+	Set loc=$G(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,5))@("LOCALE","CURRENT")) If loc="" Return ""
+	Set ref=$name(@("^|""^^"_$zu(203,1)_"""|"_$zu(203,3))@("NLS","LocalesD")),ref=$name(@ref@(loc))
+	Set lrec=$G(@ref) If lrec="" Return ""
+	Return $LB($LG(lrec,3))_$LG(lrec,4)
+}

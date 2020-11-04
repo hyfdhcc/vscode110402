@@ -1,0 +1,144 @@
+ROUTINE RCVRYDMN [Type=INT]
+RCVRYDMN(jobber) ;COS portion of the Recovery Deamon Process ;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/sysconfig/rcvrydmn.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ ;
+ n mgrdir,lastjrnf ;used in JRNCLFOR
+ n STU ; make sure this isn't defined in ^JRNROLL
+ s n=0,reccnt=0,crashcsn=-1
+ s $ZT="mainErrHnd"
+ i ($zversion(1)=3) s NULLDEV="/dev/null"
+ i ($zversion(1)=1) s NULLDEV="NL:"
+ i ($zversion(1)=2) s NULLDEV="//./nul"
+ o NULLDEV u NULLDEV  ;prevent hangs writing errors to stdout
+ s netdbgflags=0
+ i $d(^SYS("CLUSTER","NETDBGFLAGS"))#2 d
+ . s netdbgflags=$ZH(^SYS("CLUSTER","NETDBGFLAGS"))        
+ s netdbgflags=$zboolean(netdbgflags,8,7) ; 7 = or in default logging
+loop ;
+ s n=$ZU(77,+n,+netdbgflags,$g(lastjrnf))  ; returns 1^crashed csn (0 based)
+ k mgrdir,lastjrnf ;initialized before calling JRNCLFOR
+ i +n'>0 g error
+ if (+n=3) {
+    d WaitForCluECPConn^ECPRecovery("^^"_$p($zu(59),",",13))
+    goto loop
+ }
+ if (+n=4) {
+    d WaitForCluECPRecoverComp^ECPRecovery("^^"_$p($zu(59),",",13))
+    goto loop
+ }
+ s reccnt=reccnt+1  ; Counts # of recoverys we've done
+ s crashcsn=1+$P(n,"^",2)
+ s errlist=0
+ d:'$p(n,"^",4)  ;replay journal if the system died pooly (not normal shutdown)
+ . n n   ; protect these from ^JRNCLFOR
+ . n errmax s errmax=0
+ . d START^JRNCLFOR(1,.errlist,crashcsn)
+ if errlist d  g loop  ;skip tp rollback
+ . d $ZU(9,"","Journal recovery failed - Declaring a cluster crash",1)
+ . s n=2 ;passed into $ZU(77) causes a cluster crash
+ ; JRNROLL uses 1-based crashcsn, whereas JRNCLFOR/mgrdir use 0-based csn
+ i $g(mgrdir(crashcsn-1))]"" s lastjrnf=$g(lastjrnf(mgrdir(crashcsn-1)))
+ i $g(lastjrnf)="" {
+   s lastjrnf=$$getlastjrnf(crashcsn-1)
+   i lastjrnf="" {
+     d $zu(9,"","No journal file for the failed cluster node (CSN="_crashcsn_")")
+     s n=2 ;declare a cluster crash
+     g loop
+   }
+ }
+ k mgrdir ;avoid confusion in JRNROLL
+ s masterdied=$p(n,"^",3)
+ i masterdied d  ;master died
+ . n lastjseq,maxjseq
+ . s lastjseq=$$getlastjseq(crashcsn-1,lastjrnf)
+ . s maxjseq=$zu(78,41,3,lastjseq)
+ . i maxjseq+1>$zu(78,41,0),$zu(78,41,0,maxjseq+1)
+ . i $zu(78,41,2,$zu(78,41,0))
+ d 
+ . n n,lastjrnf   ; protect these from ^JRNROLL
+ . n errmax s errmax=0
+ . ;When the entire stack under JRNROLL is converted to procedure
+ . ;blocks, this block structure can be removed.
+ . d CLUSTER^JRNROLL(crashcsn,1,0,.errlist) ;JO2468
+ If (masterdied) {
+      Set errmsg=""
+      Set comp=$$RecoverCluECPSessions^ECPRecovery("^^"_$p($zu(59),",",13))
+      Set:('comp) errmsg="ECP session recovery failed"
+      Set:(errmsg="") errmsg=$$DupCluECPOpenTrans^ECPRecovery("^^"_$p($zu(59),",",13),crashcsn)
+      if (errmsg'="") {
+	  Do $ZU(9,"",errmsg)
+	  Set n=2
+	  Goto loop
+      }
+ }
+ n i f i=1:1 q:$ZU(51,1+2)  h .2 i i#50=0 d $zu(9,"","RCVRYDMN: waiting for disk activity to finish",(1>0),1)
+ if errlist d
+ . d $ZU(9,"","Transaction rollback failed - Declaring a cluster crash",1)
+ . s n=2 ;passed into $ZU(77) causes a cluster crash
+ g loop
+mainErrHnd ;
+  ; We should never come here but if we do the RCVRYDMN is going
+  ; to exit. Generate a console log error so it is easier to tell
+  ; what has gone wrong and try to call the error trap. ^%ETN may
+  ; fail to do anything depending in whether the WD is allowed to run
+  ; at the moment or not.
+  s $ZT="*^%ETN"
+  do $ZU(9,"","RCVRYDMN encountered an unexpected error. $ZE="_$ZE_" at "_$ZU(56,2))
+  d BACK^%ETN
+  q
+error ;
+ s err="Recovery deamon "_$ZH($J)_" failed because "
+ i n=-1 s err=err_"another deamon is already active"
+ i n=-2 s err=err_"the Enq Deamon isn't running"
+ i n=-3 s err=err_"subfunction code ("_n_") out of range"
+ if n=-4 s err=err_"of an error during journal restore/TP rollback"
+ i n<-4 s err=err_"of an unknown reason"
+ s err=$C(13)_$C(10)_err_$c(7)_$C(13)_$c(10)
+ s n=$zu(9,jobber,err)
+ S $ZE="<RCVRYDMN-ABORT: See err>"
+ D ^%ET   ; Will log why we failed.
+ h
+ ;return the last journal file name for a given csn (0-based)
+getlastjrnf(csn) ;
+ n iomode,log,line,i,jrnf
+ s log=$s($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0):$p($zu(78,20),",",2),1:"") i log="" q ""
+ s iomode=$zu(68,40,1)
+ o log::5
+ if '$T {
+	 do $ZU(9,"","RCVRYDMN Failed to open cluster journal log: "_log_" - Retrying")
+	 do {
+		 o log::5
+	 } while ('$T)
+	 do $ZU(9,"","RCVRYDMN Succesfully opened cluster journal log - Continuing")
+ }
+ f i=1:1 u log r line q:line=""  i +line=csn s jrnf=line
+ c log i $zu(68,40,iomode)
+ q $p($g(jrnf),",",2)
+ ;return the last (valid) cluster journal sequence # for a given csn (0-based)
+ ;jrnf: the last journal file for the given csn
+getlastjseq(csn,jrnf) ;
+ n jseq,addr,dev 
+ s jseq=0 f  q:jrnf=""  d  q:jseq>0  s jrnf=$P($zu(78,22,jrnf,1),",",2)
+ . s dev=$zu(78,5,jrnf,0) i dev<0 d $zu(9,"","RCVRYDMN: ERROR opening "_jrnf,(1>0),1) q
+ . i $zu(78,6,dev)
+ . s addr=$zu(78,18,0) f  s addr=$zu(78,18,addr) q:addr'>0  s jseq=$zu(78,11,addr) q:jseq>0
+ . i $zu(78,7,dev)
+ i jrnf="" q 0  ;no valid clujrnseq (>0) found
+ q jseq

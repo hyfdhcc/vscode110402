@@ -1,0 +1,71 @@
+ROUTINE ECPSvrR [Type=INT]
+ECPSvrR(TcpDev) public { ; ECP Server daemon. ; CFL1332 06/01/05
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+	Set $ZT="err"  ; GK362
+	s clientipaddr=$s($zbitget($zversion(0)_$c(0,0,0,0),42):$SYSTEM.TCPDevice.PeerAddr(0),1:$zu(54,2,$zu(111,0)))
+	if ('$system.ECP.GetProperty("ECPValidServJob")) {
+		if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecpsvrR: "_"Connection from("_clientipaddr_") is a job server!!") }
+		If $zu(66,"NET","%ecpServer",300,0,32768,1)=-1 goto err
+		h
+	}
+	Do $ZU(67,15,clientipaddr,$J) ;ipname
+	Do $ZU(67,12,clientipaddr,$J) ;clientname
+	If $System.ECP.Debug()\$zh("2000")#2=1 Do $zu(9,"","ECPSvrR: Startup Roles="_$roles_" username="_$username_" login_roles="_$lg($System.Security.Users.ExportSecurityContext(),2))
+	If ##class(Security.Services).IsEnabled("%Service_ECP")=0 { ;; GK368
+	   Do $zu(9,"","ECP Server is not enabled, connection from("_clientipaddr_") dropped",(1  /* Warning */>0),1  /* Warning */)
+	   h 60
+	   Quit 0
+	}  ; GK232-
+	If ($System.License.KeyServer()'="Multi")!($System.License.MaxECPServers()=0) { ;; RJW1220+
+	   Do $zu(9,"","ECP Server is not licensed, connection from("_clientipaddr_") dropped",(1  /* Warning */>0),1  /* Warning */)
+	   h 60
+	   Quit 0
+	}  ; RJW1220-
+	set rs=$system.ECP.GetProperty("TCPSRcvBufSize") ;; TCPRCVBUF	// GK1185+
+	set ws=$system.ECP.GetProperty("TCPSSendBufSize") ;; TCPSNDBUF
+	Use TcpDev:(/TCPRCVBUF=rs:/TCPSNDBUF=ws)		// GK1185-
+	s sys=$system.ECP.NewServerConnection()
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecpsvrR: "_"Connection from("_clientipaddr_") New sys("_sys_")") }
+	If (sys = 0) Quit 0
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecpsvrR: "_"Connection from("_clientipaddr_") sys("_sys_")") } ; GK362
+	Do DAEMONJOB^START("%Service_ECP")
+	s $roles=""
+	If $System.ECP.Debug()\$zh("2000")#2=1 Do $zu(9,"","ECPSvrR: Starting read dmn - Roles="_$roles_" username="_$username_" login_roles="_$lg($System.Security.Users.ExportSecurityContext(),2))
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecpsvrR: "_"Starting proc/write dmn("_clientipaddr_") sys("_sys_")") } ; GK362
+	If $zu(66,"NET","ECPSvrW",300,0,32768,$System.Security.Users.ExportSecurityContext(),sys)=-1 goto err
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecpsvrR: "_"Invoke Rd dmn("_clientipaddr_") sys("_sys_")") } ; GK362
+	d $system.ECP.StartServerReadDmn(sys)
+	if (($System.ECP.Debug()\$zh("2000")#2=1)) { d $ZU(9,"","ecpsvrR: "_"Done Rd dmn("_clientipaddr_") sys("_sys_")") } ; GK362
+	Set $ZT=""
+	Quit 1
+err ; GK362+
+	Set $ZT="fatalerror"
+	s $roles=$roles_","_"%All" ; verified 9/26/16 STC
+	d $zu(9,"","ECPSvrR: error @ ("_$zu(56,2)_") $ZE("_$ZE_") dmn("_$g(clientipaddr)_") sys("_$g(sys,"<undef>")_")",1,1  /* Warning */)
+	Close TcpDev
+	Do:$get(^%ISCLOG,1)'<2 Log^%SYS.ISCLOG($ZNAME,2,"ECPServer","Closing connection:","")
+	HALT
+fatalerror
+	Set $ZT="fatalexit"
+	s $roles="" ; remove %All if we added it above
+	Do $ZU(9,"","Fatal Error "_$ZE_" in ECPSvrR at "_$ZU(56,2)_" -- Exiting ECPSvrR",1,2  /* Severe error */)
+	do BACK^%ETN
+fatalexit
+	Set $ZT=""
+	HALT ; GK362-
+}

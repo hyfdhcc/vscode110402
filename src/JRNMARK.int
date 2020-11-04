@@ -1,0 +1,205 @@
+ROUTINE JRNMARK [Type=INT]
+JRNMARK ;utility to handle journal markers  ;CFL1332 06/01/05
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ q
+SERVER(dev) ;stand-alone server
+ n err,id,text,cmd,ans s err=0
+ o dev::0 e  d ERRLOG(-2_","_dev,1) q 
+ s $zt="SRVquit",$ze=""
+ u dev r cmd i cmd="JMK" d SRVrun(dev,cmd) q
+ s err=-5_","_cmd g SRVquit
+SRVrun(dev,cmd) ;can be spawned by SuperServer
+ n err,id,text,ans s err=0
+ s $zt="SRVquit",$ze="" u dev:(::"a")
+ f  u dev r cmd q:+cmd=0  d  u dev w ans,!
+ . i +cmd=1 s ans=$$JRNSWCH^JRNUTIL("",$p(cmd,",",2)) s:ans>0 ans=ans_$zu(78,3) q
+ . i +cmd'=2 s err=-5_","_cmd g SRVquit 
+ . s id=+$p(cmd,",",2),text=$p(cmd,",",3,$l(cmd))
+ . s ans=$$ADD(id,text)
+ . i $l(ans)>510 d ERRLOG(-4_","_ans) s ans=$e(ans,1,510)
+SRVquit ;
+ s $zt="" i $ze]"" s err=-1_","_$ze ;n f s f="cconsole.log" o f:("was") u f w ! w  w ! c f
+ c dev
+ i +err d ERRLOG(err,1)
+ zq  q
+CLIopen(host,dev,port) ;
+ o dev:(host:$g(port)):0 e  q -2_","_dev_":"_host
+ q 0
+CLIexec(dev,cmd,timeout) ;
+ s $zt="etCLI",timeout=+$g(timeout,30)
+ i $l(cmd)>510 q -4_","_cmd
+ u dev w cmd,!
+ r ans:timeout e  q -3_","_cmd
+ q 0_","_ans
+etCLI ;
+ s $zt=""
+ q -1_","_$ze
+CLIquit(dev) ;
+ s $zt="etCLI"
+ u dev w 0,!
+ c dev
+ q 0
+ERRMSG(err)
+ n info s info=$p(err,",",2,$l(err))
+ i +err=-1 s err=info ;strip off "-1,", leaving only $ze
+ e  i +err=-2 s err="Unable to open device "_info
+ e  i +err=-3 s err="Timeout getting answer to request "_info
+ e  i +err=-4 s err="Message too long: "_info
+ e  i +err=-5 s err="Invalid command: "_info
+ q err
+ERRLOG(err,srv) ;
+ d $zu(9,"","Error in "_$ZN_" "_$s(+$g(srv):"server",1:"client")_": "_$$ERRMSG(err),(0>0),0)
+ q
+SETCLUSW(swloc) ;
+ s swloc=$$%swstat(10) ;whether switch 10 is already set by the caller
+ q $$CLU^SWSET(10,1,swloc) 
+CLRCLUSW(swloc) ;
+ i $ZU(95,10,0)  ; Clear SW10 clusterwide
+ i 'swloc,$$%swset(10,0)
+ q
+CLUSET(id,text,swset) ;
+ n rc,swloc,seq s swset=+$g(swset),$ze="",$zt="CLUSETE"
+ i 'swset s rc=$$SETCLUSW(.swloc) i rc<0 q rc
+ s rc=$$SyncCluJrnSeq() 
+ i rc>0 s seq=+rc,rc=$$ADD(id,text) i $zu(78,41,0,seq)
+CLUSETE ;
+ s $zt="" i $ze]"" s rc="-99,"_$ze
+ i 'swset,$d(swloc) d CLRCLUSW(swloc)
+ q rc
+SyncCluJrnSeq() ;
+ n rc,seq
+ i '$$%swstat(10) q "-10,switch 10 not set" ;really required cluster wide
+ s rc=$zu(78,41,1) 
+ i rc'>0 q rc_",error ("_rc_") getting cluster master journal sequence #"
+ s seq=rc i $zu(78,41,0,seq+1)  ;set local clujrnseq to seq+1
+ s rc=$zu(78,41,2,seq+2) 
+ i rc'>0 q rc_",failed to bump journal sequence # to "_(seq+2)_" on other cluster members"
+ q (seq+2)
+ADD(id,text) ;
+ n info
+ s info=$ZU(78,34,0,id,text)
+ n off,path
+ i info>0 { ;offset,jrnfilename
+   s off=$p(info,","),path=$p(info,",",2)
+   i path=$zu(78,3) q info  ;file hasn't changed
+   s next=$P($zu(78,22,path,2),",",2)
+   i next="" q info  ;cannot find next file to locate the marker
+   s hdr=$zu(78,22,next,99) i hdr'>0 q info  ;next file unavailable
+   s end=$p(hdr,",",11+1) ;end offset of 'path'
+   i off<end q info ;marker in 'path'
+   s oldnew=$p(hdr,",",22+1) ;relationship between offsets in old/new files
+   s old=$p(oldnew,":"),new=$p(oldnew,":",2)
+   i 'old||(off<old) q info  ;not supposed to happen
+   q (off-old+new)_","_next ;location of the marker in 'next'
+ }
+ i info=-1 q "-1,journaling is disabled or suspended"
+ i info=-2 q "-2,some other job is in the process of adding a journal marker"
+ i info=-3 q "-3,unable to add a new journal record"
+ i info=-4 q "-4,unable to open current journal file"
+ q info
+ ;three options: 1. start server by hand; 2. remote job server; 3. superserver
+sample(host,port,id,text) ;
+ n dev,err s dev="|TCP|"_port,err=0
+ s err=$$CLIopen(host,dev) i +err g etsample
+ s err=$$CLIexec(dev,"JMK"_1) i +err g etsample
+ s err=$$CLIexec(dev,2_","_id_","_text) i +err g etsample
+ s err=$$CLIquit(dev)
+etsample ;
+ c dev i +err w err,!
+ q
+TQUIWRITE(verbose) q $$QUIESCE(1,"buffer activity",10,verbose)
+TQUIGC(verbose) q $$QUIESCE(2,"garbage collection",10,verbose)
+TQUIDB(verbose) q $$QUIESCE(4,"database expansion",10,verbose)
+TQUIGLO(verbose) q $$QUIESCE(8,"global activity",10,verbose)
+TQUIGLOUPD(verbose) q $$QUIESCE(16,"global updates",10,verbose)
+TQUINET(verbose) q $$QUIESCE(32,"network activity",10,verbose)
+TQUIDISK(verbose) q $$QUIESCE(1+2,"disk activity",10,verbose)
+TQUIUPD(verbose) q $$QUIESCE(1+2+4+16,"update activity",10,verbose)
+TQUISYS(verbose) q $$QUIESCE(1+2+4+8,"system activity",10,verbose)
+QUIESCE(bits,text,retries,verbose,intv) ;
+ s verbose=+$g(verbose),retries=+$g(retries,-1),intv=+$g(intv,1)
+ q ($$Quiesce(bits,text,retries,verbose,intv)>0)
+Quiesce(bits,text,retries,verbose,intv) ;
+ n noWDbits  ;JO1988
+ s $zt="QUIESCEE"
+ q:$zu(51,bits) 1 ;double checking $ZU(51) is no longer necessary
+ s verbose=+$g(verbose),retries=+$g(retries,-1),intv=+$g(intv,1)
+ i verbose w $c(13,10)_"WARNING: Switch is set and may affect production for up to "_(retries*intv)_" seconds."_$c(13,10)_"Waiting for "_text_" to finish..."
+ f  q:'retries  h intv q:$zu(51,bits)  s retries=retries-1 i retries#5=0 i verbose w "."
+ s noWDbits=1
+ s:$s($S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0):''$zu(59,0),1:0) noWDbits=noWDbits+2
+ s noWDbits=$zboolean(bits,noWDbits,2)  ;2 = x & ~ y
+ if '$ZU(51,bits),bits'=1,$zboolean(bits,1,1),$zu(51,noWDbits) {
+	 i verbose w $c(13,10)_"System is idle except WD is still running."_$c(13,10)_"     Waiting up to 2 minutes for WD to finish"
+	 f i=1:1:120 q:$ZU(51,bits)  h 1 if i#5=0 i verbose w "."
+	 if $ZU(51,bits) s retries=1 ;signal success
+ }
+ i verbose w $s(retries:" ready.",1:" abort. "_$$quiescefailmsg(bits))_$c(13,10)
+ q retries
+quiescefailmsg(bits)
+ N ret,clu,clumsg s ret="",clu=$zb(bits,512+256+128,1),clumsg=""
+ if $zb(clu,128,1)||($zb(clu,(256+512),1)=(256+512)) s clu=128,clumsg=" (cluster wide)"
+ if $zb(clu,512,1) s clumsg=" (cluster master only)"
+ if $zb(clu,256,1) s clumsg=" (cluster slaves only)"
+ if $zb(bits,1,1)&&('$ZU(51,clu+1)) S ret=ret_"write daemon"_clumsg_","
+ if $zb(bits,2,1)&&('$ZU(51,clu+2)) S ret=ret_"garbage collector"_clumsg_"," 
+ if $zb(bits,4,1)&&('$ZU(51,clu+4)) S ret=ret_"file expander"_clumsg_","
+ if $zb(bits,8,1)&&('$ZU(51,clu+8)) S ret=ret_"global reference"_clumsg_","
+ if $zb(bits,16,1)&&('$ZU(51,clu+16)) S ret=ret_"global update"_clumsg_","
+ if $zb(bits,32,1)&&('$ZU(51,clu+32)) S ret=ret_"client-side network connections"_clumsg_","
+ if $zb(bits,64,1)&&('$ZU(51,clu+64)) S ret=ret_"network server activity"_clumsg_","
+ if ret'="" s ret="Quiesce failed reason: "_$e(ret,1,*-1) d $zu(9,"",ret,1,2) i $d(^rOBJ("ZQuiesceFail")) d ^ZQuiesceFail
+ Q ret
+QUIESCEE s $zt="" d $zu(9,"","QUIESCE: "_$ze,(1>0),1) q -1 ;0
+CluQuiet(switch,target,timeout)
+ n flags,rc
+ i $g(switch)-10,$g(switch)-13 ztrap "SWITCH"
+ n targetmsg s target=$g(target)
+ i target=1 s target=256,targetmsg=" on cluster slave members"
+ e  i target=2 s target=512,targetmsg=" on cluster master"
+ e  s target=512+256,targetmsg=" cluster wide"
+ s flags=1+2+4+$s(switch=10:8,1:16)
+ s rc=$$Quiesce(flags+target,$s(switch=10:"system activity",1:"update activity")_targetmsg,$g(timeout,10),'$g(QUIET,$g(QUIETLY)))
+ i rc<0 ztrap "Abort"
+ q rc
+%swstat(sw,detail) ; Return the status of Switch (sw)...
+ s sw=+$g(sw),detail=+$g(detail)
+ i sw<0 q $s(detail:-1_$c(1)_"Illegal Switch",1:-1)
+ n bit,i,info,job10
+ s info=""
+ s $zt="%swerr^"_$zn,$ze=""
+ Set i=$System.Util.GetSwitch(sw)
+ i +i=0 q $s(detail:0_$c(1)_"Switch "_sw_" is NOT set.",1:0)
+ i sw=10 s job10=$p(i,",",2),info=" Set by JOB #: "_job10_"  ("_$v(-1,job10)_")"
+ q $s(detail:1_$c(1)_"Switch "_sw_" IS set."_info,1:1)
+%swerr   ; Some error occured when doing a Switch 10 Status...
+ s $zt=""
+ q $s(detail:-1_$c(1)_$ze,1:-1)
+%swset(sw,val,detail) ; Set Switch (sw) to (val - {0,1})...
+ s sw=+$g(sw),val=+$g(val),detail=+$g(detail)
+ i sw<0 q $s(detail:-1_$c(1)_"Illegal Switch",1:-1)
+ i val'=0,val'=1 q $s(detail:-1_$c(1)_"Illegal Switch Value",1:-1)
+ s $zt="%swseter^"_$zn,$ze=""
+ If +$System.Util.GetSwitch(sw)=val q 1
+ Do $System.Util.SetSwitch(sw,val)  ;Also maintains job # for job 10
+ If +$System.Util.GetSwitch(sw)=val q 1
+ q 0
+%swseter ; Some error occured when Setting Switch (sw) to (val)...
+ s $zt=""
+ q $s(detail:-1_$c(1)_$ze,1:-1)

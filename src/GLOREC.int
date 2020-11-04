@@ -1,0 +1,439 @@
+ROUTINE GLOREC [Type=INT]
+GLOREC	Do LOG() Quit 
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+	;
+	; Log and Display utility for the GLORECORD table
+	; 
+	; External entry points:
+	; 	LOG - prompts for filename and delay then jobs off GLOREC daemon
+	; 	AUTOLOG - non-interactive, pass filename and delay values
+	; 	STOP - signals GLOREC daemon to shutdown
+	; 	
+LOG() Public {
+    Try {
+		If '$zu(40,41,0) {
+		    Write !,"GLORECORD feature not available in this build.",! quit
+		}
+		If $get(^%GLOREC)'="" {
+			Set file=$list(^%GLOREC,2)
+		    Write !,"Stopping GLORECORD" Do STOP
+		    Set zh=$zh
+			read !,"Display output <Y> ",display,!
+			If display="" Set display="Y"
+			If $zconvert(display,"l")'="y" Quit
+			Hang (zh+1.1-$zh)
+			Do DisplayLog(file,0)
+			Quit
+		}
+		Read !,"File to log the GLORECORD table to: <glorec.grc>  ",file
+		If file="" {
+		    Set file="glorec.grc"
+		}
+		Read !,"Log records every <0.1> second(s)?  ",delay
+		If delay="" {
+		    Set delay=0.1
+		}
+		Read !,"Type of block information to record <16384> ",flags
+		If flags="" Set flags=16384
+		Do AUTOLOG(file,delay,flags)
+    } Catch {
+		Do BACK^%ETN
+    }
+}
+	;
+AUTOLOG(file,delay,flags) Public {	;	callable entry point
+    Try {
+		If '$zu(40,41,0) {
+		    Write !,"GLORECORD feature not available in this build.",!
+		    Quit
+		}
+		Job START(file,delay,$g(flags))
+		Write !,"GLORECORD Log Deamon started with job number "_$j,!
+    } Catch {
+		Do BACK^%ETN
+    }
+}
+	;
+START(file,delay,flags) public {
+    Do HIGH^%PRIO
+    Try {
+		If file="" { s file="glorec.grc" }
+		If delay="" { s delay=0.1 }
+		Open file:("WUNK\RAW\":/OBUFSIZE=32768:/NOXY=1):5
+		Quit:'$T
+		If $get(flags)="" Set flags=(2**14)
+		Set grf=$ZU(40,2,134)
+		View grf:-2:4:(flags)
+		Set ^%GLOREC=$lb($J,file)
+		Set maxrectab=$v($zu(40,2,140),-2,4)
+		Set glorectab=$v($zu(40,2,142),-2,"C")
+		Set recsize=$zu(40,41,0)
+		Set endtab=glorectab+(maxrectab*recsize)
+		Use file Write $zwc(recsize),$ZLCHAR(flags)
+		Set pos=2
+		Set end=$v($zu(40,2,141),-2,4)-1
+		Set start=end,time=$h
+		Set chunk=400,lastposoffset=glorectab+(maxrectab*recsize)
+		For {
+			For rec=start:chunk:end {
+				Set endrec=rec+chunk-1 If endrec>end Set endrec=end
+				Set offset=glorectab+(rec#maxrectab*recsize)
+				If (rec\maxrectab)=(endrec\maxrectab) {
+					Set size=(endrec-rec+1)*recsize
+					Set data=$view(offset,-2,-size)
+					If $l(data)=size {
+						Write data
+					} Else {
+						If $increment(^%GLOREC(1)) {}
+					}
+				} Else {
+					Set size=lastposoffset-offset
+					Set data=$view(offset,-2,-size)
+					If $length(data)=size {
+						Write data
+					} Else {
+						If $increment(^%GLOREC(1)) {}
+					}
+					Set size=endrec#maxrectab+1*recsize
+					Set data=$view(glorectab,-2,-size)
+					If $length(data)=size {
+						Write data
+					} Else {
+						If $increment(^%GLOREC(1)) {}
+					}					
+				}
+			}
+		    set start=end+1                 ; start with the next one
+		    set end=$v($zu(40,2,141),-2,4)-1
+		    If end-start>maxrectab {
+				If $I(^%GLOREC(0)) {} ;Counter of wraparound
+				Set start=end-maxrectab+2000
+		    } ElseIf (start > (end-2000)) {
+			    hang delay ; wait for more
+			    set end=$v($zu(40,2,141),-2,4)-1
+				If end-start>maxrectab {
+					If $I(^%GLOREC(0)) {} ;Counter of wraparound
+					Set start=end-maxrectab+2000
+					Set delay=delay/10
+			    }
+		    }
+			If time'=$h Set time=$h If $get(^%GLOREC)="" Quit
+		}
+    } Catch {
+		Do BACK^%ETN
+    }
+    Close file
+}
+	;
+STOP() Public { Set ^%GLOREC="" }
+	;
+DISPLAY() Public {
+    Try {
+		Read !!,"Enter the name of the file: <glorec.grc>  ",file
+		If file="" { s file="glorec.grc" }
+		Read !,"Show details? <no> ",x
+		Set detail=$zcvt($e(x),"u")="Y"
+		Read !,"Display all records? <yes> ",x
+		If $zcvt($e(x),"u")'="N" {
+		    Do DisplayLog(file,0,detail)
+		} Else {
+		    Read !,"Display records with pid: <all>  ",pid
+		    For {
+		        Read !,"Display records with action ('?' for a list):  <all>  ",code
+			Quit:code'="?"
+			Do listcodes
+			Write !
+		    }
+		    Read !,"Display records with bdb: <all>  ",bdb
+		    Read !,"Display records with sfn: <all>  ",sfn
+		    Read !,"Display records with blk: <all>  ",blk
+		    Write !
+		    Do DisplayLog(file,1,detail,$lb(bdb,sfn,blk))
+		}
+    } Catch {
+		Do BACK^%ETN
+    }
+}
+	;
+DisplayLog(file,check,detail,chk) [FF,IO,IOF,IOSL,IOST] {
+	New FF,IO,IOF,IOSL,IOST
+    Try {
+		Do OUT^%IS
+		Set FF="W "_IOF_" S $Y=0"
+		Set SELF=($I=IO),CRT=(IOST?1"C".E)
+		Set:'SELF CRT=0
+		Close file
+		Open file:("RUK\RAW\"):5
+		Quit:'$T
+		Use file Read recsize#2 Set recsize=$zwa(recsize) Use IO
+		If recsize'=$zu(40,41,0) {
+		    Write !,"File not compatible"
+		    Quit
+		}
+		Use file Read flags#4 Set flags=$ZLASCII(flags) Use IO
+		Set blocktype=$zboolean(flags,2**14,1)
+		If blocktype Do BlockType(.blocktype)
+		Do BlockType(.blocktype)
+		Do Header
+		For  {
+		    Use file Read record#recsize
+		    While $l(record)<recsize {
+				Hang 0.1
+				Use file Read left#(recsize-$l(record))
+				Set record=record_left
+		    }
+		    Do Parse(record)
+		    If check,'$$Check() {} Else { If $$Print() { Quit } }
+		}
+    } Catch {
+		If $ze'["<ENDOFFILE>" { Do BACK^%ETN }
+    }
+    Close file
+    Close:'CRT IO
+    Quit
+    ;
+Parse(record) ;
+    Set xtime=$zqa(record,1+$zu(40,41,1))
+    Set xpid=$zla(record,1+$zu(40,41,3))
+    Set xcode=$a(record,1+$zu(40,41,15))
+    Set xfacilty=$a(record,1+$zu(40,41,16))
+    Set xsfn=$zwa(record,1+$zu(40,41,9))
+    Set xwdflags=$zla(record,1+$zu(40,41,10))
+    Set xbdb=$zla(record,1+$zu(40,41,4))
+    Set xblk=$zla(record,1+$zu(40,41,5))
+    Set xflags=$zla(record,1+$zu(40,41,24))
+    Set xotherflags=$zla(record,1+$zu(40,41,25))
+    Set xextra=$zqa(record,1+$zu(40,41,2))
+    If blocktype {
+	    Set xdisk=xextra\65536,xextra=xextra#65536
+	    Set xextra=$get(blocktype(xextra),xextra)
+    }
+    Quit
+	;
+Check()	;
+    Quit 1
+	;
+Print() ;
+    Use IO
+    If CRT,($y+3)>IOSL {  
+		Use 0 Read !!,"--more--",x
+		Set x=$zconvert(x,"l")
+		If x="q"||(x="n") Quit 1
+		If x="c" Set CRT=0
+		If x>0 Set IOSL=x
+		Do Header
+    }
+    If xblk=4294967295 { Set xblk=-1 }
+    If xsfn=15999 { Set xsfn="UND" }
+    Use IO Write !,xtime,?16,$j(xpid,6),$j(xbdb,10),$j(xblk,10),$j(xsfn,5),$j(xextra,8)," ",$p($text(codes+xcode),";;",2)
+    If blocktype,xdisk Write " x"
+    Quit 0
+}
+BlockType(struct) {
+	Set struct(1)="DIR"
+	Set struct(2)="PNT"
+	Set struct(6)="BPNT"
+	Set struct(8)="DATA"
+	Set struct(12)="BDATA"
+	Set struct(16)="BITMAP"
+	Set struct(32)="ARTREE"
+	Set struct(9)="DIR4K"
+	Set struct(24)="BIGDATA"
+	Set struct(64)="TOPPNTBIT"
+	Set struct(66)="TPNT"
+	Set struct(70)="TBPNT"
+	Set struct(17)="MIRBLK"
+}
+Header() [IO,FF] {
+    Xecute FF
+    Use IO
+    Write !!,"Time/Counter",?16,$j("mypid",6),$j("bdb",10),$j("blk",10),$j("sfn",5),$j("extra",8)," action"
+    Write !, "----------------",$j("-----",6),$j("---",10),$j("---",10),$j("---",5),$j("-----",8)," ------"
+}
+listcodes() {
+    For i=1:1:163 {
+		S txt=$p($text(codes+i),";;",2)
+		If txt'="" {
+		    Write !,i,?5,txt
+		}
+    }
+}
+codes	;;
+	;;GBLKRD_S
+	;;GBLKRD_X
+	;;GKCLRIN_S
+	;;GKCLRIN_X
+   	;;AWAIT_S
+   	;;AWAIT_X
+   	;;AWAIT_W
+   	;;AWAITANY
+   	;;RECEIVE_X
+   	;;RECEIVE_S
+   	;;NORECEIVE
+   	;;GRANT_X
+   	;;GRANT_S
+   	;;NOGRANT
+   	;;GRANT_ANY
+   	;;GWDQ
+   	;;RELEASESHADOW
+   	;;GSHADOWBLK
+   	;;WDSEC
+   	;;NEXTINWDQ_SHAD
+   	;;EXTINWDQ_NOSHAD
+   	;;WDCHKP
+   	;;CHKP
+   	;;PROCWDWKQ
+   	;;GSET
+   	;;GKILL
+   	;;GINCREMENT
+   	;;GGET
+   	;;GORDER
+   	;;GDEFINE
+   	;;GDEFVAL
+   	;;GXINUSE
+   	;;NEXTINWDQ
+   	;;GPNTCOL
+   	;;GFREEBUF
+   	;;GBLKPURGE
+   	;;GBUFSET
+   	;;GBUFLOC
+   	;;GETBIGVAL
+   	;;GSHADOWRET
+   	;;GRELEASESHAD2
+   	;;SWD_SKIPWRITE
+   	;;GBSDQ
+   	;;WDBUFONE
+   	;;GLRUQEUE
+   	;;GMRUQUEUE
+   	;;GLRUDEQUEUE
+   	;;GLRUENQUEUE
+   	;;GALLOCCLBLK
+   	;;CPR CLEARALL
+   	;;GALLOCRSRVDCNT
+   	;;GFREERSVRDBLKS
+   	;;GFREERSVRDBLKS SAT
+   	;;GTRYCNT
+   	;;GTRYCNT SAT
+   	;;CPR ADD GTRYCNT
+   	;;GTRYMAP4K
+   	;;GTRYMAP4K SAT
+   	;;CPR ADD GTRYMAP4K
+   	;;
+   	;;
+   	;;
+   	;;CPR FREE DISMOUNT
+   	;;CPR FREE DKFLUSH
+   	;;GBCOL NEWBUF
+   	;;GBCOL DEFERED
+   	;;GBCOL SAT UPD
+   	;;GBCOL SATERR
+   	;;GBCOL FREE BLOCK
+   	;;MAP ERROR
+   	;;
+   	;;
+   	;;
+   	;;
+   	;;
+   	;;GCCOL4K TOP
+   	;;GCCOL4K PNT
+   	;;GCCOL4K BPNT
+   	;;GCCOL4K DATA
+   	;;GCCOL4K ERR
+   	;;GCOLLECT_1
+   	;;GCOLLECT_2
+   	;;
+   	;;GKILLFROMTOP4K
+   	;;
+   	;;GDELNODES4K
+   	;;
+   	;;GBIGDEALLOC TOP
+   	;;GBIGDEALLOC BOT
+   	;;
+   	;;CHKDELN 4K
+   	;;C_ADDBLK_PRGND
+   	;;C_PRG_SRVREQ
+   	;;C_PRG_ADDBLK1
+   	;;C_PRG_ADDBLK2
+   	;;C_PRG_LISTPNT
+   	;;C_PRG_LISTBLK
+   	;;C_DELETEPNT
+   	;;C_ADDBLK
+   	;;C_NETCHKREQ_UPD
+   	;;C_NETCHKREQ_PRG
+   	;;C_PRGBLK_ADDPNT
+   	;;S_SNDBLK
+   	;;S_GBSDQ
+   	;;S_NBIGDB_ALLOC
+   	;;S_PRGBLK
+   	;;S_QUEUEPRG
+	;;
+	;;GOFFLRUtoLRU
+	;;GOFFLRUtoMRU
+	;;SEIZE
+	;;XSEIZE
+	;;RELEASE
+	;;XRELEASE
+	;;JRNSWITCH
+	;;JRNDAEMON
+	;;JRNSYNCBLK
+	;;JRNOUTSYNC
+	;;JRNIOWAIT
+	;;JRNDIRBLK
+	;;MIRJRNWAITFAIL1
+	;;MIRJRNWAITFAIL2
+	;;MIRJRNWAITDONE
+	;;MIRJRNDONEFAIL
+	;;MIRJRNDONE
+	;;SYNCWITHJRN
+	;;PROCEXIT
+	;;FBP_DCLOSE
+	;;FBP_GBCOLLECT
+	;;FBP_GALLO1
+	;;FBP_GTRYMAP4K
+	;;HIBERNATE
+	;;WAKEUP
+	;;WOKEUP
+	;;WDQREM
+	;;WDQREM2
+	;;GWDQ2
+	;;GWDQ3
+	;;GCLRINUSFAST
+	;;GCLRINUXFAST
+	;;GBDB_GETS
+	;;GBDB_GETX
+	;;GSRCHLAST_GETS
+	;;GSRCHLAST_GETX
+	;;CLRSHADOWX
+	;;GBUFLOCRETRY
+	;;GBUFLOCXOWN
+	;;GCONVSH2X
+	;;WDDISMPURGE
+	;;WDQ_ACTIVE_ADD
+	;;WDINC_READBLK
+	;;WDINC_WRITEBLK
+	;;WDINC_READPRIV
+	;;WDINC_WRITEPRIV
+	;;WDINC_WRTPRIVFND
+	;;WD_AVAILBUF
+	;;GWDQ_STUCK
+	;;GWDQ_WTREQ
+	;;INMEMQREMActive
+	;;INMEMQREMStuck
+	;;REMActive
+	;;LISTMOVE
+	;;INMEMXFER

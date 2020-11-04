@@ -1,0 +1,500 @@
+ROUTINE JRNSTART [Type=INT]
+JRNSTART ;Start Journaling ; Change #: $Change: 4521965 $
+ ; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/jrnstart.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+ ; this is chui JRNSTART (also for STUCNFG)
+MAIN N curfile,filename,jrnall,jrnflag,jrninfo,shortnam,attempt
+ N prefix,maxsize,expqty,started,altdir,curdir,deldir
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+ I ($p($zu(78,22),"^")&&$p($zu(78,22),"^",3)) {
+   w !
+   W !,"Note: Journaling of database updates is currently DISABLED as the"
+   W !,"      result of an journal I/O error that has not yet been"
+   W !,"      resolved. The journaling system is in the process of"
+   w !,"      retrying the failed I/O or a failed journal file expansion"
+   w !,"      to preserve the journal data prior to the disabling of"
+   W !,"      journaling. Starting journaling now will cause that journal"
+   w !,"      data to be lost. In any case, some journaling information" 
+   W !,"      has been lost since database updates ceased being journaled."
+   W !,"      (This is just an informational message, there is no"
+   W !,"      reason not to start journaling at this point)"
+   I $$YN("Start journaling (and stop retrying failed I/O operation) now","Y")'="Y" w !,"Journaling remains DISABLED." q
+   s stopped=$$INT^JRNSTOP(.err,0)
+   w:$g(err)'="" !,"ERROR: ",err
+   i 'stopped w !,"Failed to stop I/O retries. Journaling remains DISABLED." q
+ }
+ if $ZBITGET($ZVERSION(0),46) {
+	s rc=$$GlobalsDB($ZU(12,"journal"))
+	if '+rc {
+		s err=$P(rc,",",2)
+		w !,"Failed to start journaling: ",err
+	} else {
+		w !,"Journaling started to ",$ZU(78,3)
+	}
+	quit 
+ }  								
+ D init
+ I curfile'="" W !,"Already journaling to "_curfile Q
+ I $G(STU)="S"!$G(QUIETLY) D  Q:'started
+ . ;^%SYS("JOURNAL","CURRENT") carries jrnall value in config.def
+ . S jrnall=$P($G(^%SYS("JOURNAL","CURRENT")),"^")\2#2
+ . I $G(QUIETLY) S started=1  ;as in Startup^STUCNFG1
+ . E  S started=($$YN("Start Journaling","Y",60)="Y") W !
+ n err
+ n shortnamini s shortnamini=shortnam
+ s started=$$INT(.curdir,altdir,.shortnam,prefix,maxsize,expqty,jrnall,.err,0)
+ n msg s msg="Journaling "_$S(started:"to "_curdir_prefix_shortnam,1:"NOT ")_" started."
+ d $zu(9,"",msg,($s(started:0,1:2)>0),$s(started:0,1:2))
+ i $g(STU)'="S" w !,msg,!
+ d:$g(err)'="" $zu(9,"","ERROR: "_err,($s(started:1,1:2)>0),$s(started:1,1:2))  ;there may still be an error even if started
+ d $zu(51,1)
+ Q 
+ ;This is the backend JRNSTART called by both chui and gui
+ ;input:
+ ;  expqty: not used (for now)
+ ;  chkshdw: check whether curdir or altdir is the same as a shadow journal
+ ;           journal directory and take action given the value of chkshdw:
+ ;           -1: no warning. Caller consciously uses the shadow directory
+ ;               because the files cannot conflict (due to prefixes, etc.)
+ ;            0: warning only; journaling still starts (<- default)
+ ;            1: warning and journaling fails to start
+ ;input/output:
+ ;  curdir - 
+ ;  shortnam - short form of the name of the journal file to start at
+ ;             (keep shortnam updated & do not use it for anything else!)
+ ;output:
+ ;  err - error message
+ ;  [return] - journal has started (0/1)
+INT(curdir,altdir,shortnam,prefix,maxsize,expqty,jrnall,err,io,chkshdw) 
+ s $zt="etINT"
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") s err="Operation requires %Admin_Manage:Use privilege" q 0
+ n fullname,stat,started,attempt,jrnflag,jrninfo,msg,glo,prelog,jrnstat
+ n fname,lastfile,tstdir
+ n wijfile,wijfilecnt ;PWC640
+ n stopped i ($p($zu(78,22),"^")&&$p($zu(78,22),"^",3)) s stopped=$$INT^JRNSTOP(.err,0) i 'stopped s err="ERROR stopping retries of failed journal I/O: "_$g(err) q 0
+ s started=0,attempt=0 
+ i $d(io),$e(io)="^" s glo=io k io ;ideally I should try a SET on glo
+ i $g(altdir)="" s altdir=curdir 
+ d FIXDIR(.curdir),FIXDIR(.altdir) ;append delimiters if necessary
+ n rc 
+ s rc=##Class(Config.Journal).IsJrnDirValid(curdir,prefix)
+ i 'rc { ;if primary directory is invalid, try alternate one if different
+	 i altdir=curdir s err=(-4_","_$System.Status.GetErrorText(rc)) q 0
+	 s rc=##Class(Config.Journal).IsJrnDirValid(altdir,prefix)
+	 i 'rc s err=(-4_","_$System.Status.GetErrorText(rc)) q 0 ;no valid dir
+	 s curdir=altdir ;to start journaling in altdir instead
+ } 
+ i $g(chkshdw)'<0,$$AbortOnShadowConflict^JRNSWTCH($g(chkshdw),curdir,altdir,.err) s err="Abort on shadow conflict" q 0
+ i shortnam="" s err="null journal file name" q 0
+ ; shortnam is based on what we know about the last journal file. Run
+ ; through the altdir and curdir directories and figure out what the
+ ; "highest" journal file they contain is. Then the "maximum" of these
+ ; three values will be our starting point.
+ s tstdir=$zu(12,curdir) d  s tstdir=$zu(12,altdir) i tstdir'=curdir d
+ . s fname=$$getname(""),fname=$E(fname,1,$F(fname,".")-1)_"*"
+ . s fname=tstdir_prefix_fname,fname=$ZSEARCH(fname) q:fname=""  s fname=$zu(12,fname)
+ . n prelen s prelen=$l(tstdir_prefix),lastfile=""
+ . f  q:$e(fname,1,prelen)'=(tstdir_prefix)  d  s fname=$ZSEARCH("") q:fname=""  s fname=$zu(12,fname)
+ . . i ($zversion(1)=1) s fname=$p($e(fname,prelen+1,$l(fname)),";") ;expecting YYYYMMDD.NNN
+ . . e  s fname=$e(fname,prelen+1,$l(fname)) ;expecting YYYYMMDD.NNN
+ . . i fname?8N1"."3.10N,(($p(fname,".")>$p(lastfile,"."))||(($p(fname,".")=$p(lastfile,"."))&&($p(fname,".",2)>$p(lastfile,".",2)))) s lastfile=fname ;looks like a journal file name
+ . i (($p(lastfile,".")>$p(shortnam,"."))||(($p(lastfile,".")=$p(shortnam,"."))&&($p(lastfile,".",2)>$p(shortnam,".",2)))) s shortnam=lastfile ;lastfile="" will fail this test
+ ; Now starting with shortnam see if this file exists in either the
+ ; current or the alternate directory. If it does and its a journal file
+ ; then move on to the next name. If it exists and isn't a journal file
+ ; also move on to the next name. Once we find a filename that doesn't exist,
+ ; that's our new journal file name.
+ f  s stat=$$filecheck(shortnam) q:stat>0  d:stat<0  s shortnam=$$getname(shortnam) q:shortnam=""
+ . d $zu(9,"","JRNSTART: !!!WARNING!!! "_$p(stat,",",2)_" is NOT a valid journal file. Try using the next name for the new journal file...",(0>0),0)
+ i shortnam="" s err="The number of today's journal files has reached the maximum "_(2**31-1) q 0
+ s fullname=curdir_prefix_shortnam
+retry ;
+ s $zt="etINT1"
+ L +^%SYS("JOURNAL","startswitch"):1 e  s err="locked" q 0
+ i +$zu(78,22) s err="Already journaling to "_$zu(78,3) L -^%SYS("JOURNAL","startswitch") q 0
+ S:'($p($zu(78,22),"^",5)!$p($zu(78,22),"^",2)) ^%SYS("JOURNAL","PROCESS","JRNSTART")=$J
+ d HISTORY^JRNUTIL("START",fullname,curdir,altdir,prefix,shortnam)
+ i $g(^%SYS("JOURNAL","WIJFILE"))]"" d
+ . s wijfile=^%SYS("JOURNAL","WIJFILE")
+ . s wijfilecnt=+$p(wijfile,",",2)
+ . s wijfile=$P(wijfile,",",1)
+ e  i $p($g(^%SYS("JOURNAL","LAST")),",",2)]"" d  ;SHUTDOWN, etc. (excl. STOP!)
+ . s wijfile=^%SYS("JOURNAL","LAST")
+ . s wijfile=$p(wijfile,"^",2,$l(wijfile)) ;VMS file path may contain "^"
+ . s wijfilecnt=0
+ do $ZU(78,93,prefix)  ;set journal prefix into shared memory
+ s started=$zu(78,0,shortnam,curdir,maxsize,0,expqty,altdir,$g(wijfile),+$g(wijfilecnt))
+ i started d
+ . s ^%SYS("JOURNAL")=started
+ . s $p(^%SYS("JOURNAL","LAST"),"^")=1 
+ . K ^SYS("SHUTDOWN","JRNCLEAN")
+ . K ^SYS("SHUTDOWN","TPCLEAN")
+ . i $d(^%SYS("JOURNAL","TESTSYS",1)) h +$g(^%SYS("JOURNAL","TESTSYS",1))  ;test interrupt
+ . d log(fullname)
+ L -^%SYS("JOURNAL","startswitch")
+ k:'($p($zu(78,22),"^",5)!$p($zu(78,22),"^",2)) ^%SYS("JOURNAL","PROCESS","JRNSTART")
+ s $zt="etINT"
+ i 'started {
+   s ^%SYS("JOURNAL")=0
+   s err=$p(started,",",2,$l(started))
+   i err'="" d loginfo(err)
+   i $i(attempt)>1 q 0 ;already tried secondary path
+   i curdir'=altdir {
+     d loginfo("Journal Start Failed - Trying Secondary Path")
+     S tstdir=curdir,curdir=altdir,altdir=tstdir ;swap curdir and altdir
+     s fullname=curdir_prefix_shortnam
+     s err=""
+     g retry
+   }
+ }
+ q started
+etINT1 ;
+ s $zt=""
+ L -^%SYS("JOURNAL","startswitch")  ;fall through to etINT
+ k:'($p($zu(78,22),"^",5)!$p($zu(78,22),"^",2)) ^%SYS("JOURNAL","PROCESS","JRNSTART")
+etINT 
+ s $zt=""
+ s err=$ze
+ q started
+filecheck(jrnfile)
+ ; jrnfile = journal file name in "short" form
+ ; Implicit inputs:
+ ;       curdir = current journal directory
+ ;       altdir = alternate journal directory
+ ;   prefix = prefix for journal files
+ ;   
+ ; Checks whether the specified file exists in either curdir or 
+ ; altdir. Returns:
+ ;        1 - file does not exist
+ ;        0 - file exists and is a journal file
+ ;       -1,fname - file exists but it is not a journal file
+ n fullname
+ ;
+ s fullname=curdir_prefix_shortnam
+ i '$ZU(140,4,fullname) q $s($ZU(78,22,fullname)=-1:-1_","_fullname,1:0)
+ ;
+ s fullname=altdir_prefix_shortnam
+ i '$ZU(140,4,fullname) q $s($ZU(78,22,fullname)=-1:-1_","_fullname,1:0)
+ q 1 ; file does not exist in curdir or in altdir
+log(fullname) ;
+ i $d(^%SYS("JOURNAL","a"))  ;to get naked indicator right
+ S ^("CURRENT")=(jrnall*2+1)_"^"_fullname
+ S ^("LAST")=^("CURRENT")
+ S ^("CURDIR")=curdir
+ S ^("ALTDIR")=altdir  
+ S ^("MAXSIZE")=maxsize
+ S ^("EXPSIZE")=expqty
+ S ^("PREFIX")=prefix
+ s ^%SYS("JOURNAL")=0  ;log complete
+ q
+init ;initialize, set defaults etc.
+ N lastfile,wijfile
+ S curfile=$$curfile()
+ ;If we're running during startup and there is a journal file recorded
+ ;in the WIJ from when the system was last running, then use that as the
+ ;basis for lastname as it will be more up to date than the name stored
+ ;in %SYS("JOURNAL","LAST"). If we're not running during startup then
+ ;("JOURNAL","LAST") is up to date as JRNSTOP must have been run.
+ s wijfile=$P($G(^%SYS("JOURNAL","WIJFILE")),",",1)
+ i $G(STU)="S",wijfile'="" s lastfile=wijfile
+ e  s lastfile=$zu(78,3) i lastfile]"" ;it is the last file prior to stop
+ e  s lastfile=$p($G(^%SYS("JOURNAL","LAST")),"^",2)
+ n Status,Prop
+ S jrnall=$P($G(^%SYS("JOURNAL","LAST")),"^")\2#2
+ S expqty=+$G(^%SYS("JOURNAL","EXPSIZE"))
+ s Status=##Class(Config.Journal).Get(.Prop)
+ s curdir=Prop("CurrentDirectory")
+ s altdir=Prop("AlternateDirectory")
+ s maxsize=Prop("FileSizeLimit")*1048576
+ s prefix=Prop("JournalFilePrefix")
+ S shortnam=$case($ZBITGET($ZVERSION(0),46),0:$case($f(lastfile,";"),0:$e(lastfile,*-8-$l($p(lastfile,".",$l(lastfile,"."))),*),:$e(lastfile,*-8-$l($p(lastfile,".",$l(lastfile,"."))),$f(lastfile,";")-2)),:lastfile) 
+ s shortnam=$$nextname(shortnam)
+ q
+nextname(shortnam) PUBLIC { ;this should take care of the version transition once and for all
+ S:shortnam'?8N1"."3.10N shortnam="00000000.000" ;which getname accepts
+ S shortnam=$$getname(shortnam)
+ Q shortnam
+}
+getname(curfile)  ;
+ n date,olddate,sess
+ s date=$zd($h,8),olddate=$e(curfile,1,8),sess=$p(curfile,".",2)
+ q:olddate'=date date_".001" ;including the case curfile=""
+ i sess>=(2**31-1) q ""
+ q date_"."_$s((sess)<99:$e((sess)+1001,2,4),1:(sess)+1)
+ ;this function is called from JRNROLL
+altjfile(exist) ; exist=1 means we want to check if file exists
+ n ok,jname,result s exist=+$g(exist)
+getjfnm w !?4,"Enter the journal file name ->" r jname:60
+ i $g(jname)="" q "" 
+ i '$$refok(jname,"file") w !?4,"This file name is invalid" g getjfnm  
+ s result=$zu(12,jname)
+ i exist d  g getjfnm:'ok
+ . o result:"r":0 
+ . s ok=$t
+ . i ok c result q
+ . w !?4,"File ",result," does not exist"  
+ i ($$YN("Please confirm: the file chosen is "_result,"Y",60)'="Y") g getjfnm
+ q result   ; from altjfile
+refok(ref,type) n ok s type=$g(type)
+ i $tr(type,"FILE","file")="file" d  q ok
+ . s $zt="referr^"_$ZN
+ . o ref:"r":0 s ok=$t i ok c ref q  ; try open read only
+ . o ref:"wn":0 s ok=$t           ; try new file creation
+ . c:ok ref:"d"                   ; close new file & delete, if created
+ ; for a directory, append a file name, and see if it opens
+ i $tr(type,"DIR","dir")="dir" d  q ok
+ . s ref=$$dir99(ref)
+ . i ref="" s ok=0 q
+ . If ($zversion(1)=3) s:$e(ref,$l(ref))'="/" ref=ref_"/"
+ . Else  If ($zversion(1)=2) s:$e(ref,$l(ref))'="\" ref=ref_"\"
+ . s ok=$$refok(ref_"mtest.xxx","file")
+ q 0 ; type is invalid at this point.
+referr s $zt="",$ze="",ok=0 q
+ /* Called from STU to start Journaling for GlobalsDB versions 
+    Returns: 1 - journaling succesfully started
+             0,<text> - journaling not started, text if present is the reason
+ */
+GlobalsDB(jrndir) PUBLIC {
+	s $zt="err"
+	if '$ZBITGET($ZVERSION(0),46) {
+		quit 0  ;failed, this isn't a usedsonly build
+	}
+	s maxsize=$G(^%SYS("JOURNAL","MAXSIZE"))
+	s numfiles=$G(^%SYS("JOURNAL","NUMFILES"))
+	s expqty=$G(^%SYS("JOURNAL","EXPSIZE"))
+	;In the $$$JRNSTART() call we're specifying both the directory and
+	; filename arguments. This is a signal that we're using yyyymmdd format
+	; with an optional prefix. The filename we use here (data-journal) must be at
+	; least as long as yyyymmdd (8 chars) so that the filename + ".nnn" is at
+	; least 12 chars.
+	s jrnfile="transaction-journal"_".000"  
+	;
+	; ^%SYS("JOURNAL","WIJFILE")=<jrnfilename>^<jrnfilecnt> from the WIJ @ startup
+	; we ignore the name (and set it to null so that the jrnstart file doesn't
+	; point at a prior file) but we want the filecnt because having the file
+	; count continue to increase helps avoid getting confused by the other
+	; files which we haven't reused yet. If we can't find the file count we
+	; erase the headers of all the journal files we can find to avoid troubles.
+	; 
+ 	s wijfile=$G(^%SYS("JOURNAL","WIJFILE"))
+	i wijfile'="" {
+ 		s wijfilecnt=+$p(wijfile,",",2)
+	} else {
+ 		s wijfilecnt=0
+	}
+	/* If we don't have the filecnt from the last time the system was running
+	   then we'll start over at 1 which is fine. To prevent getting confused
+	   about which journal files belong to this jrnstart and which journal files
+	   come from earlier jrnstarts, we zero out the journal header block
+	   of all of the journal files before starting */
+	if wijfilecnt=0 {
+		s iosave=$I
+		s file=jrndir_"transaction-journal"_".*"
+		s file=$ZSEARCH(file)
+		s nulls="",$P(nulls,$C(0),8192)=$C(0)  ;8kb of nulls
+		; write a little string into the header block over a spot where
+		; no one will care in case anyone wants to know why the file isn't
+		; valid
+		s str="<globals reinit>"  
+		s $e(nulls,56,56+$L(str))=str  ;+7 would probably be far enough
+		s cnt=0
+		s isOpen=0
+		while file'="" {
+			try {
+			   o file:"RWU":5
+			   s isOpen=1
+			   if $T { 
+				  use file
+				  for i=1:1:8 w nulls  ;64 kb of nulls (8KB would have been enough)
+				  close file
+			   	  s isOpen=0
+				  s cnt=cnt+1
+			   } else {
+				  d $zu(9,"","Failed to open "_file_" to reinitialize it",0,0  /* Informational message */)
+			   }
+			} catch {
+				d $zu(9,"","Error "_$ze_" (from "_$ZU(56,2)_") reinitializing "_file,1 /* broadcast and log message*/,1  /* Warning */)
+				if isOpen {
+					s isOpen=0
+					close file
+				}
+			}
+			s file=$zsearch("")
+		}
+		use iosave
+		if (cnt '= 0) {
+		   d $zu(9,"","Startup reinitialized "_cnt_" journal files",0,0  /* Informational message */)
+		}
+	}
+	try {
+		do $ZU(78,91,numfiles)  ;set max # of journal files we want
+		s rc=$zu(78,0,jrnfile,jrndir,maxsize,0,expqty,jrndir,"",+$g(wijfilecnt))
+		s err=0  ;if rc=0, we return err
+	} catch {
+		s rc=0  ;we'll return err below
+		s err="0,Caught exception "_$ze_" from "_$ZU(56,2)_" starting journaling"
+	}
+	if 'rc {
+		quit err
+	} 
+ 	s $p(^%SYS("JOURNAL","LAST"),"^")=1 
+    k ^SYS("SHUTDOWN","JRNCLEAN")
+    k ^SYS("SHUTDOWN","TPCLEAN")
+	quit 1  ;success
+err ;
+	s $zt=""
+	d BACK^%ETN
+	quit "0,Unexpected error starting journaling: "_$ze	
+}
+dir99(direc) ;
+ n oldzt,result
+ s oldzt=$zt
+ s $zt="direrr^"_$zn
+ s result=$zu(12,direc,3)
+ s $zt=oldzt
+ q result  ; from dirok    
+direrr s $zt=oldzt   ; I bet it was <FUNCTION>
+ s $ze=""
+ q direc
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R
+UC(x) q $zcvt(x,"u")
+ ; BITWISE.INC, DPB139 07/09/93
+FIXDIR(dir) ;procedure, dir is passed by reference
+ Q:dir=""
+ i ($zversion(1)=1) d
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ i '($zversion(1)=1) Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))
+ i '($zversion(1)=1) s dir=dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+ Q
+fixdir(dir) ;function
+ Q:dir="" ""
+ i ($zversion(1)=1) d  q dir
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")) dir
+ Q dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+basename(f) ;similar to basename on UNIX
+ Q $P(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),1,$L(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))-1)_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+appdir(d1,d2) ;use $zu(12,d2) to append d2 to canonic dir
+ i ($zversion(1)=1) S $E(d1,$L(d1))="."_d2_"]"
+ i '($zversion(1)=1) S d1=d1_d2
+ Q d1
+VALIDIR(dir) ;validate directory dir and create it if dir doesn't exist
+ new flag
+ s flag=1
+ g vdir2
+validir(dir,flag) ;validate directory dir and optionally create it if it
+vdir2 ; VALIDIR(dir) comes here with flag set to 1
+ quit:$$ChkDirOrSpecEXISTS(dir)'="" 1   ; dir is valid and exists
+ quit:$$ChkDirVALID(dir)="" 0    ; dir is not valid
+ i flag'=1 q 0  ; flag says don't create, return failure
+ new x
+ set x=$$mkdir(dir)  ; returns 0 for success, 1 for failure
+ q:x=1 0  ; failed to create
+ quit:$$ChkDirOrSpecEXISTS(dir)="" 0   ; it doesn't we failed
+ q 1  ; success
+mkdir(dir) ;create a new directory
+ i ($zversion(1)=1) q:$$ChkDirVALID(dir)="" 1  ; dir is invalid, return failure
+ q '##class(%Library.File).CreateDirectoryChain(dir)
+jrnshort(jf,short) ;get/set short form of a journal file name FIXME HYY1999
+         N (jf,short)
+         S len=$L($P(jf,";"))
+         Q:$G(short)="" $E(jf,len-11,len) ;"GET" form
+         S $E(jf,len-11,len)=short ;"SET" form
+         Q jf
+GJrnPrefix(jf) ;extract prefix from the journal file name jf
+         N (jf)
+         S fname=$P(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),$L(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")))       
+         Q $e(fname,1,$l($p(fname,"."))-8)
+GetJrnFileName(path) { 
+	i $f(path,"/") q $p(path,"/",$l(path,"/")) ;presumably a Unix path
+	if $f(path,"\") q $p(path,"\",$l(path,"\")) ;presumably a Windows path
+	s vmsfile=$p(path,"]",2) i vmsfile="" q path ;a name only, not a path
+	q $p(vmsfile,";") ;return name from a VMS path without trailing ";"
+}
+dirinvalidmsg(dir1,dir2) 
+ n valid1,valid2,cnt,msg
+ s valid1=$$VALIDIR(dir1),valid2=$$VALIDIR(dir2)
+ s cnt=valid1+valid2 ; cnt = 0 if both invalid, 1 if one is valid
+ s msg="The following journaling "
+ s:cnt msg=msg_"directory is" 
+ s:'cnt msg=msg_"directories are"
+ s msg=msg_" not valid"_$C(13,10)
+ s:'valid1 msg=msg_"     "_dir1_$C(13,10)
+ s:'valid2 msg=msg_"     "_dir2_$C(13,10)
+ q msg
+ChkDirVALID(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,1)
+ChkDirEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkDirOrSpecEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,3)
+ChkDir(R) N N S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkBad S $ZT="" W !,"<"_$P($P($ZE,"<",2),">")_"> error -- invalid directory"
+ Q ""
+ASKSET(prompt,val,backup,help,pattern) ;procedure
+ N x,done,def,enahelp,helpavail,backupavail
+ s done=0
+ s def=$G(val)
+ s backup=$G(backup,0) 
+ s enabackup=$S(backup=-1:0,1:1)
+ s backupavail=$S(backup=1:1,1:0)
+ s help=$G(help)
+ s enahelp=$S(help="*":0,1:1) ;there might not be any help though
+ s helpavail=$s(enahelp&($L(help)!($D(help)>1)):1,1:0)
+ if 'enabackup n POP
+ s POP=0
+ f  d  q:done!POP
+ . W !,$G(prompt)
+ . w:($X+$L(def))>65 !,?5
+ . w:$L(def) " <",def,">"
+ . if helpavail!backupavail do
+ . . w " [" w:helpavail "?" w:backupavail "^" w "]"
+ . w:(($X+$L(def))>75) !,?5
+ . W " => " 
+ . R x,!
+ . if x="^" d  q
+ . . if 'enabackup s done=1 q
+ . . if backupavail s POP=1 q
+ . . w "...backup not available here"
+ . if enabackup,x="""^""" s x="^",done=1 q
+ . ;
+ . if x="?" d  q
+ . . if 'enahelp s done=1 q
+ . . if 'helpavail w "...help not available here" q
+ . . if $D(help)=1 w !?5,help q
+ . . s x="" f  s x=$O(help(x)) q:x=""  w !,?5,help(x)
+ . . w !
+ . if enahelp,x="""?""" s x="?",done=1 q
+ . i x]"",$g(pattern)]"",x'?@pattern w !?5,$s(helpavail:help,1:"[bad format]") q
+ . s:'$L(x) x=val 
+ . s done=1
+ s:'POP val=x
+ q
+curfile() S $zt="etcurfile" Q $p($zu(78,4)_","_$zu(78,3),",",2)
+etcurfile Q ""
+loginfo(msg) ;must be called from within INT (JRNSTART, JRNSWTCH)
+ i $d(glo) s @glo=$g(@glo)+1,@glo@(@glo)=msg
+ i $d(io) u io w !,msg
+ q

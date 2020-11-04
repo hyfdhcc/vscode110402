@@ -1,0 +1,34 @@
+ROUTINE dbconvert
+dbconvert() PUBLIC ; convert ^PersonD from pieces to lists ; 24 Oct 1999  11:10 PM
+ ; also make a slight change to the structure of ^PersonI("Phone")
+ {
+ for id = 1 : 1 : ^PersonD {          ; for each entry in ^PersonD
+     set rec = ^PersonD(id)           ; get the record
+     set pieces = $length(rec, "^")   ; how many ^ pieces are there?
+     for j = 1 : 1 : pieces {         ; for each piece
+         set $list(newrec, j) =
+             $piece(rec, "^", j)      ; set the jth list item to the jth piece
+        }
+     set ^PersonD(id) = newrec        ; store the new record back
+     set ph = $piece(rec, "^", 2)     ; get the phone number
+     kill ^PersonI("Phone", ph)       ; delete the old record
+     set ^PersonI("Phone", ph, id)="" ; save id in the subscript
+    }
+ }
+ 
+goback() PUBLIC ; convert back from lists to pieces
+ ; also make a slight change to the structure of ^PersonI("Phone")
+ {
+ for id = 1 : 1 : ^PersonD {          ; for each entry in ^PersonD
+     set rec = ^PersonD(id)           ; get the record
+     set items = $listlength(rec)     ; how many list items are there?
+     for j = 1 : 1 : items {          ; for each item
+         set $piece(newrec, "^", j) = 
+             $list(rec, j)            ; set the jth piece to the jth list item
+        }
+     set ^PersonD(id) = newrec        ; store the record back
+     set ph = $list(rec, 2)           ; get the phone number
+     set ^PersonI("Phone", ph) = id   ; save id normally
+     kill ^PersonI("Phone", ph, id)   ; delete the old record
+    }
+ }

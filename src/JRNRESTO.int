@@ -1,0 +1,1365 @@
+ROUTINE JRNRESTO [Type=INT]
+JRNRESTO ;Restore Journal from a File, Part I ;;$Change: 4521965 $
+	; Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/rtn/journal/jrnresto.mac#1 $
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/_syJrninc.inc#1 $ ($Change: 4521965 $) */
+ ;        
+ /* Revision: $Id: //adhocs/2016.2.3.904.11/DHC_SOFTWARE_CO_001/databases/sys/inc/FILEINC.inc#1 $ ($Change: 4521965 $) */
+ ; %curfile = current journal file if enabled when JRNRESTO called
+ ;            else "" if journaling not enabled when called
+ ; jrnstop = 1 means we had to disable journaling system-wide
+ ;           and it should be reenabled later, else 0
+ ; nojrn = 1 means we disabled journaling process-wide with %SYS.NOJRN 
+ ;           and should restore it when we exit
+     ; normal entry point
+     ; fromrest=0  => ask which directories should be restored
+ n fromrest
+ n clujrn,ZJRNUSE,POP
+ n CLURESTORE 
+ s fromrest=0
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+ W !,"This utility uses the contents of journal files"
+ W !,"to bring globals up to date from a backup.",!
+ I $$YN("Restore the Journal","Y")="Y" {
+	 if $D(^SYS("MIRRORSET")) || $D(^SYS("LASTMIRRORSET")) {
+		 if $$YN("Catch-up mirrored databases","N")="Y" {
+			 do MirrorCatchup()
+			 quit
+		 }
+	 }
+	 g INT
+ }
+ q
+     ;
+     ; INT
+     ; entrypoint from DBREST database restore utility
+     ; fromrest=1  => use directories listed in +dejrn(dir)=1
+     ;         =2  => all directories
+     ;         =3  => ask which directories should be restored
+INT n CHATTY
+ s CHATTY=1 ; Q&A dialog is allowed
+ d main^JRNRESTB
+ q
+     ;
+     ;
+     ; STU
+     ; entrypoint used by STU to just restore from the journal
+     ;   address stored in .IMJ file
+     ;  It doesn't rollback open transactions
+     ;                                                       [JO1666+]
+     ;  noterm is set when this is invoked from STURECOV. This tells
+     ;  jrnerrhand to return rather than terminating with $ZU(4)
+     ;                                                       [JO1666-]
+STU n fromrest,stu,nojrn
+ n checkerr,%jrnfile,index
+ n clu,adr,type,ALL,a,ZJRNUSE
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+ new i
+ n CLURESTORE 
+ s ZJRNUSE=0  ; Do not use journal filter if called from STU
+ ;checkerr=2 means collect error data in errlist and stop restoring
+ ;a database when it throws more than errmax errors.
+ s checkerr=2 ; ******** set to 0 when debugging
+ N r,dir,cd,glo,gnode,dirnam,nomount,global,canonic
+ i checkerr s $zt="studone"
+   ; see if .IMJ indicates there's anything to restore
+ s a=$zu(78,21)
+ s %jrnfile=$p(a,",",2)
+ s index=+$P(a,",",1) 
+ i %jrnfile="" {
+ 	 k ^%SYS("JOURNAL","WIJFILE")
+	 if '$D(^SYS("SHUTDOWN","JRNCLEAN"),a) {
+	 	if $p(a,",",3) {
+	          d $zu(9,"","JRNSTOP override, journal restore not required at startup",(0>0),0) 
+		} else {
+		  ; When errlist is non-zero, STUCNFG will not allow logins.
+		  s a="WIJ does not contain journaling information and system does not appear to have shutdown normally"
+		  s errlist=$i(errlist)
+		  s r=$i(errlist("other"))
+		  s errlist("other",r)=a
+		  do $zu(9,"",a,(1>0),1)
+		}
+	 } else {
+		s a=$P(a,"^",2)  ;$ztimestamp_"^"_facility
+		if a="SHUTDOWN" {
+	       d $zu(9,"","Graceful system shutdown, journal restore not required",(0>0),0) 
+		} elseif a="CLURECOV" {
+	       d $zu(9,"","System recovered during cluster recovery, journal restore not required",(0>0),0)
+		} else {
+		   ;currently the other choice is a="STURECOV" where the user has
+		   ;declared that its ok to start the system
+	       d $zu(9,"",a_" override, journal restore not required at startup",(0>0),0) 
+		}
+	 }
+	 q  ;return to STU
+ }
+ n jrnfcnt s jrnfcnt=$p(a,",",3)
+ s ^%SYS("JOURNAL","WIJFILE")=%jrnfile_","_jrnfcnt_","_$p($zu(78,22,%jrnfile,99),",",10+1)
+ q:'index  ; nothing to do
+   ; open the file and backup to the previous address
+ d open
+ if adr<0 {
+	if ('$D(^SYS("SHUTDOWN","JRNCLEAN"),a)) {
+		s a="Missing journal file listed in the WIJ and system does not appear to have shutdown normally"
+		s errlist=$i(errlist)
+		s r=$i(errlist("other"))
+		s errlist("other",r)=a
+		do $zu(9,"",a,(1>0),1)
+	} else {
+		s a=$P(a,"^",2)  ;$ztimestamp_"^"_facility
+		if a="SHUTDOWN" {
+	       d $zu(9,"","Graceful system shutdown, journal restore not required",(0>0),0) 
+		} else {
+		   ;currently the other choice is a="STURECOV" where the user has
+		   ;declared that its ok to start the system
+	       d $zu(9,"",a_" override, journal restore not required at startup",(0>0),0) 
+		}
+	}
+ quit
+ }
+ n nullsubstat s nullsubstat=$zu(68,1,1)
+ n RestTime s RestTime=$zdt($h,8)
+ i checkerr s $zt="stuclose"
+ s adr=$zu(78,18,index)
+    ; also disable journaling (probably isn't even started yet)
+ s nojrn=$$STOP^%SYS.NOJRN()
+ s ALL=1 ; all directories
+   ; open journal file stored in .IMJ
+   ; find next record to restore and restore it
+ N file,jrnfile 
+ n disablesort s disablesort=1
+ n shrid ;if set, use fast dejournaling instead of sorting and multi-daemon
+ n fastrest ;
+ i checkerr s $ze="",$zt="sturestdone"
+ s fastrest=+$g(^SYS("RESTORE","JOURNAL.FAST"),2) 
+ i fastrest d 
+ . n err s shrid=$$InitShare^JRNRESTF(RestTime,.err) ;defines shrid
+ . i $g(err)]"" d $zu(9,"",err,(2>0),2) 
+ . i shrid<0 s fastrest=0
+ . e  s disablesort=1 i $zu(78,51,shrid,0,0) ;fastrest=1 or 2
+ ; Job off a process which will report on the progress of the
+ ; journal restore if it takes a substantial amount of 
+ ; time (minutes).
+ S ^SYS("JOURNAL","MONITOR",$J)=""  ;Uses our PID for the global node
+ j stumonitor(RestTime,$s(fastrest=2:shrid,1:-1))::5 
+ s monpid=$S($T:$ZChild,1:0) 
+ f i=1:1:5 q:$G(^SYS("JOURNAL","MONITOR",$J))="RUNNING"  h 1
+ if $G(^SYS("JOURNAL","MONITOR",$J))'="RUNNING" do $ZU(9,"","Journal restore monitor failed to start after 5 seconds",0)
+ n jrnend,prevend ;for comparing journal ends to detect journal corruption
+ n sturestzemsg ;supplemental info for <Z*> error, to be logged in sturestdone
+ s STU="S"  ;indicate to sortflush to mute
+ k ^SYS("STUJRNERRLIST") 
+ F  D  Q:%jrnfile=""  d open i adr<0 s sturestzemsg="Failed to open "_%jrnfile ztrap "FILE" 
+ . S jrnfile=$case($ZBITGET($ZVERSION(0),46),0:$case($f(%jrnfile,";"),0:$e(%jrnfile,*-8-$l($p(%jrnfile,".",$l(%jrnfile,"."))),*),:$e(%jrnfile,*-8-$l($p(%jrnfile,".",$l(%jrnfile,"."))),$f(%jrnfile,";")-2)),:%jrnfile)
+ . n i,rc s i=$i(^SYS("RESTORE","JOURNAL",RestTime,"Files"))
+ . s ^SYS("RESTORE","JOURNAL",RestTime,"Files",i)=%jrnfile
+ . s:adr ^SYS("RESTORE","JOURNAL",RestTime,"Files",i,"StartAddress")=adr
+ . d $zu(9,"","Restoring from journal "_%jrnfile,(0>0),0)
+ . s jrnend=$zu(78,18,0) ;for comparison below
+ . s lastaddr=$zu(78,18,jrnend)
+ . i adr<lastaddr d
+ . . i fastrest d
+ . . . d $zu(78,7,clu) s clu=-1 
+ . . . s clu=$$DejrnFile^JRNRESTF(%jrnfile,adr,shrid) 
+ . . i fastrest<2 d
+ . . . d STURestore^JRNRESTB
+ . . . s rc=$zu(78,7,clu),clu=-1 ;done dejournaling %jrnfile
+ . e  s rc=$zu(78,7,clu),clu=-1 ;done dejournaling %jrnfile
+ . s rc=0,file=%jrnfile,%jrnfile=$$NEXTJRN0^JRNUTIL(file,,,.rc)
+ . i rc<0 s sturestzemsg=rc ztrap "FILE"
+ . i %jrnfile="" q
+ . s prevend=$p($zu(78,22,%jrnfile,99),",",11+1)
+ . i prevend,prevend>jrnend s sturestzemsg="Inconsistency in "_file_": The last reachable journal record ends @ offset "_jrnend_", different from the journal end offset "_prevend ztrap "JEND"
+ . i $i(jrnfcnt) ;journal file count of the new %jrnfile, which is NOT ""!!
+ s ^%SYS("JOURNAL","WIJFILE")=file_","_jrnfcnt_","_jrnend
+sturestdone s $zt="" i $ze]"" d sturesterrlog($ze_","_$g(sturestzemsg))
+ i $g(fastrest) {
+   i $zu(78,49,shrid)<0 d sturesterrlog("Failed to restore all updates")
+   d FreeShare^JRNRESTF(RestTime)
+ }
+ m errlist("db")=^SYS("STUJRNERRLIST","db")
+ s i="" f  {
+   s i=$o(^SYS("STUJRNERRLIST","all",i),1,a)
+   i i="" q
+   s errlist("all",$i(errlist))=a
+ }
+ d sortflush^JRNRESTB()  ;should we abort sorting on error instead of flushing to db's??
+ k ^SYS("JOURNAL","MONITOR",$J)  ;Shut down monitor
+ I $G(^%SYS("JOURNAL","LAST"))="" S ^%SYS("JOURNAL","LAST")="1^"_$G(file)
+ E  S $P(^%SYS("JOURNAL","LAST"),"^",2)=$G(file)
+ i nojrn d ENABLE^%SYS.NOJRN
+stuclose ;
+ s $zt="" i $zu(68,1,nullsubstat)  ;restore null subscript setting
+ i clu'<0 s a=$zu(78,7,clu)
+studone q
+sturesterrlog(msg) ;add an error to errlist and log it in cconsole.log
+ i $i(errlist)
+ s msg=$g(msg),errlist("other",$i(errlist("other")))=msg
+ d $zu(9,"",msg,(2>0),2)
+ q
+CLUMENU	;
+	;Entry point to display a menu of cluster journal restore
+	;options. These turn into different "fromrest" values and then
+	;call INT^JRNRESTO. These are not needed on a non-clustered
+	;system because the journal restores are not as complicated.
+	n menu,opt,fromrest,notresto,maxopt,POP,resp,restdate
+	n LastRestoreTime,node,CLSTATE,dir,BACKH,CLUBACKUP,DEJRNSTART,dejrn
+	n %00000,ALLGLO,DIR,QUIETMODE,R,X,jinfo
+	n clujrn,ZJRNUSE,POP
+   n CLURESTORE 
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+menudisp	;
+	w !!,"Cluster Journal Restore Menu"
+	w !,"--------------------------------------------------------------"
+	w !,"1) Cluster journal restore after backup restore"
+	w !,"2) Cluster journal restore corresponding to Cache backups"
+	w !,"3) ADVANCED: Cluster journal restore"
+	w !,"4) Generate common journal file from specific journal files"
+	w !,"--------------------------------------------------------------"
+	w !,"H) Display Help"
+	w !,"E) Exit this utility"
+	w !,"--------------------------------------------------------------"
+	s maxopt=4
+	;
+	w !!,"Enter choice (1-",maxopt,") or [E]xit/[H]elp? "
+	r resp
+	; "^" also exits and "?" also displays help
+	if "^Ee"[$E(resp_"x") w !,"Exiting" q
+	if "?Hh"[$E(resp_"x") d menuusage g menudisp
+	s opt=+resp
+	if (opt'=resp)!(opt<1)!(opt>maxopt) d  g menudisp
+	. w !,*7,"Invalid choice - ",resp
+	. w !,"Choose an option from 1 to ",maxopt," or enter E to exit or"
+	. w " H for help"
+	;
+	s notresto=0
+	s POP=0   ;TCS004, set means redisplay menu, clear means we're done
+	if opt=1 d backrestore    ;jrn restore following backup restore
+	if opt=2 d postbackup   ;jrn restore following backup
+	if opt=3 s fromrest=0,CLURESTORE=1 d INT
+	if opt=4 d clujconvert   ;cluster JCONVERT
+	g:POP menudisp  ;TCS004
+	q
+menuusage	;
+	n resp
+	w !,"--------------------------------------------------------------"
+	w !,"This entry point exists for compatability with prior versions. The"
+	w !,"functionality here can also be accessed by running either ^JCONVERT"
+	w !,"to create a common format journal file or ^JRNRESTO to perform a"
+	w !,"cluster journal restore."
+	w !
+	w !,"In all options you will be asked to describe the databases to be retored,"
+	w !,"if you wish to redirect them to another directory and globals to process."
+	w !!,"Option 1: This is used to restore the journal files after restoring a"
+	w !,?5,"Cache backup. This is the same as the restore performed by ^DBREST after"
+	w !,?5,"the backup is restored. It starts with the markers recorded in the "
+	w !,?5,"journal files by the backup and ends with the end of the journal data."
+	w !,?5,"Note: There are no other Start/Stop options with this choice."
+	w !,"Option 2: This is used to restore the journal files using the journal"
+	w !,?5,"markers added by a Cache backup to specify the starting point and"
+	w !,?5,"ends with the end of the journal data."
+	w !,?5,"Note: The user is allowed to specify which backup to use as a Starting"
+	w !,?5,"point, but is not allowed to change the Stop point."
+	w !,"Option 3: CAUTION: This is an ADVANCED USER OPTION."
+	w !,?5,"It is the same as running ^JRNRESTO and saying YES for cluster journal"
+	w !,?5,"restore. You will be asked to specify the starting and ending points"
+	w !,?5,"of the restore. The starting and ending points can be based on a backup,"
+	w !,?5,"on a set of journal markers, at a cluster start or any arbitrary point"
+	w !,?5,"in the journal."
+	w !,"Option 4: This option does not restore the journal files.  Instead it"
+	w !,?5,"produces a common format journal file that can be read with ^JREAD"
+	w !,?5,"on a Cache system which does not support cluster journal restores"
+	w !,?5,"or on another platform such as DSM. ^JCONVERT provides the same"
+	w !,?5,"functionality if you say YES to the Cluster Journal Convert question."
+	w !,?5,"Note: You will be asked to provide starting and ending points."
+	r !!,"Press <enter> continue",resp
+	q
+backrestore ;
+	; option 1 = journal restore after backup restore
+	w !!,"Cluster journal restore following a Cache backup restore"
+	w !,"---------------------------------------------------------"
+	if $o(^SYS("RESTORE","BACKUP",""),-1)="" d  S POP=1 q
+	. w !,"No backups have been restored on this system"
+	s QUIETMODE=0,CLURESTORE=1,fromrest=7 
+	d INT^JRNRESTO
+	q
+postbackup ;
+	; option 2 = journal restore after backup restore
+	w !!,"Cluster journal restore based on Cache backup"
+	w !,"---------------------------------------------------------"
+	s QUIETMODE=0,CLURESTORE=1,fromrest=6
+	d INT^JRNRESTO
+	q
+clujconvert	;
+	new   ;main^JCONVERT does an argumentless new
+	s fromrest=8,CLURESTORE=1 
+	d INT^JCONVERT
+	q
+ ; input:
+ ;       jrnstop,%curfile,curfile
+ ; output:
+ ;       nojrn,djfirst,djlast,prompt,curdir,altdir,prefix,notresto 
+SETUPOLD ;
+ n helptext,pattern
+ s helptext="Enter a file name in YYYYMMDD.NNN format, e.g., 20041231.001"
+ s pattern="8N1"".""3.10N"
+ S djlast=$ZU(78,3),djfirst="" n jrndir,x
+ i $d(DEJRNSTART) d  g:djfirst]"" askprompt  ;dejournal after having restored DBs from a backup...
+ . i +$g(DEJRNSTART) d  i 1  ;non-cluster restore
+ . . w !,"The earliest journal entry since the backup was made is at" 
+ . . w !,"offset ",+DEJRNSTART," in ",$p(DEJRNSTART,",",2),!
+ . . i $$YN("Do you want to start from that location","Y")="N" k DEJRNSTART q
+ . . s FirstFile=$p(DEJRNSTART,",",2)
+ . . s djfirst=$case($ZBITGET($ZVERSION(0),46),0:$case($f($p(DEJRNSTART,",",2),";"),0:$e($p(DEJRNSTART,",",2),*-8-$l($p($p(DEJRNSTART,",",2),".",$l($p(DEJRNSTART,",",2),"."))),*),:$e($p(DEJRNSTART,",",2),*-8-$l($p($p(DEJRNSTART,",",2),".",$l($p(DEJRNSTART,",",2),"."))),$f($p(DEJRNSTART,",",2),";")-2)),:$p(DEJRNSTART,",",2))
+ . e  d  ; cluster journal restore (on primary system)
+ . . s jrndir($$basename(djlast))="" ;directory in canonical form
+ . . s x=$$seldjstart(.jrndir) i x="" q
+ . . s DEJRNSTART=DEJRNSTART(x) k DEJRNSTART(x) 
+ . . s FirstFile=$p(DEJRNSTART,",",2)
+ . . s djfirst=$case($ZBITGET($ZVERSION(0),46),0:$case($f($p(DEJRNSTART,",",2),";"),0:$e($p(DEJRNSTART,",",2),*-8-$l($p($p(DEJRNSTART,",",2),".",$l($p(DEJRNSTART,",",2),"."))),*),:$e($p(DEJRNSTART,",",2),*-8-$l($p($p(DEJRNSTART,",",2),".",$l($p(DEJRNSTART,",",2),"."))),$f($p(DEJRNSTART,",",2),";")-2)),:$p(DEJRNSTART,",",2))
+ . i djfirst="" q 
+ . s LastFile=djlast
+ . s (x,djlast)=$case($ZBITGET($ZVERSION(0),46),0:$case($f(djlast,";"),0:$e(djlast,*-8-$l($p(djlast,".",$l(djlast,"."))),*),:$e(djlast,*-8-$l($p(djlast,".",$l(djlast,"."))),$f(djlast,";")-2)),:djlast)
+ . d ASKSET("Final file to process (name in YYYYMMDD.NNN format):",.x,,helptext,pattern)
+ . i '(($p(x,".")>$p(djlast,"."))||(($p(x,".")=$p(djlast,"."))&&($p(x,".",2)>$p(djlast,".",2)))) s djlast=x
+ . e  w !,"The journal file name is out of range; reset to current journal file ",djlast,!
+ W !,"Specify range of files to process (names in YYYYMMDD.NNN format)",!
+ S djlast=$ZU(78,3),djfirst=djlast 
+ I $$GSTARTJRN(.djfirst) ;don't care about the status 
+ S djlast=$case($ZBITGET($ZVERSION(0),46),0:$case($f(djlast,";"),0:$e(djlast,*-8-$l($p(djlast,".",$l(djlast,"."))),*),:$e(djlast,*-8-$l($p(djlast,".",$l(djlast,"."))),$f(djlast,";")-2)),:djlast),djfirst=$case($ZBITGET($ZVERSION(0),46),0:$case($f(djfirst,";"),0:$e(djfirst,*-8-$l($p(djfirst,".",$l(djfirst,"."))),*),:$e(djfirst,*-8-$l($p(djfirst,".",$l(djfirst,"."))),$f(djfirst,";")-2)),:djfirst)
+ D ASKSET("from:    ",.djfirst,,helptext,pattern)
+ D ASKSET("through: ",.djlast,,helptext,pattern)
+ i djlast="^" f  q:djlast'="^"  d
+ . s djlast=$ZU(78,3),djfirst=djlast,djlast=$case($ZBITGET($ZVERSION(0),46),0:$case($f(djlast,";"),0:$e(djlast,*-8-$l($p(djlast,".",$l(djlast,"."))),*),:$e(djlast,*-8-$l($p(djlast,".",$l(djlast,"."))),$f(djlast,";")-2)),:djlast)
+ . i $$GSTARTJRN(.djfirst)
+ . s djfirst=$case($ZBITGET($ZVERSION(0),46),0:$case($f(djfirst,";"),0:$e(djfirst,*-8-$l($p(djfirst,".",$l(djfirst,"."))),*),:$e(djfirst,*-8-$l($p(djfirst,".",$l(djfirst,"."))),$f(djfirst,";")-2)),:djfirst)
+ . D ASKSET("from: ",.djfirst,,helptext,pattern)
+ . D ASKSET("through: ",.djlast,,helptext,pattern)
+askprompt ;
+ i $d(clujrn) s prompt=0  ; don't ask for cluster restores
+ S prefix=$G(^%SYS("JOURNAL","PREFIX"))
+ S curdir=$G(^%SYS("JOURNAL","CURDIR"))
+ S altdir=$G(^%SYS("JOURNAL","ALTDIR"))        
+ i curdir'="" s curdir=$ZU(12,curdir)
+ i altdir'="" s altdir=$ZU(12,altdir)
+ i curdir=altdir s altdir=""
+ W !!,"Provide or confirm the following configuration settings:",!
+ s x="Journal File Prefix:"
+ i prefix'="" s x=x_" (. for none)"
+ s prefixhelp="Enter an alphanumeric string ('_' allowed) or . to reset prefix to null"
+ D ASKSET(x,.prefix,0,prefixhelp)
+ i prefix="." s prefix=""  ; no journal file prefix
+ D SETLOOKPATH ;ask where to find journal files
+ q
+SETUP ;set up initial parameters
+ S $ZT="etSETUP"
+ ; if SETUP^JRNRESTC returns with $d(clujrn)=0, run private journal restore
+ i $S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0),$D(clujrn) d SETUP^JRNRESTC q:$g(notresto)  q:$d(clujrn)
+ n FirstFile,LastFile
+ d GetJrnList
+ i '$d(JrnFileList) d SETUPOLD i 1
+ e  i ($g(FirstFile)="")||($g(LastFile)="") w !!," [Not restored]",! S notresto=1 q
+ e  s djfirst=$case($ZBITGET($ZVERSION(0),46),0:$case($f(FirstFile,";"),0:$e(FirstFile,*-8-$l($p(FirstFile,".",$l(FirstFile,"."))),*),:$e(FirstFile,*-8-$l($p(FirstFile,".",$l(FirstFile,"."))),$f(FirstFile,";")-2)),:FirstFile),djlast=$case($ZBITGET($ZVERSION(0),46),0:$case($f(LastFile,";"),0:$e(LastFile,*-8-$l($p(LastFile,".",$l(LastFile,"."))),*),:$e(LastFile,*-8-$l($p(LastFile,".",$l(LastFile,"."))),$f(LastFile,";")-2)),:LastFile)
+ s prompt=($$YN("Prompt for name of the next file to process","N")="Y")
+ i '$$CheckInput() w !!," [Not restored]",! S notresto=1 q
+ ; For clusters call GETCLUINFO^JRNRESTC to get the list of journal
+ ; files from the other cluster members that we need to restore.
+ ; See GETCLUINFO for documentation on the data is returned.
+ ;
+ i $S($ZBITGET($ZVERSION(0),2):$V($ZU(40,2,136),-2,4),1:0),$D(clujrn) d  q:$G(notresto)
+ . d CLUSETUP^JRNRESTD
+ if fromrest=8 g SKIPSTOPJRN  ;JCONVERT doesn't require that you switch/stop journaling
+ i curfile="" w !!,"Journaling is NOT on. Updates will NOT be journaled" q
+ i 'LocalJrn d AskJrnUpdate q
+ i $g(LastFile)]"" { 
+   i LastFile'=$zu(78,3) d AskJrnUpdate q  ;long form
+ } else { ;from SETUPOLD
+   i (($p(curfile,".")>$p(djlast,"."))||(($p(curfile,".")=$p(djlast,"."))&&($p(curfile,".",2)>$p(djlast,".",2)))) d AskJrnUpdate q  ;short form
+ }
+ ; 
+ ; If the restore includes the current journal file we need to either
+ ; switch or stop journaling so that the restore eventually completes.
+ W !,"The journal restore includes the current journal file."
+ w !,"You cannot do that unless you stop journaling or switch"
+ w !,"     journaling to another file."
+ i $$YN("Do you want to switch journaling","Y")="Y" d  i a d AskJrnUpdate q
+ . s ROLLJRN=1,a=$zu(78,1,"","",0,0,5)
+ . i 'a w !,"[Jounal switched failed]" q
+ . w !,"Journaling switched to ",$P($zu(78,4)_","_$zu(78,3),",",2)
+ I $$YN("Do you want to stop journaling system wide","Y")="N" D  Q
+ . w !!," [Not restored]",!
+ . S notresto=1
+ s ROLLJRN=1,jrnstop=1,a=$zu(78,2,1)
+ w !!,"Journaling is NOT on. Updates will NOT be journaled" q
+SKIPSTOPJRN ;JO1726
+ Q
+etSETUP ;
+ S $ZT=""
+ i $ze'["INTERRUPT" W !,"Error occurs: ",$ZE,!
+ w !!," [Not restored]",!
+ s notresto=1
+ Q   
+ ;ask user whether to disable journaling and set nojrn=1 if YES
+AskJrnUpdate ;
+ n x
+ w !!,"You may disable journaling of updates for faster restore for all"
+ w !,"databases other than mirrored databases. You may not want to do this"
+ w !,"if a database to restore is being shadowed as the shadow will not"
+ w !,"receive the updates."
+ s x=$$YN("Do you want to disable journaling the updates","Y")
+ s disjrn=(x="Y")
+ i x="Y",$$CURRENT^%SYS.NOJRN() d DISABLE^%SYS.NOJRN s nojrn=1
+ i '$$CURRENT^%SYS.NOJRN() d 
+ . w:x="N" !,"Journaling not enabled for the job."
+ . w !,"Updates will NOT be journaled"
+ . s nojrn=1
+ e  d
+ . w:x="Y" !,"Unable to disable journaling for the job."
+ . w !,"Updates will be journaled (subject to other common conditions)"
+ . s nojrn=0
+ q
+seldjstart(dir) ;
+ n d,x,match,y
+ s (x,match)="" w ! 
+ w !,"The earliest journal entry since the backup was made might be at one of" 
+ w !,"the following journal locations, with the most likely candidate (could "
+ w !,"be none) given as the default:",! 
+ f  s x=$o(DEJRNSTART(x)) q:x=""  d
+ . w x,": ","offset "_+DEJRNSTART(x)_" in "_$p(DEJRNSTART(x),",",2),! q:match]""
+ . s d="",y=$$basename($p(DEJRNSTART(x),",",2)) f  s d=$o(dir(d)) q:d=""  q:y=d
+ . i d]"" s match=x
+ f  s x=match d ASKSET("From the list above select (by number) a journal location to dejournal from "_$c(13,10)_"or hit ENTER to accept the default or type 'N' to choose none:",.x) q:x=""  q:$d(DEJRNSTART(x))#10  i x="N"!(x="n") s x="" q
+ i x]"" w !,"You have chosen to start dejournaling at ","offset "_+DEJRNSTART(x)_" in "_$p(DEJRNSTART(x),",",2),! 
+ q x 
+RemovePurgedFiles() [JrnDirList, JrnFileList] {
+ i $d(JrnDirList) {	;non-native journal files in specified directories
+   i $o(JrnFileList(""),-1,LastPath)
+   i $f(LastPath,"/") s delimiter="/" ;Unix
+   e  i $f(LastPath,"\") s delimiter="\" ;Windows
+   e  s delimiter="]" ;VMS
+   s i="",n=0,b=$zh f  {
+     s i=$o(JrnFileList(i),1,jrnf) q:i=""
+     s filename=$p($p(jrnf,delimiter,*),";") ;VMS file name may contain a trailing ";"
+     s j="" f  {
+       s j=$o(JrnDirList(j),1,jrndir) q:j=""
+       i '$zu(140,4,jrndir_filename) q  ;jrnf exists
+     }
+     i j'="" q  ;jrnf exists
+     k JrnFileList(i) ;remove nonexistent file from the display list
+     i i#1000=0,$zh-b>2 w:'n !,"...collecting a list of journal files.." w "." s b=$zh,n=1
+   }
+ } else {	;native journal files in their original directories
+   s i="",n=0,b=$zh f  {
+     s i=$o(JrnFileList(i),1,jrnf) q:i=""
+     i '$zu(140,4,jrnf) q  ;jrnf exists
+     k JrnFileList(i) ;remove nonexistent file from the display list
+     i i#1000=0,$zh-b>2 w:'n !,"...collecting a list of journal files.." w "." s b=$zh,n=1
+   }
+ }
+ i $o(JrnFileList(""))=1 q  ;none removed
+ s oldi="",newi=0 f  {
+   s oldi=$o(JrnFileList(oldi)) q:oldi=""
+   s JrnFileList($i(newi))=JrnFileList(oldi)
+ }
+ s JrnFileList=newi ;updated # of journal files on the list
+ s oldi=newi f  {
+   s oldi=$o(JrnFileList(oldi)) q:oldi=""
+   k JrnFileList(oldi)
+ }
+}
+GetJrnList ;
+ n JrnLogPath,Flag,Prompt,Status,zeofset,i
+ s LocalJrn=($$YN("Are journal files created by this Cache instance and located in their original"_$c(13,10)_"paths? (Uses journal.log to locate journals)")="Y")
+ s $zt="GetJrnListErr1" n jrnf,logline,loglocked ;1 if log file is locked
+ i LocalJrn {
+   s JrnLogPath=$zu(12)_"journal.log"
+   d $zu(78,79,0,1,0) ;log file locked (must be released upon exit)
+   s loglocked=1
+ } else {
+   w !,"If you have a copy of the journal history log file from the Cache"
+   w !,"instance where the journal files were created, enter its full path below;" 
+   w !,"otherwise, press ENTER and continue."
+   s Flag=8 
+   s Prompt="Journal history log: "
+   s Status=##Class(%Library.Prompt).GetString(Prompt,.JrnLogPath,,,,Flag)
+   i (+Status=0)||(Status=2)||(JrnLogPath="") q 0
+   d GetJrnDirs
+ }
+ o JrnLogPath:($s(($zversion(1)=1):"rh",1:"r"):/IOT="UTF8"):0 i '$t {
+   i $g(loglocked) d $zu(78,79,0,0,0)
+   s Status="failed to open journal log "_JrnLogPath
+   d logmsg^JRNRESTB(Status,0,1) ;a warning, as we will try an alternative way
+   q
+ }
+ n mirrorlog
+ s mirrorlog=$s($zcvt(JrnLogPath,"U")["MIRRORJRN-":1,1:0)
+ s Status=##class(%SYS.Journal.System).GetHistoryHeader(JrnLogPath,,mirrorlog) ;skip header
+ i 'Status {
+   c JrnLogPath
+   i $g(loglocked) d $zu(78,79,0,0,0)
+   d logmsg^JRNRESTB("failed to read journal log header:"_Status,0,1) ;a warning
+   q 
+ }
+ s zeofset=$zu(68,40,1)
+ k JrnFileList s JrnFileList=0 ;# of journal files
+ f  {
+    u JrnLogPath r logline 
+    i $ZEOF { ;end of log
+      i $g(loglocked) d $zu(78,79,0,0,0)
+      d:'zeofset $zu(68,40,0) k zeofset ;restore original $ZEOF mode
+      c JrnLogPath
+      q  
+    }
+    i logline="" continue  ;skip blank lines
+    s JrnFileList($i(JrnFileList))=$p(logline,",",$s(mirrorlog:1,1:2))
+ }
+ i '$d(JrnFileList) q 0
+ s $zt="GetJrnListErr2"
+ i +$g(DEJRNSTART) {  ;dejournal after having restored DBs from a backup...
+   w !,"The earliest journal entry since the backup was made is at" 
+   w !,"offset ",+DEJRNSTART," in ",$p(DEJRNSTART,",",2),!
+   i $$YN("Do you want to start from that location","Y")="N" {
+     k DEJRNSTART
+   } else {
+     s FirstFile=$p(DEJRNSTART,",",2)
+     s PriorList="",i="" f  s i=$o(JrnFileList(i)) q:i=""  q:JrnFileList(i)=FirstFile  s PriorList(i)=JrnFileList(i) k JrnFileList(i)
+     i i="" {
+       w !,FirstFile," is NOT in journal history log ",JrnLogPath
+       w !,"You might have specified a wrong journal history log"
+       q
+     }
+   }
+   w !,"Enter ? for a list of journal files to select the final file from"
+ } 
+ i '$g(DEJRNSTART) {  ;
+   w !,"Specify range of files to process",!
+   d RemovePurgedFiles w !
+   w "Enter ? for a list of journal files to select the first and last files from"
+   s Flag=8+64
+   s Prompt="First file to process: "
+   s Status=##Class(%Library.Prompt).GetArray(Prompt,.FirstFile,.JrnFileList,,,,Flag)
+   i (+Status=0)||(Status=2)||(FirstFile="") s $ze="" q 0
+   s PriorList="",i="" f  s i=$o(JrnFileList(i),1,jrnf) q:i=""  q:jrnf=FirstFile  s PriorList(i)=JrnFileList(i) k JrnFileList(i)
+ }
+ s Flag=8+64
+ s Prompt="Final file to process: "
+ i $o(JrnFileList(""),-1,LastFile) ;process up to the last file by default
+ n JrnFileArray,j s i="" f j=1:1 s i=$o(JrnFileList(i)) q:i=""  s JrnFileArray(j)=JrnFileList(i)
+ s Status=##Class(%Library.Prompt).GetArray(Prompt,.LastFile,.JrnFileArray,,,,Flag)
+ i (+Status=0)||(Status=2)||(LastFile="") s $ze="" q 0
+ s i="" f  s i=$o(JrnFileList(i),-1,jrnf) q:i=""  q:jrnf=LastFile  k JrnFileList(i)
+ q
+GetJrnListErr1 s $zt="GetJrnListErr2"
+ i $g(loglocked) d $zu(78,79,0,0,0)
+ i $g(zeofset)]"" d $zu(68,40,zeofset) ;restore original $ZEOF mode
+ i $g(JrnLogPath)]"" c JrnLogPath 
+GetJrnListErr2 s $zt="" zt $ze
+GetJrnDirs ;replacing SETLOOKPATH
+ w !!,"Specify the location of the journal files to be processed"
+ s Flag=8+512
+ s Prompt="Directory of the journal files: "
+ n JrnDirPath
+ f {
+   s JrnDirPath=""
+   s Status=##Class(%Library.Prompt).GetString(Prompt,.JrnDirPath,,,,,Flag)
+   i (+Status=0)||(Status=2)||(JrnDirPath="") q
+   s JrnDirPath=$zu(12,JrnDirPath,2)
+   i JrnDirPath="" w !,"directory is invalid or doesn't exist"
+   e  s JrnDirList($i(JrnDirList))=JrnDirPath
+ }
+ w !
+ q
+ ; input: lookpath, curdir, altdir
+SETLOOKPATH ;set look path in which dejournaled files are searched for
+ N x
+ K lookpath S lookpath=0
+ i curdir="",altdir="" g askdirs
+ w !,"Files to dejournal will be looked for in: "
+ i curdir]"" s lookpath($i(lookpath))=curdir w !?5,curdir
+ i altdir]"",altdir'=curdir s lookpath($i(lookpath))=altdir w !?5,altdir
+ w !,"in addition to any directories you are going to specify below, UNLESS"
+ w !,"you enter a minus sign ('-' without quotes) at the prompt below," 
+ w !,"in which case ONLY directories given subsequently will be searched",!
+askdirs ;
+ F  R !,"Directory to search: <return when done> ",x Q:x=""  D
+ . i x="-" k lookpath s lookpath=0 w !?5,"[Directory search list is emptied]" q
+ . D FIXDIR(.x) s lookpath($i(lookpath))=x
+ i 'lookpath w !,*7,"** WARNING ** Directory search list must NOT be empty",! g askdirs
+ w !,"Here is a list of directories in the order they will be searched for files:"
+ s x="" f  s x=$o(lookpath(x)) q:x=""  w !?5,lookpath(x)
+ Q
+ ; return values may have several meanings:
+ ;   if jf or some file preceding it is illegal or does not exist
+ ;   on disk, we return the last one that is still on disk
+ ; return value is stored in parameter and status is returned
+GSTARTJRN(jf) ;get the starting jrn file that eventually runs down to jf
+ n p
+ F  S p=$ZU(78,22,jf,1) Q:+p'=1  S p=$P(p,",",2) Q:p=""  S jf=p
+ Q $S(p'="":0,1:1) 
+   ; nextquiet
+   ; This subroutine is used to for non-interactive restore from
+   ; journal file. Used only by non-interactive DBREST right now.
+nextquiet() 
+ ; Use user-suppied journal file if any, else look for default
+ ; or current journal file
+ s %jrnfile=restjrn
+ s:%jrnfile="" %jrnfile=$P($G(^%SYS("JOURNAL","DEFAULT")),"^",2,999)
+ s:%jrnfile="" %jrnfile=%curfile
+ i %jrnfile="" q -6
+ s %jrnfile=$ZU(12,%jrnfile)  ; canonic name
+ d open i adr=-1 w !,"Journal file can't be opened",! q -6
+ I %curfile=%jrnfile,'jrnstop d
+ .  W !,"You are attempting to restore from the current journal file."
+ .  w !,"Journaling will be disabled temporarily.",!
+ .  s jrnstop=1,a=$zu(78,2,1) q
+ ; If journaling is currently occurring, these journal entries
+ ; will be added to the current journal
+ s jrnfile=$case($ZBITGET($ZVERSION(0),46),0:$case($f(%jrnfile,";"),0:$e(%jrnfile,*-8-$l($p(%jrnfile,".",$l(%jrnfile,"."))),*),:$e(%jrnfile,*-8-$l($p(%jrnfile,".",$l(%jrnfile,"."))),$f(%jrnfile,";")-2)),:%jrnfile)
+ d begin^JRNRESTB ;HYY073
+ q 1
+open i checkerr s $zt="openend"
+ s clu=$zu(78,5,%jrnfile,0)
+ i clu<0 d $zu(9,"","[ERROR OPENING JOURNAL FILE "_%jrnfile_" ]",(1>0),1) s adr=-1 q
+ s a=$zu(78,6,clu),adr=0
+ q
+openend S $ZT="" s adr=-1 q
+close I checkerr S $ZT="etclose"
+ S a=$zu(78,7,clu)
+ Q
+etclose S adr=-1 Q
+gui(restjrn,dirs) ;gui entry point
+ New (restjrn,dirs)
+ Set $ze="",$zt="guiErr"
+ i '$SYSTEM.Security.Check("%Admin_Manage","USE") Quit 0_$c(22,35,1)_"Operation requires %Admin_Manage:Use privilege"
+ Set QUIETMODE=1,fromrest=1
+ For i=1:1 Set dir=$p(dirs,$c(22,35,1),i) Quit:dir=""  Set dejrn(dir)=1
+ d main^JRNRESTB
+ Quit 1
+guiErr Quit 0_$c(22,35,1)_"Unable to dejournal."_$s($ZE'="":$c(13,10)_"$ze="_$ZE,1:"")
+stumonitor(JrnRestID,shrid) ;
+ ; This is jobbed off during STU journal restore to watch the
+ ; restore and periodically report the progress. This routine
+ ; exits when the restore is no longer running. This depends on knowing
+ ; the names of the variables in the JRNRESTB loop, %jrnfile is the full
+ ; journal file name and adr is the current record address.
+ ; 
+ n parent,sleep,jfile,adr,origsleep
+ s parent=$ZParent
+ S ^SYS("JOURNAL","MONITOR",parent)="RUNNING"
+ s sleep=$G(^SYS("JOURNAL","MONITOR","INTERVAL"),300)
+ if sleep<=0 {
+	 do $ZU(9,"","Journal restore monitor not running per-user request."_$C(13,10)_"^SYS(""JOURNAL"",""MONITOR"",""INTERVAL"") set to "_sleep)
+	 quit
+ }
+ if sleep<30 {
+	 ; 30 seconds is pretty frequent for the monitor to report. We don't
+	 ; want it to report too often (the default is 5 minutes) as writing
+	 ; to the console log too often can slow down journal restore.
+	 s origsleep=sleep
+	 s sleep=30
+ }
+ s $zt="stumonerr"
+ ; Wait one interval before doing anything. If the journal restore
+ ; is done at that point, just exit
+ h sleep
+ q:$G(^SYS("JOURNAL","MONITOR",parent))'="RUNNING"
+ do $ZU(9,"","Monitoring journal restore process pid "_$s(($zversion(1)=1):$ZH(+parent),1:parent))
+ if $G(origsleep) do $zu(9,"","Monitor interval increased from "_origsleep_" seconds to "_sleep_" seconds",0)
+ while ($G(^SYS("JOURNAL","MONITOR",parent))="RUNNING") {
+	 if (shrid<0) {
+	   s jfile=$ZU(88,2,parent,"%jrnfile")
+	   s adr=$ZU(88,2,parent,"adr")
+	 } elseif $$Stat^JRNRESTF(shrid,0,.dejrnstat) {
+	   q  ;restore completed or aborted
+	 } else {
+           s jfile=$p(dejrnstat,",",1)
+           s adr=$p(dejrnstat,",",3)
+	 }
+	 if $L(jfile),$L(adr) {
+	    do $ZU(9,"","Journal restore progress."_$C(13,10)_"     File: "_jfile_" Address: "_adr,0)
+	 }
+	 h sleep
+ }
+ do $ZU(9,"","Journal restore monitor exiting",0)
+ quit
+stumonerr ;
+ s $zt=""
+ ; nojob errors can occur if the parent exits. This is ok unless
+ ; we haven't been told to exit.
+ if ($ZE'["<NOJOB")!($G(^SYS("JOURNAL","MONITOR",parent))="RUNNING") {
+    do $ZU(9,"","Journal restore monitor encountered unexpected error: "_$ZE,0)
+    d BACK^%ETN
+ }
+ q
+ ;
+CheckInput() ;
+ s $zt="CheckInputErr"
+ w !!,"The following actions will be performed if you answer YES below:",!
+ w !,"* Listing journal files in the order they will be processed"
+ w !,"* Checking for any missing journal file on the list (""a broken chain"")"
+ w !!,"The basic assumption is that the files to be processed are all"
+ w !,"currently accessible. If that is not the case, e.g., if you plan to" 
+ w !,"load journal files from tapes on demand, you should answer NO below."
+ k jrnlist
+ i $$YN("Check for missing journal files",$s($g(prompt):"N",1:"Y"))="N" {
+   i $d(JrnFileList) {
+     i '$d(JrnDirList) {
+       m jrnlist=JrnFileList
+       s jrnlist="" ;important to nextfile
+     } else {
+       k lookpath
+       m lookpath=JrnDirList
+       s JrnFileList="" ;important to nextfile
+     }
+   }
+   q 1 
+ }
+ n rc,num,i,j,fname,fpath,status,jrnf,jrndir,currend
+ i $d(JrnFileList) {
+   s rc=1,num=0 ;need to re-numbering the files
+   w !!,"Journal files in the order they will be processed:"
+   i '$d(JrnDirList) {
+     s num=0,i="" f  {
+       s i=$o(JrnFileList(i),1,jrnf) q:i=""
+       s status=$zu(78,22,jrnf,99) ;=status,hdrinfo
+       i status>0 {
+         w !,$i(num),". ",jrnf s jrnlist(i)=jrnf
+	 s jrnlist(i,"info")=$p(status,",",2,$l(status))
+       } else {
+         w !,"*** Missing journal file ",jrnf,! s rc=0
+       }
+     }
+   } else {
+     s num=0,i="" f  {
+       s i=$o(JrnFileList(i),1,jrnf) q:i=""
+       s fname=$$GFILE^SHDWCBLK(jrnf) ;jrnf may have come from a different OS
+       s j="" f  {
+         s j=$o(JrnDirList(j),1,jrndir) q:j=""
+	 s fpath=jrndir_fname
+	 s status=$zu(78,22,fpath,99) ;=status,hdrinfo
+	 i status>0 {
+	   s jrnlist(i)=fpath  
+	   s jrnlist(i,"info")=$p(status,",",2,$l(status))
+	   q  ;found the file
+	 }
+       }
+       i $g(jrnlist(i))="" w !,"*** Missing journal file ",fname,! s rc=0
+       e  w !,$i(num),". ",jrnlist(i)
+     }
+   }
+ } else {
+   s rc=$$ShowJournalRange(.jrnlist,djfirst,djlast)
+ }
+ i 'rc d  i ($$yesno^JRNRESTB("Do you want to abort","Y")="Y") q 0 ;abort
+ . w !!,"There is one or more problems with the chain of journal files"
+ . w !,"If you decide to continue, journal restore will skip missing files"
+ s jrnlist="" ;important to nextfile
+ w !!,"While the actual journal restore will detect a journal integrity problem"
+ w !,"when running into it, you have the option to check the integrity now"
+ w !,"before performing the journal restore. The integrity checker works by"
+ w !,"scanning journal files, which may take a while depending on file sizes."
+ n scan,num,path,jrnsrcdir
+ s scan=($$YN("Check journal integrity","N")="Y") 
+ s jrnsrcdir='ALL ;ALL=1 <=> jrnsrcdir=0 (disable collecting journal databases)
+ n curguid
+ s num="" for  {
+   s num=$o(jrnlist(num)) q:num=""
+   s path=$g(jrnlist(num)) i path="" k jrnlist(num) q  ;should not happen with ShowJournalRange()
+   s currend=$p(jrnlist(num,"info"),",",10)
+   i 'currend,$g(jrnlist(num+1))]"" {
+     s curguid=$p(jrnlist(num,"info"),",",7)
+     i curguid'="" {
+       i curguid=$p(jrnlist(num+1,"info"),",",6) {
+         s currend=$p(jrnlist(num+1,"info"),",",11)
+       }
+     } else { ;curguid="", an unlikely scenario
+       s jrnf=$p(jrnlist(num+1,"info"),",",1)
+       i $$GetJrnFileName(jrnf)=$p(path,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),$l(path,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))) {
+         s currend=$p(jrnlist(num+1,"info"),",",11)
+       }
+     }
+   }
+   i '$$CheckJournalFile(path,currend,scan,.jrnsrcdir),($$yesno^JRNRESTB("Do you want to abort","Y")="Y") q
+ }
+ i num]"" q 0 ;abort
+ i scan w !!,"No error was found in the journal files",!
+ n dir,err s dir="" f  s dir=$o(dejrn(dir)) q:dir=""  i '$d(jrnsrcdir(dir)) w !,"***WARNING*** ",dir,!,?8,"A specified source database is not in journal files - check its spelling" i $i(err)
+ i $g(err) w !,"There are warnings about selected source databases" i ($$yesno^JRNRESTB("Do you want to abort","Y")="Y") q 0
+ q 1
+CheckInputErr s $zt="" d BACK^%ETN w !,$ze,! 
+ i ($$yesno^JRNRESTB("Do you want to abort","Y")="Y") k jrnlist q 0
+ q 1
+ShowJournalRange(files,from,upto) [lookpath, prefix] {
+ w !!,"Journal files in the order they will be processed:"
+ s name=from,path=$$FULLPATH^JRNRESTB(name),prevname="",rc=0 ;error return by default
+ for  {
+   i path="" {
+     i $g(findnexterr)'="" d logmsg^JRNRESTB(findnexterr,0,2) q
+     i $$FULLPATH^JRNRESTB(name)="" d logmsg^JRNRESTB("Missing file "_prefix_name,0,2) q
+     i prevname=name d logmsg^JRNRESTB("Error locating the file following "_prefix_prevname,0,2) q
+     d logmsg^JRNRESTB("Missing file(s) between '"_prefix_prevname_"' and '"_prefix_name_"' ",0,2) 
+     q
+   }
+   s files($i(files))=path
+   s info=$zu(78,22,path,99),files(files,"info")=$p(info,",",2,$l(info))
+   w !,files,". ",path
+   i name=upto s rc=1 q  ;Done - the only successful exit of the for-loop
+   k findnexterr s prevname=name,path=$$FINDNEXT^JRNRESTB(.name,.findnexterr)
+   i (($p(name,".")>$p(upto,"."))||(($p(name,".")=$p(upto,"."))&&($p(name,".",2)>$p(upto,".",2)))) d logmsg^JRNRESTB("Missing file following "_prefix_prevname,0,2) q
+ }
+ q rc
+}
+GetJournalRange(files,from,upto,lookpath) public {
+ s $zt="GetJournalRangeErr"
+ s diri="" f  {
+   s diri=$o(lookpath(diri),1,jdir) q:diri=""
+   s path=$zse(jdir_"*.*") f  {
+     i path="" q
+     s bare=$case($ZBITGET($ZVERSION(0),46),0:$case($f(path,";"),0:$e(path,*-8-$l($p(path,".",$l(path,"."))),*),:$e(path,*-8-$l($p(path,".",$l(path,"."))),$f(path,";")-2)),:path) i bare'?8N1"."3.10N { ;not a journal name
+       s path=$zse("")
+       continue 
+     }
+     s info=$zu(78,22,path,99) i info'>0 { ;not a journal file
+       s path=$zse("")
+       continue 
+     }
+     s path=$zu(12,path) 
+     s pref=$$GJrnPrefix(path) ;prefix if any (could be "")
+     i ($zversion(1)=1) s path=$p(path,";") ;remove the trailing version component
+     s ^||ISC.JrnRestFile(pref_bare,diri)=path
+     i pref'="" s ^||ISC.JrnRestFile(bare,diri,pref)=path
+     s info=$p(info,",",2,$l(info)),guid=$p(info,",",7)
+     s ^||ISC.JrnRestInfo(path)=info
+     i guid'="" s ^||ISC.JrnRestGUID(guid)=path
+     s path=$zse("")
+   }
+ }
+ s status=$$GetJrnFilePath(from,.frompath,.fromname,.fromguid)
+ i 'status q status
+ s frompref=$$GJrnPrefix(fromname)
+ s status=$$GetJrnFilePath(upto,.path,.currname,.guid)
+ i 'status q status
+ k files s files(-$i(files))=path ;going backwards
+getprev ;
+ i currname=fromname {
+   k ^||ISC.JrnRestFile
+   q 1 ;Done!
+ }
+ s info=^||ISC.JrnRestInfo(path)
+ s prev=$p(info,",",1) ;full path of previous file (could be "")
+ i prev'="" { ;there is a backward pointer to the previous file
+   s guid=$p(info,",",6)
+   i guid="" { ;journal files of older versions have no GUID fields
+     s prevname=$$GetJrnFileName(prev) ;prevname includes prefix if there is one
+     s status=$$GetJrnFilePath(prevname,.path,.currname,.guid)
+     i 'status q status
+   } else {
+     s path=$g(^||ISC.JrnRestGUID(guid))
+     i $g(path)="" q $$Error^%apiOBJ(8400,guid)
+     s currname=$$GetJrnFileName(path) ;currname includes prefix if there is one
+   }
+   s files(-$i(files))=path ;going backwards
+   g getprev
+ }
+ s bare=$case($ZBITGET($ZVERSION(0),46),0:$case($f(currname,";"),0:$e(currname,*-8-$l($p(currname,".",$l(currname,"."))),*),:$e(currname,*-8-$l($p(currname,".",$l(currname,"."))),$f(currname,";")-2)),:currname) ;name without prefix
+ s pref=$$GJrnPrefix(currname)
+ s seq=$p(bare,",",2)
+ i seq>1 {
+   s prevseq=$s((seq)<101:$e((seq)-1+1000,2,4),1:(seq)-1)
+   s $p(bare,".",2)=prevseq
+   s name1=pref_bare
+   k path1 s diri1=$o(^||ISC.JrnRestFile(name1,""),1,path1)
+   k path2 i pref'=frompref {
+     s name2=frompref_bare
+     s diri2=$o(^||ISC.JrnRestFile(name2,""),1,path2)
+   }
+   i $g(path1)="" {
+     i $g(path2)="" {
+       i pref=frompref q $$Error^%apiOBJ(8405,currname)
+       e  q $$Error^%apiOBJ(8406,currname,frompref)
+     }
+     s path=path2,currname=name2,diri=diri2
+   } elseif $g(path2)="" { ;path1'=""
+     s path=path1,currname=name1,diri=diri1
+   } else { ;path1'="",path2'="" (path1'=path2 because pref=frompref => path2="")
+     q $$Error^%apiOBJ(8403,bare)
+   }
+   i $o(^||ISC.JrnRestFile(currname,diri))'="" q $$Error^%apiOBJ(8403,currname)
+   s info=^||ISC.JrnRestInfo(path)
+   s guid=$p(info,",",7)
+   s files(-$i(files))=path ;going backwards
+   g getprev  
+ }
+ s name1=currname
+ k path1 s prev1=$o(^||ISC.JrnRestFile(name1))
+ i prev1'="",$$GJrnPrefix(prev1)=pref { ;the only place where path1 is set
+   s diri="" f  {
+     s diri=$o(^||ISC.JrnRestFile(prev1,diri),1,path1) q:diri=""  
+     i path1'="" q
+   }
+ }
+ k path2 i frompref'=pref {
+   s name2=frompref_bare
+   s prev2=$o(^||ISC.JrnRestFile(name2))
+   i prev2'="",$$GJrnPrefix(prev2)=pref { ;the only place where path2 is set
+     s diri="" f  {
+       s diri=$o(^||ISC.JrnRestFile(prev2,diri),1,path2) q:diri=""  
+       i path2'="" q
+     }
+   }
+ }
+ i $g(path1)="" {
+   i $g(path2)="" {
+     i pref=frompref q $$Error^%apiOBJ(8405,currname)
+     e  q $$Error^%apiOBJ(8406,currname,frompref)
+   }
+   s path=path2,currname=prev2,diri=diri2
+ } elseif $g(path2)="" { ;path1'=""
+   s path=path1,currname=prev1,diri=diri1
+ } else { ;path1'="",path2'="" (path1'=path2 because pref=frompref => path2="")
+   s bare1=$case($ZBITGET($ZVERSION(0),46),0:$case($f(prev1,";"),0:$e(prev1,*-8-$l($p(prev1,".",$l(prev1,"."))),*),:$e(prev1,*-8-$l($p(prev1,".",$l(prev1,"."))),$f(prev1,";")-2)),:prev1)
+   s bare2=$case($ZBITGET($ZVERSION(0),46),0:$case($f(prev2,";"),0:$e(prev2,*-8-$l($p(prev2,".",$l(prev2,"."))),*),:$e(prev2,*-8-$l($p(prev2,".",$l(prev2,"."))),$f(prev2,";")-2)),:prev2)
+   i pref=frompref {
+     s path=path1,currname=prev1,diri=diri1
+   } elseif (($p(bare1,".")>$p(bare2,"."))||(($p(bare1,".")=$p(bare2,"."))&&($p(bare1,".",2)>$p(bare2,".",2)))) {
+     s path=path1,currname=prev1,diri=diri1
+   } elseif (($p(bare2,".")>$p(bare1,"."))||(($p(bare2,".")=$p(bare1,"."))&&($p(bare2,".",2)>$p(bare1,".",2)))) {
+     s path=path2,currname=prev2,diri=diri2
+   } else {
+     q $$Error^%apiOBJ(8403,bare1)
+   }
+ }
+ i $o(^||ISC.JrnRestFile(currname,diri))'="" q $$Error^%apiOBJ(8403,currname)
+ s info=^||ISC.JrnRestInfo(path)
+ s guid=$p(info,",",7)
+ s files(-$i(files))=path ;going backwards
+ g getprev  
+GetJournalRangeErr s $zt="" q $$Error^%apiOBJ(5002,$ze)
+}
+GetJrnFilePath(spec,path,name,guid) {
+ s $zt="GetJrnFilePathErr"
+ s bare=$case($ZBITGET($ZVERSION(0),46),0:$case($f(spec,";"),0:$e(spec,*-8-$l($p(spec,".",$l(spec,"."))),*),:$e(spec,*-8-$l($p(spec,".",$l(spec,"."))),$f(spec,";")-2)),:spec) 
+ i bare'?8N1"."3.10N { ;'spec' must be a GUID
+   s guid=$zcvt(spec,"U")
+   s path=$g(^||ISC.JrnRestGUID(guid))
+   i path="" q $$Error^%apiOBJ(8400,guid)
+   s name=$$GetJrnFileName(path)
+   q 1 ;spec is a GUID
+ }
+ s name=$$GetJrnFileName(spec)
+ i name'=spec { ;'spec' is a path (local or remote), not necessarily canonic
+   s path=$zu(12,spec)
+   i path'="",$d(^||ISC.JrnRestInfo(path)) { ;a local path
+     s name=$$GetJrnFileName(path) ;set it to canonic form (mainly the prefix)
+     s info=^||ISC.JrnRestInfo(path)
+     s guid=$p(info,",",7)
+     q 1 ;'spec' is a path
+   }
+ }
+ i name'=bare { ;'spec' is a full name with a non-null prefix 
+   i ($zversion(1)=2) s name=$zcvt(name,"L")
+   e  i ($zversion(1)=1) s name=$zcvt(name,"U")
+   k path s diri=$o(^||ISC.JrnRestFile(name,""),1,path)
+   i $g(path)="" q $$Error^%apiOBJ(8401,name)
+   i $o(^||ISC.JrnRestFile(name,diri))'="" q $$Error^%apiOBJ(8403,name)
+   s info=^||ISC.JrnRestInfo(path)
+   s guid=$p(info,",",7)
+   q 1 ;'spec' is a full name
+ }
+ s cnt=0,diri="" f  {
+   s diri=$o(^||ISC.JrnRestFile(name,diri),1,path) 
+   i diri="" q
+   i $i(cnt)
+   i $g(path)'="" q
+ }
+ i 'cnt q $$Error^%apiOBJ(8401,name)
+ i $g(path)'="" {
+   s info=^||ISC.JrnRestInfo(path)
+   s guid=$p(info,",",7)
+   q 1 ;'spec' is a full name (with null prefix)
+ }
+ i cnt>1 q $$Error^%apiOBJ(8403,name) ;'name' in multiple directories
+ s diri=$o(^||ISC.JrnRestFile(bare,"")) ;diri'="" given cnt=1
+ s pref=$o(^||ISC.JrnRestFile(bare,diri,""),1,path)
+ i $g(path)="" q $$Error^%apiOBJ(8402,bare,$g(lookpath(diri)))
+ i $o(^||ISC.JrnRestFile(bare,diri,pref))'="" q $$Error^%apiOBJ(8404,bare,$g(lookpath(diri)))
+ s name=pref_bare
+ s info=^||ISC.JrnRestInfo(path)
+ s guid=$p(info,",",7)
+ q 1 ;'spec' is a bare name
+GetJrnFilePathErr s $zt="" q $$Error^%apiOBJ(5002,$ze)
+}
+CheckJournalFile(path,jrnend,scan,jrnsrcdir,quietly) ;
+ q ##class(%SYS.Journal.File).CheckIntegrityOne(path,scan,jrnend,.jrnsrcdir,$g(quietly))
+MirrorCatchup() PUBLIC {
+	s $ZT="err"
+	s curjrnfile=$zu(78,3)
+	if curjrnfile="" {
+		w !,"Journaling must be initialized to run catchup on mirrored databases"
+		r !,"Ok to start journaling now? ",resp
+		while "YyNn"'[$E(resp_"X") {
+			w !,"Please answer yes or no"
+			r !,"Ok to start journaling now? ",resp
+		}
+		if "Nn"[$E(resp_"X") {
+			w !,"Not started - catch-up aborted"
+			quit
+		}
+		d ^JRNSTART		
+	}
+	s cls=##Class(Config.MirrorMember).Open()
+	s HasMirrorConfig=(cls.SystemName'="")
+	s cls=""
+	if 'HasMirrorConfig {
+		s rc=##class(%Library.File).Delete($zu(12)_"mirrorjrn-*.log")
+		w !,"This system is not configured for mirror, you need to specify"
+		w !,"the location of the mirror journal files to be restored to the"
+		w !,"mirrored databases."
+		w !,"A null string location indicates the journal path of the local system."
+		r !,"Mirror journal files location? ",loc
+		s:loc'="" loc=$lb(loc)
+	} elseif $SYSTEM.Mirror.GetInfo()'["DEFINED" {
+		w !,"The mirror definition needs to be loaded in order to run"
+		w !,"mirror database catch up"
+		r !,"Ok to load mirror configuration from .cpf file? ",resp
+		while "YyNn"'[$E(resp_"X") {
+			w !,"Please answer yes or no"
+			r !,"Ok to load mirror configuration from .cpf file? ",resp
+		}
+		if "Nn"[$E(resp_"X") {
+			w !,"Not loaded - catch-up aborted"
+			quit
+		}
+		s rc=##class(Config.MirrorMember).Load()
+		if $SYSTEM.Mirror.GetInfo()'["DEFINED" {
+			s txt="Failed to load mirror definition"
+			if ('rc) {
+				s txt=txt_": "
+				Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+				For i=1:1:err s:i>1 txt=txt_", " s txt=txt_err(i)
+			}
+			w !,txt
+			quit
+		}
+		For i=0:1:($v($zu(40,2,176),-2,4)-1) {
+			Set x=$Zutil(49,i,3)
+			if +x'=0 continue ;A remote server
+			Set dir=$zu(12,$Piece(x,"^",2))
+			If dir'="" {
+				s info=$ZU(49,dir)
+				s Mirrored=$Case($zb(+$p(info,",",17),$zu(40,8,28),1),0:0,:1)
+				if Mirrored {
+					w !,?5,"remounting mirrored database: ",dir
+					s x=$ZU(3,dir)
+					s x=$ZU(17,dir)
+				}
+			}
+		}
+	}
+	/* Build a list of mirrored databsaes which require catchup */
+	For i=0:1:($v($zu(40,2,176),-2,4)-1) {
+		Set x=$Zutil(49,i,3)
+		if +x'=0 continue ;A remote server
+		Set dir=$zu(12,$Piece(x,"^",2))
+		If dir'="" {
+			do addMirroredDir(dir,.dblist,HasMirrorConfig)
+		}
+	}
+	/* Since we may not have run STU, check the databases in the config
+	   as well */
+	try {
+		s rs=##class(%Library.ResultSet).%New("Config.Databases:List")
+		if $isobject(rs), rs.Execute() {
+			while (rs.Next()) {
+				s sys=rs.Data("Server")
+				if sys="" {
+					s dir=rs.Data("Directory")
+					s dir=$ZU(12,dir)
+					If dir'="" {
+						do addMirroredDir(dir,.dblist,HasMirrorConfig)
+					}
+				}
+			}
+		}
+		s rs=""
+	} catch {
+		; Ignore problems running the query if STU hasn't run yet
+	}
+	w !,"Specify the list of mirrored databases you want to catch-up."
+	k catchuplist
+	for  {
+		w !,"Enter database"
+		w:$D(dblist) ", * for all, ? for a list"
+		w " or <return> to end list? "
+		read resp
+		q:resp=""
+		if resp="?" {
+			if '$D(dblist) {
+				w !,"Could not find any mirrored databases which require catch-up"
+				continue
+			}
+			w !,"The following mirrored databases appear to need catch-up"
+			s dir=""
+			for  {
+				s dir=$O(dblist(dir))
+				q:dir=""
+				w !,?5,dir
+			}
+			continue
+		}
+		if resp="*" {
+			merge catchuplist=dblist
+			k dblist  ;these are already accounted for
+			continue
+		}
+		; validate user's choice
+		s dir=$ZU(12,resp)
+		if dir=""  {
+			w !,"Unknown directory :",dir
+			continue
+		}
+		s info=$ZU(49,dir)
+		if info<0 {
+			do $ZU(17,dir)  ;in case it is dismounted
+			s info=$ZU(49,dir)
+		}
+		if info<0 {
+			w !,"Database ",dir," does not appear to exist"
+			continue
+		}
+		s Mirrored=$Case($zb(+$p(info,",",17),$zu(40,8,28),1),0:0,:1)
+		s InActiveMirror=$Case($zb(+$p(info,",",18),$zu(40,8,29),1),0:0,:1)
+		s ReadOnly=$Case($zb(+$p(info,",",17),$zu(40,8,13),1),0:0,:1)
+		if 'Mirrored {
+			w !,"Database ",dir
+			w !,?5," is not mirrored. Use standard journal restore"
+			continue
+		}
+		if InActiveMirror {
+			w !,"Database ",dir
+			w !,?5," is part of the active mirror, catch-up is not required"
+			continue
+		}
+		if ReadOnly {
+			w !,"Database ",dir
+			w !,?5," is marked read-only, cannot be caught up"
+			continue
+		}
+		s catchuplist(dir)=+info  ;add directory+sfn to catchup list
+	}		
+	if '$D(catchuplist) {
+		w !,"No directories specified for catch-up"
+		quit
+	}
+	s dir=""
+	s sfnlist=""
+	w !,"Starting catch-up for the following mirrored database(s):"
+	for  {
+		s dir=$O(catchuplist(dir),1,sfn)
+		quit:dir=""
+		w !,?5,"sfn #",sfn,": ",dir
+		s sfnlist=sfnlist_$LB(sfn)
+	}
+	if sfnlist="" {
+		s $ZE="<LOGERR>MirrorCatchup+n^JRNRESTO" 
+		d BACK^%ETN
+		w !,"Failed to generate sfn list for catch-up operation"
+		quit
+	}
+	s x=##class(SYS.Mirror).CatchupDB(sfnlist,$G(loc),.errlist)
+	if 'x {
+		w !,"Catch-up databases failed - see console log for details"
+	} else {
+		if '$LL($G(errlist)) {
+			w !,"Catch-up succeeded."
+		} else {
+			w !,"Catch-up succeeded for the following databases"
+			k sfnarray
+			f i=1:1:$LL(sfnlist) s sfnarray($LG(sfnlist,i))=""
+			f i=1:1:$LL(errlist) k sfnarray($LG(errlist,i))
+			s sfn=""
+			for  {
+				s sfn=$O(sfnarray(sfn))
+				q:sfn=""
+				w !,?5,$P($ZU(49,+sfn,3),"^",2)
+			}
+			w !,"The following databases were not succesfully restored"
+			f i=1:1:$LL(errlist) {
+				s sfn=$LG(errlist,i)
+				w !,?5,$P($ZU(49,+sfn,3),"^",2)
+			}
+		}
+	}
+	quit
+err ;
+	s $ZT=""
+	d BACK^%ETN
+	w !,"Catch-up caught unexpected error: ",$ZE
+	quit		
+} 
+addMirroredDir(dir,dblist,HasMirrorConfig) {
+	/* Given a database name, if its mirrored and its neither part of the
+       active mirror nor marked as read-only then add it to the list of 
+       possible choices for catch-up. We will mount the db if necessary
+       in order to get an sfn */
+	s info=$ZU(49,dir)
+	s Mirrored=$Case($zb(+$p(info,",",17),$zu(40,8,28),1),0:0,:1)
+	quit:'Mirrored
+	s sfn=+info 
+	if (sfn<0) || (sfn=$ZU(40,0,41)) {
+		s rc=$ZU(17,dir)
+		s info=$ZU(49,dir)
+		s sfn=+info
+		if (sfn<0) || (sfn=$ZU(40,0,41)) {
+			w !,"...failed to mount ",dir," rc = ",rc
+			quit  ; can't be mounted
+		}
+	}
+	s InActiveMirror=$Case($zb(+$p(info,",",18),$zu(40,8,29),1),0:0,:1)
+	s ReadOnly=$Case($zb(+$p(info,",",17),$zu(40,8,13),1),0:0,:1)
+	s MirrorNoWrite=$Case($zb(+$p(info,",",18),$zu(40,8,30),1),0:0,:1)
+	s MirrorActivationRequired=$Case($zb(+$p(info,",",18),$zu(40,8,32),1),0:0,:1)
+	if 'HasMirrorConfig||'(InActiveMirror||ReadOnly||MirrorActivationRequired||MirrorNoWrite) {
+		s dblist(dir)=sfn
+	}
+}
+STOP(x) S x=$$UC($E(x,1,4)) Q (x["EXIT")!(x["STOP")!(x["QUIT")!(x["HALT")!($E(x)="^")
+UC(x) q $zcvt(x,"u")
+YN(P,D,t) N R,X S P=$G(P),D=$E($G(D)_"?"),t=$G(t) ;ask Yes/No w/ Prompt,Default
+ S D=$S("Yy"[D:"Yes => ","Nn"[D:"No => ",1:"") ;Yes, No or no default
+ F  W !,P_"? "_D Read:t R:t Read:'t R DO  I "^YN"[R Q  ;timed or non-timed read
+ . S X=R,R=$TR($E(R_D_"?"),"yn","YN") I "^YN"'[R W "  enter Yes or No, please"
+ S POP=(R="^") W $E($S(R="N":"No",R="Y":"Yes",1:""),$L(X)+1,3) Q R
+PATRN(X) N q,i,x,c S q=0,x="" F i=1:1:$L(X) S c=$E(X,i) S:c="""" c=c_c DO
+ . I "*?&#"'[c S x=x_$S(q:c,1:"1"""_c),q=1 Q  ;simple text -- no pattern
+ . S x=x_$E("""",q)_$S(c="&":"1A",c="#":"1N",c="*":".E",1:"1E"),q=0 Q
+ S:q x=x_"""" S X=$P($P($P($P(X,"?"),"#"),"&"),"*") Q x ;return ?@x
+HasFile(f) Q ''$zu(78,22,f) ;1: file exists 0: not
+ ; BITWISE.INC, DPB139 07/09/93
+FIXDIR(dir) ;procedure, dir is passed by reference
+ Q:dir=""
+ i ($zversion(1)=1) d
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ i '($zversion(1)=1) Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))
+ i '($zversion(1)=1) s dir=dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+ Q
+fixdir(dir) ;function
+ Q:dir="" ""
+ i ($zversion(1)=1) d  q dir
+ . n x
+ . s x=$$ChkDirVALID(dir)
+ . i x'="" s dir=x
+ Q:$A(dir,$L(dir))=$A($s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")) dir
+ Q dir_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+basename(f) ;similar to basename on UNIX
+ Q $P(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),1,$L(f,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""))-1)_$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")
+appdir(d1,d2) ;use $zu(12,d2) to append d2 to canonic dir
+ i ($zversion(1)=1) S $E(d1,$L(d1))="."_d2_"]"
+ i '($zversion(1)=1) S d1=d1_d2
+ Q d1
+VALIDIR(dir) ;validate directory dir and create it if dir doesn't exist
+ new flag
+ s flag=1
+ g vdir2
+validir(dir,flag) ;validate directory dir and optionally create it if it
+vdir2 ; VALIDIR(dir) comes here with flag set to 1
+ quit:$$ChkDirOrSpecEXISTS(dir)'="" 1   ; dir is valid and exists
+ quit:$$ChkDirVALID(dir)="" 0    ; dir is not valid
+ i flag'=1 q 0  ; flag says don't create, return failure
+ new x
+ set x=$$mkdir(dir)  ; returns 0 for success, 1 for failure
+ q:x=1 0  ; failed to create
+ quit:$$ChkDirOrSpecEXISTS(dir)="" 0   ; it doesn't we failed
+ q 1  ; success
+mkdir(dir) ;create a new directory
+ i ($zversion(1)=1) q:$$ChkDirVALID(dir)="" 1  ; dir is invalid, return failure
+ q '##class(%Library.File).CreateDirectoryChain(dir)
+jrnshort(jf,short) ;get/set short form of a journal file name FIXME HYY1999
+         N (jf,short)
+         S len=$L($P(jf,";"))
+         Q:$G(short)="" $E(jf,len-11,len) ;"GET" form
+         S $E(jf,len-11,len)=short ;"SET" form
+         Q jf
+GJrnPrefix(jf) ;extract prefix from the journal file name jf
+         N (jf)
+         S fname=$P(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:""),$L(jf,$s(($zversion(1)=3):"/",($zversion(1)=1):"]",($zversion(1)=2):"\",1:"")))       
+         Q $e(fname,1,$l($p(fname,"."))-8)
+GetJrnFileName(path) { 
+	i $f(path,"/") q $p(path,"/",$l(path,"/")) ;presumably a Unix path
+	if $f(path,"\") q $p(path,"\",$l(path,"\")) ;presumably a Windows path
+	s vmsfile=$p(path,"]",2) i vmsfile="" q path ;a name only, not a path
+	q $p(vmsfile,";") ;return name from a VMS path without trailing ";"
+}
+dirinvalidmsg(dir1,dir2) 
+ n valid1,valid2,cnt,msg
+ s valid1=$$VALIDIR(dir1),valid2=$$VALIDIR(dir2)
+ s cnt=valid1+valid2 ; cnt = 0 if both invalid, 1 if one is valid
+ s msg="The following journaling "
+ s:cnt msg=msg_"directory is" 
+ s:'cnt msg=msg_"directories are"
+ s msg=msg_" not valid"_$C(13,10)
+ s:'valid1 msg=msg_"     "_dir1_$C(13,10)
+ s:'valid2 msg=msg_"     "_dir2_$C(13,10)
+ q msg
+ChkDirVALID(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,1)
+ChkDirEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkDirOrSpecEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,3)
+ChkDir(R) N N S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkBad S $ZT="" W !,"<"_$P($P($ZE,"<",2),">")_"> error -- invalid directory"
+ Q ""
+ASKSET(prompt,val,backup,help,pattern) ;procedure
+ N x,done,def,enahelp,helpavail,backupavail
+ s done=0
+ s def=$G(val)
+ s backup=$G(backup,0) 
+ s enabackup=$S(backup=-1:0,1:1)
+ s backupavail=$S(backup=1:1,1:0)
+ s help=$G(help)
+ s enahelp=$S(help="*":0,1:1) ;there might not be any help though
+ s helpavail=$s(enahelp&($L(help)!($D(help)>1)):1,1:0)
+ if 'enabackup n POP
+ s POP=0
+ f  d  q:done!POP
+ . W !,$G(prompt)
+ . w:($X+$L(def))>65 !,?5
+ . w:$L(def) " <",def,">"
+ . if helpavail!backupavail do
+ . . w " [" w:helpavail "?" w:backupavail "^" w "]"
+ . w:(($X+$L(def))>75) !,?5
+ . W " => " 
+ . R x,!
+ . if x="^" d  q
+ . . if 'enabackup s done=1 q
+ . . if backupavail s POP=1 q
+ . . w "...backup not available here"
+ . if enabackup,x="""^""" s x="^",done=1 q
+ . ;
+ . if x="?" d  q
+ . . if 'enahelp s done=1 q
+ . . if 'helpavail w "...help not available here" q
+ . . if $D(help)=1 w !?5,help q
+ . . s x="" f  s x=$O(help(x)) q:x=""  w !,?5,help(x)
+ . . w !
+ . if enahelp,x="""?""" s x="?",done=1 q
+ . i x]"",$g(pattern)]"",x'?@pattern w !?5,$s(helpavail:help,1:"[bad format]") q
+ . s:'$L(x) x=val 
+ . s done=1
+ s:'POP val=x
+ q

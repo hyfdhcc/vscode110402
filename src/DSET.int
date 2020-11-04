@@ -1,0 +1,67 @@
+ROUTINE DSET [Type=INT]
+DSET ;(KSO,PK) SELECT A SET OF DIRECTORIES ; CFL1164 10/29/04
+ /*
+ +--------------------------------------------------------+
+ | Copyright 1986-2015 by InterSystems Corporation,       |
+ | Cambridge, Massachusetts, U.S.A.                       |
+ | All rights reserved.                                   |
+ |                                                        |
+ | Confidential, unpublished property of InterSystems.    |
+ |                                                        |
+ | This media contains an authorized copy or copies       |
+ | of material copyrighted by InterSystems and is the     |
+ | confidential, unpublished property of InterSystems.    |
+ | This copyright notice and any other copyright notices  |
+ | included in machine readable copies must be reproduced |
+ | on all authorized copies.                              |
+ +--------------------------------------------------------+
+ */
+ ;RETURN %UTILITY(D)="", WHERE 'D' IS ZERO OR MORE DIRECTORY NAMES
+ N (%UTILITY) S DMERR="CACHE"_".DAT is dismounted." G DSETCOMM
+DMENTRY N (%UTILITY) S DMERR="CACHE"_".DAT is already dismounted."
+DSETCOMM D ^|"%SYS"|ST S MGDIR=%ST("MGRNSP")
+ K %UTILITY S %UTILITY=0
+READ R !,"Directory: ",%U S %U=$$Strip(%U) G EXIT:%U=""
+ I %U="?" S %U="" F %I=0:1 S %U=$zu(49,%I) G READ:%U=-2  s TEMP=$ZU(49,%I,3) W !,$p(TEMP,"^",2)," is ",$s((+%U=-1)!(+%U=$zu(40,0,41)):"not ",1:""),"mounted" 
+ ;
+INT S $ZT="ZUERROR"
+ n %C ; canonic name of %U
+ s %C=$$ChkDirOrSpecEXISTS(%U) i %C="" w !!,$$DIRDIAG(%U) g READ
+ s %U=%C O 63:"^^"_%U s %START=%U,%STOP=%U,$ZT=""
+ C 63 O 63 C 63
+ S %UTILITY(%START)="",%UTILITY=%UTILITY+1
+ G READ
+KILL I $O(%UTILITY(%START))]%STOP W *7," ???" G READ
+ F  S %START=$O(%UTILITY(%START)) Q:%START=""  Q:%START]%STOP  DO
+ . K %UTILITY(%START) S %UTILITY=%UTILITY-1
+ G READ
+ALL S %D="" F  S %D=$O(^|MGDIR|SYS("UCI",%D)) Q:%D=""  DO
+ . S %UTILITY(%D)="",%UTILITY=%UTILITY+1
+EXIT W !,%UTILITY_" director"_$s(%UTILITY=1:"y",1:"ies") Q
+ZUERROR S $ZT="" C 63 O 63 C 63 W !!,$$DIRDIAG(%U) G READ
+NODIROS(D) ;Return 1 if D doesn't exist, 0 if it exists, -1 if can't tell
+ i $zu(12,D,3)="" q 1
+ q 0
+DIRDIAG(D) ;If D is a mounted directory, return "", else a suitable comment.
+ S TEMP=$P($ZU(49,D),",",1)
+ IF $$NODIROS(D)=1 S TEMP=-3
+ Q:TEMP=$zu(40,0,41) %U_" has not been mounted"   ;JAO742
+ Q:TEMP=-3 "Operating system directory "_%U_" does not exist."
+ Q:TEMP=-2 %U_"CACHE"_".DAT does not exist or is inaccessible."
+ Q:TEMP=-1 %U_DMERR     ;"is [already] dismounted."
+ Q:TEMP=0 ""
+ Q "Unknown problem with "_%U_"."
+Strip(x) Q $$StrHead($$StrTail(.x)) ;strip both leading and trailing spaces
+StrHead(x) ;return 'x' without any leading spaces
+ Q $E(x,$F(x,$E($TR(x," ")))-1,$L(x))
+StrTail(x) ;return 'x' without any trailing spaces
+ Q $P(x_$J("",$L(x)),$J("",$L(x)))
+StrQuote(x) ; return 'x' without 1 layer of quotes
+ I ($E(x)'="""")!($E(x,$L(x))'="""") Q x
+ S x="S x="_x X x Q x
+ChkDirVALID(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,1)
+ChkDirEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkDirOrSpecEXISTS(R) S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,3)
+ChkDir(R) N N S $ZE="",$ZT="ChkBad" q:R[":mirror:" R q $ZU(12,R,2)
+ChkBad S $ZT="" W !,"<"_$P($P($ZE,"<",2),">")_"> error -- invalid directory"
+ Q ""
